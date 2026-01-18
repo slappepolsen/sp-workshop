@@ -1,0 +1,17 @@
+# Python packages required for the Video Processing GUI Application
+PyQt5>=5.15.0
+gemini-srt-translator>=3.0.0
+
+# External system programs (must be installed separately):
+# 
+# 1. FFmpeg - Required for video/subtitle processing
+#    Install on macOS: brew install ffmpeg
+#    Install on Linux: sudo apt-get install ffmpeg (or equivalent)
+#    Install on Windows: Download from https://ffmpeg.org/download.html
+#
+# 2. N_m3u8DL-RE - Required for batch downloading episodes
+#    Download from: https://github.com/nilaoda/N_m3u8DL-RE
+#    Extract and add to PATH, or ensure it's accessible as 'N_m3u8DL-RE' command
+#
+# Note: These external programs are not Python packages and cannot be installed via pip.
+# They must be installed using your system's package manager or downloaded manually.

@@ -1,0 +1,152 @@
+name: Build Executables
+
+on:
+  push:
+    branches: [ main, master ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install py2app pyinstaller
+      
+      - name: Build macOS app with PyInstaller
+        run: |
+          pyinstaller --onefile --windowed --name "SP_Workshop" --icon=icon.icns video_app_v8.py
+      
+      - name: Create macOS DMG-like structure
+        run: |
+          mkdir -p dist/SP_Workshop_macOS
+          mv dist/SP_Workshop.app dist/SP_Workshop_macOS/ 2>/dev/null || mv dist/SP_Workshop dist/SP_Workshop_macOS/
+          cp whisper_auto.sh dist/SP_Workshop_macOS/
+          cp icon.icns dist/SP_Workshop_macOS/
+      
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SP_Workshop-macOS
+          path: dist/SP_Workshop_macOS/
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+      
+      - name: Create Windows icon
+        run: |
+          pip install pillow
+          python -c "from PIL import Image; img = Image.open('icon.png'); img.save('icon.ico', format='ICO', sizes=[(256,256), (128,128), (64,64), (48,48), (32,32), (16,16)])"
+      
+      - name: Build Windows executable
+        run: |
+          pyinstaller --onefile --windowed --name "SP_Workshop" --icon=icon.ico video_app_v8.py
+      
+      - name: Create Windows distribution
+        run: |
+          mkdir dist\SP_Workshop_Windows
+          move dist\SP_Workshop.exe dist\SP_Workshop_Windows\
+          copy icon.ico dist\SP_Workshop_Windows\
+        shell: cmd
+      
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SP_Workshop-Windows
+          path: dist/SP_Workshop_Windows/
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxcb-xinerama0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+      
+      - name: Build Linux executable
+        run: |
+          pyinstaller --onefile --name "SP_Workshop" video_app_v8.py
+      
+      - name: Create Linux distribution
+        run: |
+          mkdir -p dist/SP_Workshop_Linux
+          mv dist/SP_Workshop dist/SP_Workshop_Linux/
+          cp whisper_auto.sh dist/SP_Workshop_Linux/
+          chmod +x dist/SP_Workshop_Linux/SP_Workshop
+          chmod +x dist/SP_Workshop_Linux/whisper_auto.sh
+          cp icon.png dist/SP_Workshop_Linux/
+      
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SP_Workshop-Linux
+          path: dist/SP_Workshop_Linux/
+
+  # Create a combined release when pushing a tag
+  release:
+    needs: [build-macos, build-windows, build-linux]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      
+      - name: Create release archives
+        run: |
+          cd artifacts
+          zip -r ../SP_Workshop-macOS.zip SP_Workshop-macOS/
+          zip -r ../SP_Workshop-Windows.zip SP_Workshop-Windows/
+          tar -czvf ../SP_Workshop-Linux.tar.gz SP_Workshop-Linux/
+      
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            SP_Workshop-macOS.zip
+            SP_Workshop-Windows.zip
+            SP_Workshop-Linux.tar.gz
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
