@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ...
 
+## [8.1.0] "Torre de Babel" - 2026-01-18
+
+### Added
+- Cross-platform path quoting with `quote_path()` function (fixes Windows CMD single-quote issue)
+- Cross-platform temp directory with `get_temp_dir()` function (replaces hardcoded `/tmp`)
+- Cross-platform app detection with `get_app_executable()` function
+- Platform-specific executable paths for VLC, LosslessCut, and SubtitleEdit
+- Platform-specific FFmpeg installation instructions in setup wizard
+
+### Changed
+- `open_folder_in_finder()` renamed to `open_folder_in_explorer()` with Windows/Linux support
+- `open_in_lossless_cut()` now works on Windows and Linux (runs executable directly)
+- `check_app_exists()` now uses `get_app_executable()` for cross-platform detection
+- N_m3u8DL-RE download command now uses proper quoting for Windows compatibility
+
+### Fixed
+- Windows path concatenation error when downloading episodes (single quotes in `--save-dir` argument)
+- Windows temp directory error (`/tmp` doesn't exist on Windows)
+- "Open Downloads/Subtitles/Output folder" buttons now work on Windows (Explorer) and Linux (xdg-open)
+
 ## [8.0.0] "Torre de Babel" - 2026-01-18
 
 ### Added

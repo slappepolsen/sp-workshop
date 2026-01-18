@@ -14,8 +14,30 @@ import shutil
 import time
 import traceback
 import platform
+import tempfile
 from pathlib import Path
 from typing import Optional, Dict, List
+
+
+def quote_path(path: str) -> str:
+    """Quote a path for shell commands in a cross-platform way.
+    
+    On Windows, shlex.quote() uses single quotes which CMD doesn't understand.
+    This function uses double quotes on Windows and shlex.quote on Unix.
+    """
+    if platform.system() == "Windows":
+        # Windows CMD uses double quotes; escape any existing double quotes
+        escaped = str(path).replace('"', '\\"')
+        return f'"{escaped}"'
+    else:
+        return shlex.quote(str(path))
+
+
+def get_temp_dir() -> str:
+    """Get a cross-platform temporary directory path."""
+    return tempfile.gettempdir()
+
+
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QTextEdit, QFileDialog, QDialog,
@@ -136,9 +158,17 @@ def get_output_dir() -> Path:
     return output_dir
 
 
-def open_folder_in_finder(folder_path: Path):
-    """Open a folder in macOS Finder."""
-    subprocess.run(["open", str(folder_path)])
+def open_folder_in_explorer(folder_path: Path):
+    """Open a folder in the system file explorer (cross-platform)."""
+    folder_str = str(folder_path)
+    system = platform.system()
+    
+    if system == "Darwin":  # macOS
+        subprocess.run(["open", folder_str])
+    elif system == "Windows":
+        subprocess.run(["explorer", folder_str])
+    else:  # Linux and others
+        subprocess.run(["xdg-open", folder_str])
 
 
 def get_app_icon() -> QIcon:
@@ -293,17 +323,8 @@ def detect_episode_or_scene(video_path: Path) -> tuple[str, Optional[float]]:
 
 
 def open_in_lossless_cut(video_path: Path, log_callback=None) -> bool:
-    """Open video file in LosslessCut application."""
-    lossless_cut_paths = [
-        Path("/Applications/LosslessCut.app"),
-        Path.home() / "Applications/LosslessCut.app"
-    ]
-    
-    lossless_cut = None
-    for path in lossless_cut_paths:
-        if path.exists():
-            lossless_cut = path
-            break
+    """Open video file in LosslessCut application (cross-platform)."""
+    lossless_cut = get_app_executable("LosslessCut")
     
     if not lossless_cut:
         if log_callback:
@@ -311,7 +332,18 @@ def open_in_lossless_cut(video_path: Path, log_callback=None) -> bool:
         return False
     
     try:
-        subprocess.run(["open", "-a", str(lossless_cut), str(video_path)])
+        system = platform.system()
+        
+        if system == "Darwin":
+            # macOS: use 'open -a' for .app bundles
+            subprocess.run(["open", "-a", str(lossless_cut), str(video_path)])
+        elif system == "Windows":
+            # Windows: run the executable directly with the file as argument
+            subprocess.Popen([str(lossless_cut), str(video_path)])
+        else:
+            # Linux: run the executable directly
+            subprocess.Popen([str(lossless_cut), str(video_path)])
+        
         if log_callback:
             log_callback(f"Opened {video_path.name} in LosslessCut")
         return True
@@ -360,11 +392,11 @@ def download_episodes(commands_text: str, output_dir: Path, progress_callback=No
         command = (
             f"{base_command} "
             f"-sv res=1080 "
-            f"--tmp-dir /tmp "
+            f"--tmp-dir {quote_path(get_temp_dir())} "
             f"--del-after-done "
             f"--check-segments-count False "
-            f"--save-name {shlex.quote(episode_number)} "
-            f"--save-dir {shlex.quote(str(output_dir))} "
+            f"--save-name {quote_path(episode_number)} "
+            f"--save-dir {quote_path(str(output_dir))} "
             f"--select-audio lang=fr "
             f"--select-subtitle lang=fr"
         )
@@ -1294,13 +1326,98 @@ def find_gst_command() -> Optional[str]:
     return None
 
 
+def get_app_executable(app_name: str) -> Optional[Path]:
+    """Get the path to an application executable (cross-platform).
+    
+    Returns the path to the executable if found, None otherwise.
+    """
+    system = platform.system()
+    
+    # Define executable names and common paths per platform
+    app_info = {
+        "VLC": {
+            "Darwin": {
+                "app_paths": ["/Applications/VLC.app", str(Path.home() / "Applications/VLC.app")],
+                "exe_name": None  # Use open -a for .app bundles
+            },
+            "Windows": {
+                "exe_paths": [
+                    "C:\\Program Files\\VideoLAN\\VLC\\vlc.exe",
+                    "C:\\Program Files (x86)\\VideoLAN\\VLC\\vlc.exe",
+                ],
+                "exe_name": "vlc"
+            },
+            "Linux": {
+                "exe_paths": ["/usr/bin/vlc"],
+                "exe_name": "vlc"
+            }
+        },
+        "LosslessCut": {
+            "Darwin": {
+                "app_paths": ["/Applications/LosslessCut.app", str(Path.home() / "Applications/LosslessCut.app")],
+                "exe_name": None
+            },
+            "Windows": {
+                "exe_paths": [
+                    str(Path.home() / "AppData/Local/Programs/LosslessCut/LosslessCut.exe"),
+                    "C:\\Program Files\\LosslessCut\\LosslessCut.exe",
+                    "C:\\Program Files\\LosslessCut-win32-x64\\LosslessCut.exe",
+                ],
+                "exe_name": "LosslessCut"
+            },
+            "Linux": {
+                "exe_paths": [],
+                "exe_name": "losslesscut"  # If installed via package manager
+            }
+        },
+        "SubtitleEdit": {
+            "Darwin": {
+                "app_paths": [],  # Not commonly available on macOS
+                "exe_name": None
+            },
+            "Windows": {
+                "exe_paths": [
+                    "C:\\Program Files\\Subtitle Edit\\SubtitleEdit.exe",
+                    "C:\\Program Files (x86)\\Subtitle Edit\\SubtitleEdit.exe",
+                ],
+                "exe_name": "SubtitleEdit"
+            },
+            "Linux": {
+                "exe_paths": [],
+                "exe_name": "subtitleedit"
+            }
+        }
+    }
+    
+    if app_name not in app_info:
+        return None
+    
+    info = app_info[app_name].get(system, {})
+    
+    # On macOS, check for .app bundles first
+    if system == "Darwin":
+        for app_path in info.get("app_paths", []):
+            if Path(app_path).exists():
+                return Path(app_path)
+    
+    # Check common executable paths
+    for exe_path in info.get("exe_paths", []):
+        if Path(exe_path).exists():
+            return Path(exe_path)
+    
+    # Check if executable is in PATH
+    exe_name = info.get("exe_name")
+    if exe_name:
+        found = shutil.which(exe_name)
+        if found:
+            return Path(found)
+    
+    return None
+
+
 def check_app_exists(app_name: str) -> bool:
-    """Check if a macOS app exists in Applications folder."""
-    app_paths = [
-        Path("/Applications") / f"{app_name}.app",
-        Path.home() / "Applications" / f"{app_name}.app"
-    ]
-    return any(path.exists() for path in app_paths)
+    """Check if a GUI application is installed (cross-platform)."""
+    return get_app_executable(app_name) is not None
 
 
 # ============================================================================
@@ -1516,8 +1633,16 @@ class SetupWizard(QDialog):
         html += "<h4 style='color: #f48a32; margin-top: 15px;'>External Programs:</h4>"
         html += f"<p><b>{'✓ INSTALLED' if self.ffmpeg_installed else '✗ NOT FOUND'}</b> - FFmpeg</p>"
         if not self.ffmpeg_installed:
-            html += "<p style='margin-left: 20px; color: #666;'>Install: <code>brew install ffmpeg</code><br>"
-            html += "If you don't have Homebrew: <a href='https://brew.sh'>Install Homebrew</a></p>"
+            system = platform.system()
+            if system == "Darwin":
+                html += "<p style='margin-left: 20px; color: #666;'>Install: <code>brew install ffmpeg</code><br>"
+                html += "If you don't have Homebrew: <a href='https://brew.sh'>Install Homebrew</a></p>"
+            elif system == "Windows":
+                html += "<p style='margin-left: 20px; color: #666;'>Download: <a href='https://www.gyan.dev/ffmpeg/builds/'>gyan.dev/ffmpeg</a><br>"
+                html += "Extract and add the <code>bin</code> folder to your PATH</p>"
+            else:
+                html += "<p style='margin-left: 20px; color: #666;'>Install: <code>sudo apt install ffmpeg</code> (Debian/Ubuntu)<br>"
+                html += "or <code>sudo dnf install ffmpeg</code> (Fedora)</p>"
         
         html += f"<p><b>{'✓ INSTALLED' if self.n_m3u8_installed else '✗ NOT FOUND'}</b> - N_m3u8DL-RE</p>"
         if not self.n_m3u8_installed:
@@ -2216,7 +2341,7 @@ class VideoProcessingApp(QMainWindow):
         header_left_layout.addWidget(app_name_label)
         
         # Version number below title
-        version_label = QLabel('version 8.0.0 "Torre de Babel"')
+        version_label = QLabel('version 8.1.0 "Torre de Babel"')
         version_label.setFont(QFont("Arial", 18))
         version_label.setStyleSheet("color: #999; font-style: italic;")
         header_left_layout.addWidget(version_label)
@@ -2265,7 +2390,7 @@ class VideoProcessingApp(QMainWindow):
         open_lossless_btn = QPushButton("Open in LosslessCut...")
         open_lossless_btn.clicked.connect(self.open_lossless_cut)
         open_downloads_btn = QPushButton("Open Downloads folder")
-        open_downloads_btn.clicked.connect(lambda: open_folder_in_finder(get_downloads_dir()))
+        open_downloads_btn.clicked.connect(lambda: open_folder_in_explorer(get_downloads_dir()))
         download_buttons.addWidget(clear_btn)
         download_buttons.addWidget(download_btn)
         download_buttons.addWidget(add_videos_btn)
@@ -2286,7 +2411,7 @@ class VideoProcessingApp(QMainWindow):
         translate_btn = QPushButton("Translate subtitles")
         translate_btn.clicked.connect(self.translate_subtitles)
         open_subtitles_btn = QPushButton("Open subtitles folder")
-        open_subtitles_btn.clicked.connect(lambda: open_folder_in_finder(get_subtitles_dir()))
+        open_subtitles_btn.clicked.connect(lambda: open_folder_in_explorer(get_subtitles_dir()))
         subtitles_layout.addWidget(extract_btn)
         subtitles_layout.addWidget(clean_btn)
         subtitles_layout.addWidget(translate_btn)
@@ -2303,7 +2428,7 @@ class VideoProcessingApp(QMainWindow):
         process_1080_btn = QPushButton("Burn subtitles + watermark (1080p)")
         process_1080_btn.clicked.connect(lambda: self.process_video("1080"))
         open_output_btn = QPushButton("Open output folder")
-        open_output_btn.clicked.connect(lambda: open_folder_in_finder(get_output_dir()))
+        open_output_btn.clicked.connect(lambda: open_folder_in_explorer(get_output_dir()))
         process_layout.addWidget(process_720_btn)
         process_layout.addWidget(process_1080_btn)
         process_layout.addWidget(open_output_btn)
