@@ -74,7 +74,7 @@ There are three main ways to use the app, depending on where your content comes 
 *From left to right: Workflow 1 (External Video + Separate SRT), Workflow 2 (Batch Downloader), Workflow 3 (Whisper Transcription)*
 
 **Typical workflow (Workflow 2 - Batch Downloader):**
-Here's basically how things flow:
+Here's basically how things flow (see [batchdownloader_guide.md](batchdownloader_guide.md) for how to get download commands from Widevine Proxy 2):
 
 1. Paste your download commands in the text area, click "**Batch Download Episodes**". Hell yeah, automation!
 2. Click "**Extract Subtitles**" to pull those embedded subtitle tracks from your MKV files. 

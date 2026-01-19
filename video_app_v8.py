@@ -1771,7 +1771,8 @@ class FAQDialog(QDialog):
         
         <p><b>"Error: No commands provided"</b><br>
         This means you tried to download episodes but didn't paste any commands in the text box. 
-        Make sure you've copied your download commands and pasted them into the "Commands" area before clicking "Batch Download Episodes".</p>
+        Make sure you've copied your download commands and pasted them into the "Commands" area before clicking "Batch Download Episodes".
+        See <b>batchdownloader_guide.md</b> for how to extract commands from Widevine Proxy 2.</p>
         
         <p><b>"Error: API key not set"</b><br>
         You need to set up your Google Gemini API key to translate subtitles. Go to Settings and enter your API key in the "API Key" field. 

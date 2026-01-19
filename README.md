@@ -49,6 +49,7 @@ The app requires these external tools (not included):
 ## Documentation
 
 - [SETUP.md](SETUP.md) - Detailed setup guide
+- [batchdownloader_guide.md](batchdownloader_guide.md) - How to extract download commands from Widevine Proxy 2
 - [CHANGELOG.md](CHANGELOG.md) - Version history
 
 ## Building
