@@ -6,14 +6,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-...
+### Added
+- Whisper model detection to check if models already exist in cache directory
+- First-time user dialog asking if user already has a Whisper model installed
+- Auto-detection of existing Whisper models in default cache location (~/.cache/whisper/)
+- User preference storage to avoid redundant model downloads
 
 ## [8.1.1] "Torre de Babel" - 2026-01-19
+
+### What's New
+Improved video download compatibility for streaming sources that don't have a 1080p option available. Downloads now automatically fall back to the best available quality instead of failing.
 
 ### Fixed
 - Video stream not downloading when source has no 1080p option (changed `-sv res=1080` to `-sv best`)
 
+### Added
+
 ## [8.1.0] "Torre de Babel" - 2026-01-18
+
+### What's New
+Added Windows and Linux cross-platform compatibility. The app now works seamlessly across macOS, Windows, and Linux with proper path handling, platform-specific app detection, and cross-platform file operations.
+
+### Fixed
+- Windows path concatenation error when downloading episodes (single quotes in `--save-dir` argument)
+- Windows temp directory error (`/tmp` doesn't exist on Windows)
+- "Open Downloads/Subtitles/Output folder" buttons now work on Windows (Explorer) and Linux (xdg-open)
 
 ### Added
 - Github release
@@ -22,17 +39,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cross-platform app detection with `get_app_executable()` function
 - Platform-specific executable paths for VLC, LosslessCut, and SubtitleEdit
 - Platform-specific FFmpeg installation instructions in setup wizard
-
-### Changed
 - `open_folder_in_finder()` renamed to `open_folder_in_explorer()` with Windows/Linux support
 - `open_in_lossless_cut()` now works on Windows and Linux (runs executable directly)
 - `check_app_exists()` now uses `get_app_executable()` for cross-platform detection
 - N_m3u8DL-RE download command now uses proper quoting for Windows compatibility
-
-### Fixed
-- Windows path concatenation error when downloading episodes (single quotes in `--save-dir` argument)
-- Windows temp directory error (`/tmp` doesn't exist on Windows)
-- "Open Downloads/Subtitles/Output folder" buttons now work on Windows (Explorer) and Linux (xdg-open)
 
 ## [8.0.0] "Torre de Babel" - 2026-01-18
 
