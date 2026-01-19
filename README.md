@@ -15,10 +15,10 @@ Video Processing Studio - A GUI application for video/subtitle processing, trans
 
 - Batch download episodes from streaming services
 - Extract and clean subtitles from video files
-- Translate subtitles using Google Gemini AI
+- Translate subtitles using Google Gemini
 - Burn subtitles into videos with optional watermarks
 - Remux MKV files with separate SRT subtitles
-- Transcribe audio/video using Whisper AI
+- Transcribe audio/video using Whisper
 
 ## Installation
 
