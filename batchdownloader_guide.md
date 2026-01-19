@@ -1,6 +1,6 @@
 # Batch Downloader Guide
 
-> **Experimental** - Currently only works with TF1.
+> **Experimental** - Currently only works with TF1. (Unless you reformat the commands yourself).
 
 This guide explains how to extract download commands from Widevine Proxy 2 for use with SP Workshop's batch downloader.
 
