@@ -391,7 +391,7 @@ def download_episodes(commands_text: str, output_dir: Path, progress_callback=No
         
         command = (
             f"{base_command} "
-            f"-sv res=1080 "
+            f"-sv best "
             f"--tmp-dir {quote_path(get_temp_dir())} "
             f"--del-after-done "
             f"--check-segments-count False "
@@ -2342,7 +2342,7 @@ class VideoProcessingApp(QMainWindow):
         header_left_layout.addWidget(app_name_label)
         
         # Version number below title
-        version_label = QLabel('version 8.1.0 "Torre de Babel"')
+        version_label = QLabel('version 8.1.1 "Torre de Babel"')
         version_label.setFont(QFont("Arial", 18))
         version_label.setStyleSheet("color: #999; font-style: italic;")
         header_left_layout.addWidget(version_label)

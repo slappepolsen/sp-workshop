@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ...
 
+## [8.1.1] "Torre de Babel" - 2026-01-19
+
+### Fixed
+- Video stream not downloading when source has no 1080p option (changed `-sv res=1080` to `-sv best`)
+
 ## [8.1.0] "Torre de Babel" - 2026-01-18
 
 ### Added
