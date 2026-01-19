@@ -3,6 +3,7 @@
 [![Build](https://img.shields.io/github/actions/workflow/status/slappepolsen/sp-workshop/build.yml?branch=main)](../../actions)
 [![Release](https://img.shields.io/github/v/release/slappepolsen/sp-workshop)](../../releases)
 [![Downloads](https://img.shields.io/github/downloads/slappepolsen/sp-workshop/total)](../../releases)
+[![License](https://img.shields.io/github/license/slappepolsen/sp-workshop)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.9+-blue)](https://www.python.org)
 [![Platform](https://img.shields.io/badge/platform-macOS%20|%20Windows%20|%20Linux-lightgrey)](#installation)
 
@@ -69,6 +70,8 @@ pyinstaller --onefile --windowed --name "SP_Workshop" video_app_v8.py
 ```
 
 ## License
+
+This project is licensed under the [MIT License](LICENSE).
 
 Made with ❤️ by [@slappepolsen](https://x.com/slappepolsen)
 
