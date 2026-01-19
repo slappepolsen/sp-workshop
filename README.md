@@ -2,7 +2,7 @@
 
 Video Processing Studio - A GUI application for video/subtitle processing, translation, and more.
 
-**Version 8.0.0 "Torre de Babel"**
+**Version 8.1.1 "Torre de Babel"**
 
 ## Features
 
