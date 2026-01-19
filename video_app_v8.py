@@ -397,6 +397,7 @@ def download_episodes(commands_text: str, output_dir: Path, progress_callback=No
             f"--check-segments-count False "
             f"--save-name {quote_path(episode_number)} "
             f"--save-dir {quote_path(str(output_dir))} "
+            f"--select-video best"
             f"--select-audio lang=fr "
             f"--select-subtitle lang=fr"
         )
