@@ -1,5 +1,11 @@
 # SP Workshop
 
+[![Build](https://img.shields.io/github/actions/workflow/status/slappepolsen/sp-workshop/build.yml?branch=main)](../../actions)
+[![Release](https://img.shields.io/github/v/release/slappepolsen/sp-workshop)](../../releases)
+[![Downloads](https://img.shields.io/github/downloads/slappepolsen/sp-workshop/total)](../../releases)
+[![Python](https://img.shields.io/badge/python-3.9+-blue)](https://www.python.org)
+[![Platform](https://img.shields.io/badge/platform-macOS%20|%20Windows%20|%20Linux-lightgrey)](#installation)
+
 Video Processing Studio - A GUI application for video/subtitle processing, translation, and more.
 
 **Version 8.1.1 "Torre de Babel"**
@@ -65,3 +71,5 @@ pyinstaller --onefile --windowed --name "SP_Workshop" video_app_v8.py
 ## License
 
 Made with ❤️ by [@slappepolsen](https://x.com/slappepolsen)
+
+[![Follow](https://img.shields.io/twitter/follow/slappepolsen?style=social)](https://x.com/slappepolsen)
