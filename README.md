@@ -9,10 +9,10 @@
 
 Video Processing Studio - A GUI application for video/subtitle processing, translation, and more.
 
-### Intended users
+#### Intended users
 SP Workshop is built for subtitle editors, translators, archivists, and  **anyone** determined to watch their favorite (WLW / Sapphic) shows or ships with subtitles in the language they actually want.
 
-### Skill level
+#### Skill level
 Designed for non-technical users (too!). If you can download software on your laptop, you can use SP Workshop. No command-line experience required.
 
 **Version 8.1.1 "Torre de Babel"**
