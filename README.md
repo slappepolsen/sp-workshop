@@ -75,6 +75,10 @@ pip install pyinstaller
 pyinstaller --onefile --windowed --name "SP_Workshop" video_app_v8.py
 ```
 
+## Support
+
+I've received messages asking about donations - thank you, but I don't want any money! The best way to support this project is to try it out and let me know what you think. Your feedback is all I need :)
+
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
