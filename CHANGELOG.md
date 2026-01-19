@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [8.1.0] "Torre de Babel" - 2026-01-18
 
 ### Added
+- Github release
 - Cross-platform path quoting with `quote_path()` function (fixes Windows CMD single-quote issue)
 - Cross-platform temp directory with `get_temp_dir()` function (replaces hardcoded `/tmp`)
 - Cross-platform app detection with `get_app_executable()` function
