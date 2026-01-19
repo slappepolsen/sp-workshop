@@ -211,6 +211,42 @@ def get_remuxed_dir() -> Path:
     return remuxed_dir
 
 
+def check_whisper_model_exists(model_name: str) -> bool:
+    """Check if a Whisper model already exists in the default cache location.
+    
+    Args:
+        model_name: The model name (e.g., "tiny", "base", "small", "medium", "large", "turbo")
+    
+    Returns:
+        True if the model file exists, False otherwise
+    """
+    system = platform.system()
+    
+    # Whisper stores models in ~/.cache/whisper/ on Unix/macOS
+    # and %USERPROFILE%\.cache\whisper\ on Windows
+    if system == "Windows":
+        cache_dir = Path.home() / ".cache" / "whisper"
+    else:  # macOS, Linux, etc.
+        cache_dir = Path.home() / ".cache" / "whisper"
+    
+    # Model file name mappings (Whisper uses these exact names)
+    model_files = {
+        "tiny": "tiny.pt",
+        "base": "base.pt",
+        "small": "small.pt",
+        "medium": "medium.pt",
+        "large": "large-v2.pt",  # Note: Whisper uses "large-v2" filename
+        "turbo": "turbo.pt"
+    }
+    
+    model_file = model_files.get(model_name.lower())
+    if not model_file:
+        return False
+    
+    model_path = cache_dir / model_file
+    return model_path.exists()
+
+
 # ============================================================================
 # Video Analysis Functions
 # ============================================================================
@@ -1787,7 +1823,7 @@ class FAQDialog(QDialog):
         try clicking "Open Downloads Folder" to create it manually.</p>
         
         <p><b>"Error: LosslessCut not found"</b><br>
-        LosslessCut isn't installed on your computer. Download it from https://github.com/mifi/lossless-cut and install it 
+        LosslessCut isn't installed on your computer. Download it here https://github.com/mifi/lossless-cut and install it 
         in your Applications folder, then try again.</p>
         
         <p><b>"✗ Failed" messages</b><br>
@@ -2036,6 +2072,60 @@ class LanguageDialog(QDialog):
     def get_language_code(self) -> str:
         """Get the selected language code."""
         return self.language_combo.currentData()
+
+
+class WhisperModelDialog(QDialog):
+    """Dialog to ask if user already has a Whisper model installed."""
+    
+    def __init__(self, parent=None, model_name: str = "turbo"):
+        super().__init__(parent)
+        self.setWindowTitle("Whisper Model Setup")
+        self.setMinimumWidth(500)
+        
+        layout = QVBoxLayout()
+        
+        # Instructions
+        info_label = QLabel(
+            f"Do you already have a Whisper model downloaded and stored somewhere?\n\n"
+            f"The app will use the '{model_name}' model. If you've previously used Whisper "
+            f"(either through this app or another tool), the model may already be downloaded "
+            f"to your cache directory (~/.cache/whisper/).\n\n"
+            f"Selecting 'Yes' will skip the model download and use your existing model."
+        )
+        info_label.setWordWrap(True)
+        layout.addWidget(info_label)
+        
+        # Check if model exists in default location
+        model_exists = check_whisper_model_exists(model_name)
+        if model_exists:
+            found_label = QLabel(
+                f"✓ Found existing '{model_name}' model in default cache location."
+            )
+            found_label.setStyleSheet("color: #28a745; font-weight: bold;")
+            layout.addWidget(found_label)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        yes_btn = QPushButton("Yes, I have it")
+        yes_btn.clicked.connect(lambda: self.set_result(True))
+        no_btn = QPushButton("No, download it")
+        no_btn.clicked.connect(lambda: self.set_result(False))
+        button_layout.addWidget(yes_btn)
+        button_layout.addWidget(no_btn)
+        layout.addLayout(button_layout)
+        
+        self.setLayout(layout)
+        self.result = None
+    
+    def set_result(self, value: bool):
+        """Set the dialog result and close."""
+        self.result = value
+        self.accept()
+    
+    def get_result(self) -> bool:
+        """Get whether user has existing model."""
+        return self.result if self.result is not None else False
 
 
 # ============================================================================
@@ -2885,6 +2975,27 @@ class VideoProcessingApp(QMainWindow):
             # Get model from config
             config = load_config()
             model = config.get("whisper_model", "turbo")
+            
+            # Check if this is first time using transcription
+            whisper_model_asked = config.get("whisper_model_asked", False)
+            
+            if not whisper_model_asked:
+                # Ask user if they already have a model
+                model_dialog = WhisperModelDialog(self, model)
+                if model_dialog.exec_() != QDialog.Accepted:
+                    return  # User cancelled
+                
+                has_existing_model = model_dialog.get_result()
+                
+                # Save preference to config
+                config["whisper_model_asked"] = True
+                config["whisper_has_existing_model"] = has_existing_model
+                save_config(config)
+                
+                if has_existing_model:
+                    self.log(f"Using existing Whisper model '{model}' from cache.")
+                else:
+                    self.log(f"Will download Whisper model '{model}' on first use.")
             
             self.log(f"Starting transcription of: {video_path.name}")
             lang_display = "Auto-detect" if language_code == "auto" else language_code
