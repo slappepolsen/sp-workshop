@@ -37,7 +37,7 @@ Major subtitle translation enhancements with ISO 639 language suffix support for
 - All changes are backward compatible (ISO 639 mode disabled by default)
 - Config keys: `translation_target_language`, `use_iso639_suffixes`
 
-## [9.0.0] "Três Graças" - 2026-01-19
+## [9.0.0] "Polyglot" - 2026-01-19
 
 ### What's New
 Enhanced batch downloader with multi-source support and flexible episode numbering. The downloader now automatically adjusts language settings based on the selected source. Episode numbering supports ranges and selections like Word's print dialog.
