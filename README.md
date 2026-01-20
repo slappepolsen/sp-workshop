@@ -1,6 +1,5 @@
 # SP Workshop
 
-[![Build](https://img.shields.io/github/actions/workflow/status/slappepolsen/sp-workshop/build.yml?branch=main)](../../actions)
 [![Release](https://img.shields.io/github/v/release/slappepolsen/sp-workshop)](../../releases)
 [![Downloads](https://img.shields.io/github/downloads/slappepolsen/sp-workshop/total)](../../releases)
 [![License](https://img.shields.io/github/license/slappepolsen/sp-workshop)](LICENSE)
@@ -154,10 +153,113 @@ Only needed if you want to use the "Batch download episodes" feature. If you're 
 
 **Don't worry if you don't have one yet!** You can always get it later when you need to translate subtitles. The app will remind you if you try to use translation without an API key.
 
+## Getting Started
+
+**First launch:**
+When you first run the app, a setup wizard will pop up and check if everything is installed. It's pretty helpful because it'll tell you what's missing and where to get it. You can skip it if you want and configure everything later in Settings.
+
+Trust me, once everything is installed, using the app is smooth and efficient.
+
+**Directory structure:**
+The app creates these folders (you can change them in Settings if you want):
+
+- **`~/VideoProcessing/downloads/`** - Put your raw video files (MKV/MP4) here. If you need to remux before translating (because you want to cut scenes first instead of translating full episodes), place separate SRT files here too.
+
+- **`~/VideoProcessing/subtitles/`** - This is where your extracted SRT subtitle files live (extracted, cleaned, and translated versions).
+
+- **`~/VideoProcessing/output/`** - Here's where all your final processed videos go (with burned subtitles and watermarks).
+
+**Configuration:**
+Click "Settings" to configure:
+
+- **Google Gemini API Key** - Required for translating subtitles. Get yours from [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey).
+
+- **Watermark files** (optional) - If you want watermarks on your videos, you'll need PNG images at 720p and 1080p resolutions.
+  - **720p watermark:** Create a transparent PNG at 1280x720 pixels, add your text/logo with 20% opacity
+  - **1080p watermark:** Same thing but at 1920x1080 pixels
+  - You can toggle watermarks on/off in Settings (because sometimes you just don't want them)
+
+- **Directory paths** - Where your downloads, subtitles, and output files go. Change these if you want different locations.
+
+## Workflows
+
+The whole point of this is to make WLW/sapphic/lesbian content accessible for everyone in the world. You know, extracting subtitles, translating them, processing videos with burned-in subtitles and watermarks. All that good stuff, but with way fewer clicks.
+
+There are three main ways to use the app, depending on where your content comes from. Here's a visual overview of all three workflows:
+
+![Workflow Diagrams](flowcharts.png)
+
+*From left to right: Workflow 1 (External Video + Separate SRT), Workflow 2 (Batch Downloader), Workflow 3 (Whisper Transcription)*
+
+### Workflow Comparison
+
+| | **Workflow 1: Remux** | **Workflow 2: Batch Downloader** | **Workflow 3: Transcribe** |
+|---|---|---|---|
+| **Starting Material** | Video file (MKV/MP4) + separate SRT file | Download commands from streaming source | Video/audio file with no subtitles |
+| **What You Need** | FFmpeg | FFmpeg + N_m3u8DL-RE | FFmpeg + `whisper_auto.sh` script |
+| **Best For** | Already have video files and separate subtitle tracks | Downloading full episodes/series with embedded subtitles | No subtitles exist yet, need to create them from audio |
+
+**Typical workflow (Workflow 2 - using the Batch Downloader):**
+Here's basically how things flow (see [batchdownloader_guide.md](batchdownloader_guide.md) for how to get download commands):
+
+1. Paste your download commands in the text area, click "**Batch Download Episodes**". Hell yeah, automation!
+2. Click "**Extract Subtitles**" to pull those embedded subtitle tracks from your MKV files.
+3. "**Clean Subtitles**" to remove all those ugly color tags (`<c.yellow>`, etc.) that come from VTT format. Trust me, you want this.
+4. Click "**Translate Subtitles**" to translate to your selected target language. The original files get renamed with `_OG` suffix so you don't lose them.
+5. Finally, click "**Process Video**" to burn-in the subtitles, add your watermark (if you want), and resize to 720p or 1080p.
+
+**Other features:**
+
+- **Remux:** If you already have an MKV file but the subtitles are separate, this combines them (lossless, no re-encoding, so it's fast!)
+- **Transcribe:** Creates subtitles from scratch using Whisper AI if you don't have any. Requires `whisper_auto.sh` to be in the same folder.
+
+**Quick note on resolution:**
+
+- **720p:** Great for archiving large collections (like, if you're me and archiving 2,300 scenes, that's about 38GB in 720p vs 76GB in 1080p...)
+- **1080p:** Perfect for sharing when quality is the priority. File sizes are about double, but the quality is worth it if you have the space.
+
+## Troubleshooting
+
+Don't worry, we've all been there. Here's how to fix the common stuff:
+
+**"PyQt5 not found"** → Just install it: `pip install PyQt5`. Easy fix!
+
+**"FFmpeg not found"** → Install FFmpeg (see Installation section above) and make sure it's in your PATH. Check with `which ffmpeg` (macOS/Linux) or `where ffmpeg` (Windows). If it doesn't show a path, you need to add it.
+
+**"N_m3u8DL-RE not found"** → Download it, extract it, and add it to your PATH. The app needs to be able to find it when you run download commands.
+
+**"gst command not found"** → Install the translator: `pip install gemini-srt-translator`. The app will find it automatically after that.
+
+**"whisper_auto.sh not found"** → Make sure `whisper_auto.sh` is in the same folder as `video_app_v8.py`. Also make it executable: `chmod +x whisper_auto.sh` if it's not the case yet.
+
+**App won't start** → Check your Python version (`python3 --version` needs to be 3.9 or higher). Verify PyQt5 is installed: `python3 -c "import PyQt5"`. If that fails, check your terminal for error messages—they'll tell you what's wrong.
+
+**Video processing fails** → Make sure FFmpeg is installed and working. Check that your subtitle files match your video filenames (they need to have the same base name). If you're using watermarks, verify the watermark file paths in Settings are correct.
+
+**Translation fails** → Double-check your API key in Settings (or make sure the environment variable is set). Check your internet connection—you need that for API calls. Also make sure your API key has quota/credits left.
+
+**Still stuck?** Check the log output in the app's log window. The logs usually tell you exactly what went wrong.
+
+## System Requirements
+
+- **macOS 10.14+** (primary platform - fully tested)
+- **Windows/Linux** - The app should work, but these platforms haven't been as extensively tested. If you're on Windows or Linux and manage to get it working (or run into issues), please let me know! I'd love to hear about your experience and can help troubleshoot.
+- Python 3.9 or higher
+- FFmpeg (latest version recommended)
+- N_m3u8DL-RE (for downloads, if you plan to use the batch downloader)
+- Internet connection (for API translation)
+
+**Note for Windows/Linux users:**
+
+The app was primarily built and tested on macOS, so some things might need tweaking on other platforms:
+
+- The `whisper_auto.sh` script is a bash script; Windows users might need to adapt it
+- Path handling should work cross-platform, but let me know if you run into issues
+- The app icon might look different on non-macOS systems (that's fine, it'll still work)
+
 ## Documentation
 
-- [SETUP.md](SETUP.md) - Detailed setup guide
-- [batchdownloader_guide.md](batchdownloader_guide.md) - How to extract download commands from Widevine Proxy 2
+- [batchdownloader_guide.md](batchdownloader_guide.md) - How to extract download commands from streaming sources
 - [CHANGELOG.md](CHANGELOG.md) - Version history
 
 ## Support
