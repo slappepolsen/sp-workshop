@@ -30,35 +30,8 @@ Designed for non-technical users (too!). If you can download software on your la
 
 ## Installation
 
-### Option 1: Download Executable (Recommended)
-
-An "executable" is a ready-to-run version of the app that doesn't require any setup, just download and run! This is the easiest option for most users.
-
-1. Go to the [Releases](../../releases) page
-2. Download the file for your operating system:
-   - **macOS** (Apple computers): Download `SP_Workshop-macOS.zip`
-   - **Windows**: Download `SP_Workshop-Windows.zip`
-   - **Linux**: Download `SP_Workshop-Linux.tar.gz`
-3. **Extract the file**: 
-   - On **macOS/Windows**: Double-click the `.zip` file to extract it (creates a folder)
-   - On **Linux**: Right-click the `.tar.gz` file and select "Extract" or use your file manager
-4. **Run the app**:
-   - On **macOS**: Open the extracted folder and double-click `SP_Workshop.app`
-   - On **Windows**: Open the extracted folder and double-click `SP_Workshop.exe`
-   - On **Linux**: Open the extracted folder, right-click `SP_Workshop`, select "Properties" → "Permissions" → check "Execute", then double-click to run
-
-The executable includes all documentation files (README, SETUP guide, etc.) in the same folder.
-
-❗️**Done?** You're almost there! Go to [External Dependencies](#external-dependencies)
-
----
-
-### Option 2: Run from Source
-
-"Running from source" means running the app directly from the Python code. This option requires Python to be installed on your computer, but you already knew that because otherwise you wouldn't be considering option 2 😉
-
 **What you need:**
-- **Python 3.9 or higher** - Python is a programming language that runs the app. If you don't have it, download from [python.org](https://www.python.org/downloads/)
+- **Python 3.9 or higher** - Download from [python.org](https://www.python.org/downloads/) if you don't have it
 
 **Installation steps:**
 
@@ -186,16 +159,6 @@ Only needed if you want to use the "Batch download episodes" feature. If you're 
 - [SETUP.md](SETUP.md) - Detailed setup guide
 - [batchdownloader_guide.md](batchdownloader_guide.md) - How to extract download commands from Widevine Proxy 2
 - [CHANGELOG.md](CHANGELOG.md) - Version history
-
-## Building
-
-Executables are automatically built via GitHub Actions for all platforms.
-
-To build manually:
-```bash
-pip install pyinstaller
-pyinstaller --onefile --windowed --name "SP_Workshop" video_app_v8.py
-```
 
 ## Support
 
