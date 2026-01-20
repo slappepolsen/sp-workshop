@@ -509,8 +509,13 @@ def download_episodes(commands_text: str, output_dir: Path, source: str = "tf1",
             progress_callback(i + 1, total, f"Episode {episode_number}")
         
         # Build command with source-specific options
-        # Quote the URL to handle special characters (&, =, etc.)
-        quoted_url = f'"{base_command}"'
+        # For Globo: quote simple URLs to handle special characters (&, =, etc.)
+        # For TF1: use command as-is (already has proper quoting, headers, keys)
+        if source == "globoplay":
+            quoted_url = f'"{base_command}"'
+        else:
+            quoted_url = base_command
+        
         command = (
             f"N_m3u8DL-RE {quoted_url} "
             f"--tmp-dir {quote_path(get_temp_dir())} "
@@ -520,8 +525,7 @@ def download_episodes(commands_text: str, output_dir: Path, source: str = "tf1",
             f"--save-dir {quote_path(str(output_dir))} "
             f"--select-video best "
             f"--select-audio lang={audio_lang} "
-            f"--select-subtitle lang={subtitle_lang} "
-            f"--log-level error"
+            f"--select-subtitle lang={subtitle_lang}"
         )
         
         # Add MKV muxing for Globo downloads (TF1 commands already include -M mkv)
@@ -581,19 +585,8 @@ def download_episodes(commands_text: str, output_dir: Path, source: str = "tf1",
                     if should_log and log_callback:
                         log_callback(f"  {line_output}")
                     
-                    # Extract and log progress updates periodically
-                    if "%" in line_output and is_progress_bar:
-                        percent_match = re.search(r'(\d+(?:\.\d+)?)%', line_output)
-                        if percent_match:
-                            try:
-                                percent = float(percent_match.group(1))
-                                # Log progress every 5% (or at completion)
-                                if abs(percent - last_logged_percent) >= 5 or percent >= 99:
-                                    if log_callback:
-                                        log_callback(f"  Progress: {percent:.1f}% complete")
-                                    last_logged_percent = percent
-                            except ValueError:
-                                pass
+                    # Progress logging suppressed to avoid spam from multiple streams
+                    # (video, audio, subtitle each report 0-100% separately)
             
             # Wait for process to complete
             returncode = process.wait()
@@ -1440,7 +1433,6 @@ def find_gst_command() -> Optional[str]:
     
     # Check common venv locations
     possible_paths = [
-        Path("/Users/kszxvd/dna/venv/bin/gst"),
         Path(__file__).parent / "venv" / "bin" / "gst",
         Path.home() / "dna" / "venv" / "bin" / "gst",
         Path(__file__).parent.parent / "venv" / "bin" / "gst",
@@ -1587,7 +1579,7 @@ class SetupWizard(QDialog):
         
         # Check installation status
         self.pyqt5_installed = check_python_package("PyQt5")
-        self.gst_installed = check_python_package("gemini_srt_translator")
+        self.gst_installed = find_gst_command() is not None  # Check for gst command, not Python package (pipx support)
         self.ffmpeg_installed = check_command_exists("ffmpeg")
         self.n_m3u8_installed = check_command_exists("N_m3u8DL-RE")
         self.vlc_installed = check_app_exists("VLC")
@@ -2147,6 +2139,7 @@ class LanguageDialog(QDialog):
             ("English (English)", "en"),
             ("French (Français)", "fr"),
             ("Spanish (Español)", "es"),
+            ("Catalan (Català)", "ca"),
             ("German (Deutsch)", "de"),
             ("Italian (Italiano)", "it"),
             ("Portuguese (Português - BR/PT)", "pt"),
