@@ -102,7 +102,8 @@ def load_config() -> Dict:
         "download_resolution": "1080",
         "ffmpeg_preset": "medium",
         "setup_complete": False,
-        "use_watermarks": True
+        "use_watermarks": True,
+        "download_source": "tf1"
     }
     
     if config_path.exists():
@@ -390,11 +391,74 @@ def open_in_lossless_cut(video_path: Path, log_callback=None) -> bool:
 
 
 # ============================================================================
+# Source Settings for Batch Downloader
+# ============================================================================
+
+SOURCE_SETTINGS = {
+    "tf1": {"audio_lang": "fr", "subtitle_lang": "fr", "name": "TF1 (French)"},
+    "globoplay": {"audio_lang": "pt", "subtitle_lang": "pt", "name": "Globoplay (Portuguese)"},
+}
+
+
+# ============================================================================
+# Episode Range Parser
+# ============================================================================
+
+def parse_episode_range(range_str: str) -> List[int]:
+    """Parse episode range string like '1-5,7,9-11' into list of episode numbers.
+    
+    Args:
+        range_str: String like '1', '1-5', '1,3,5', '1-3,5,7-9'
+    
+    Returns:
+        List of episode numbers in order
+    
+    Examples:
+        '1' -> [1]
+        '1-5' -> [1, 2, 3, 4, 5]
+        '1,3,5' -> [1, 3, 5]
+        '1-3,5,7-9' -> [1, 2, 3, 5, 7, 8, 9]
+    """
+    episodes = []
+    parts = range_str.split(',')
+    
+    for part in parts:
+        part = part.strip()
+        if '-' in part:
+            # Range like '1-5'
+            try:
+                start, end = part.split('-')
+                start_num = int(start.strip())
+                end_num = int(end.strip())
+                episodes.extend(range(start_num, end_num + 1))
+            except (ValueError, IndexError):
+                continue
+        else:
+            # Single number
+            try:
+                episodes.append(int(part))
+            except ValueError:
+                continue
+    
+    return episodes
+
+
+# ============================================================================
 # Script Wrappers
 # ============================================================================
 
-def download_episodes(commands_text: str, output_dir: Path, progress_callback=None, log_callback=None) -> bool:
-    """Download episodes using commands from text."""
+def download_episodes(commands_text: str, output_dir: Path, source: str = "tf1", 
+                      episode_spec: str = "1", progress_callback=None, log_callback=None) -> bool:
+    """Download episodes using commands from text.
+    
+    Args:
+        commands_text: Raw N_m3u8DL-RE commands, one per line
+        output_dir: Directory to save downloaded files
+        source: Source service ("tf1", "globoplay") for language settings
+        episode_spec: Episode specification (e.g., "1", "1-5", "1,3,5-7")
+        progress_callback: Callback for progress updates
+        log_callback: Callback for log messages
+    """
     if not commands_text.strip():
         if log_callback:
             log_callback("Error: No commands provided.")
@@ -407,39 +471,65 @@ def download_episodes(commands_text: str, output_dir: Path, progress_callback=No
             log_callback("No commands found.")
         return False
     
+    # Parse episode specification
+    episode_numbers = parse_episode_range(episode_spec)
+    if not episode_numbers:
+        episode_numbers = list(range(1, len(lines) + 1))  # Default to 1, 2, 3, ...
+    
+    # If fewer episode numbers than commands, extend sequentially
+    if len(episode_numbers) < len(lines):
+        last_num = episode_numbers[-1]
+        episode_numbers.extend(range(last_num + 1, last_num + 1 + (len(lines) - len(episode_numbers))))
+    
+    # Get language settings for this source
+    settings = SOURCE_SETTINGS.get(source, SOURCE_SETTINGS["tf1"])
+    audio_lang = settings["audio_lang"]
+    subtitle_lang = settings["subtitle_lang"]
+    
     downloaded_files = []
     total = len(lines)
     if log_callback:
         log_callback(f"Starting batch download for {total} episodes...")
+        log_callback(f"Source: {settings['name']} | Audio: {audio_lang} | Subtitles: {subtitle_lang}")
+        if episode_numbers:
+            log_callback(f"Episode numbers: {', '.join(map(str, episode_numbers[:10]))}{' ...' if len(episode_numbers) > 10 else ''}")
     
-    for i, line in enumerate(lines, start=1):
-        match = re.search(r"Episode\s+(\d+):\s*(.*)", line)
-        if not match:
-            if log_callback:
-                log_callback(f"Skipping invalid line {i}: {line}")
+    for i, base_command in enumerate(lines):
+        episode_number = episode_numbers[i] if i < len(episode_numbers) else (episode_numbers[-1] + i - len(episode_numbers) + 1)
+        
+        # Skip empty lines or comments
+        if not base_command or base_command.startswith('#'):
             continue
         
-        episode_number, base_command = match.groups()
-        episode_number = episode_number.strip()
+        # Strip "N_m3u8DL-RE" prefix if present (user might paste full command)
+        if base_command.lower().startswith('n_m3u8dl-re '):
+            base_command = base_command[12:].strip()
         
         if progress_callback:
-            progress_callback(i, total, f"Episode {episode_number}")
+            progress_callback(i + 1, total, f"Episode {episode_number}")
         
+        # Build command with source-specific options
+        # Quote the URL to handle special characters (&, =, etc.)
+        quoted_url = f'"{base_command}"'
         command = (
-            f"{base_command} "
-            f"-sv best "
+            f"N_m3u8DL-RE {quoted_url} "
             f"--tmp-dir {quote_path(get_temp_dir())} "
             f"--del-after-done "
             f"--check-segments-count False "
-            f"--save-name {quote_path(episode_number)} "
+            f"--save-name {quote_path(str(episode_number))} "
             f"--save-dir {quote_path(str(output_dir))} "
-            f"--select-video best"
-            f"--select-audio lang=fr "
-            f"--select-subtitle lang=fr"
+            f"--select-video best "
+            f"--select-audio lang={audio_lang} "
+            f"--select-subtitle lang={subtitle_lang} "
+            f"--log-level error"
         )
         
+        # Add MKV muxing for Globo downloads (TF1 commands already include -M mkv)
+        if source == "globoplay":
+            command += " -M mkv"
+        
         if log_callback:
-            log_callback(f"\n--- Task {i}/{total}: Episode {episode_number} ---")
+            log_callback(f"\n--- Task {i + 1}/{total}: Episode {episode_number} ---")
             log_callback(f"Running: {base_command[:80]}...")
         
         # Use Popen to stream output in real-time
@@ -456,6 +546,8 @@ def download_episodes(commands_text: str, output_dir: Path, progress_callback=No
             
             # Stream output line by line
             output_lines = []
+            last_logged_percent = -5  # Track last logged percentage to avoid spam
+            
             while True:
                 line_output = process.stdout.readline()
                 if not line_output:
@@ -464,21 +556,42 @@ def download_episodes(commands_text: str, output_dir: Path, progress_callback=No
                 line_output = line_output.strip()
                 if line_output:
                     output_lines.append(line_output)
-                    # Log all output from N_m3u8DL-RE for verbose feedback
-                    if log_callback:
+                    
+                    # Filter out progress bar spam (lines with ━ characters)
+                    is_progress_bar = '━' in line_output
+                    
+                    # Filter out file access warnings (normal concurrent download noise)
+                    is_file_access_warning = 'The process cannot access the file' in line_output
+                    
+                    # Only log important messages
+                    should_log = (
+                        not is_progress_bar and
+                        not is_file_access_warning and (
+                            'INFO' in line_output or
+                            'WARN' in line_output or
+                            'ERROR' in line_output or
+                            'Selected streams' in line_output or
+                            'Start downloading' in line_output or
+                            'Downloaded' in line_output or
+                            'Muxing' in line_output or
+                            'Done' in line_output
+                        )
+                    )
+                    
+                    if should_log and log_callback:
                         log_callback(f"  {line_output}")
                     
-                    # Try to parse progress information from N_m3u8DL-RE output
-                    # Common patterns: "Downloading...", "Progress: X%", "Speed: X MB/s", etc.
-                    if "Progress:" in line_output or "%" in line_output:
-                        # Extract percentage if available
+                    # Extract and log progress updates periodically
+                    if "%" in line_output and is_progress_bar:
                         percent_match = re.search(r'(\d+(?:\.\d+)?)%', line_output)
-                        if percent_match and progress_callback:
+                        if percent_match:
                             try:
                                 percent = float(percent_match.group(1))
-                                # Update progress with percentage for current episode
-                                enhanced_filename = f"Episode {episode_number} ({percent:.1f}%)"
-                                progress_callback(i, total, enhanced_filename)
+                                # Log progress every 5% (or at completion)
+                                if abs(percent - last_logged_percent) >= 5 or percent >= 99:
+                                    if log_callback:
+                                        log_callback(f"  Progress: {percent:.1f}% complete")
+                                    last_logged_percent = percent
                             except ValueError:
                                 pass
             
@@ -2483,11 +2596,40 @@ class VideoProcessingApp(QMainWindow):
         download_group = QGroupBox("DOWNLOAD")
         download_group.setStyleSheet("QGroupBox { font-weight: bold; }")
         download_layout = QVBoxLayout()
-        download_label = QLabel("Commands (paste here, one per line):")
+        
+        # Source selector and starting episode row
+        source_row = QHBoxLayout()
+        source_label = QLabel("Source:")
+        self.source_combo = QComboBox()
+        self.source_combo.addItem("TF1 (French)", "tf1")
+        self.source_combo.addItem("Globoplay (Portuguese)", "globoplay")
+        # Set from config
+        saved_source = self.config.get("download_source", "tf1")
+        source_index = self.source_combo.findData(saved_source)
+        if source_index >= 0:
+            self.source_combo.setCurrentIndex(source_index)
+        self.source_combo.currentIndexChanged.connect(self.on_source_changed)
+        
+        starting_ep_label = QLabel("Episodes:")
+        self.starting_episode_input = QLineEdit()
+        self.starting_episode_input.setText("1")
+        self.starting_episode_input.setMaximumWidth(120)
+        self.starting_episode_input.setPlaceholderText("1 or 1-5 or 1,3,5-7")
+        self.starting_episode_input.setToolTip("Episode numbers:\n• Single: 1\n• Range: 1-5\n• Mixed: 1,3,5-7,10")
+        
+        source_row.addWidget(source_label)
+        source_row.addWidget(self.source_combo)
+        source_row.addSpacing(20)
+        source_row.addWidget(starting_ep_label)
+        source_row.addWidget(self.starting_episode_input)
+        source_row.addStretch()
+        download_layout.addLayout(source_row)
+        
+        download_label = QLabel("Commands (one per line, just paste the URL or full command):")
         download_layout.addWidget(download_label)
         
         self.commands_text = QTextEdit()
-        self.commands_text.setPlaceholderText("Episode 1: N_m3u8DL-RE \"https://...\" --key ...\nEpisode 2: N_m3u8DL-RE \"https://...\" --key ...")
+        self.update_commands_placeholder()  # Set placeholder based on source
         self.commands_text.setMaximumHeight(120)
         self.commands_text.setMinimumHeight(80)
         download_layout.addWidget(self.commands_text)
@@ -2686,15 +2828,19 @@ class VideoProcessingApp(QMainWindow):
         }
         self.current_operation = operation_names.get(func_name, "Processing")
         
-        # Show progress section
-        self.progress_group.setVisible(True)
-        self.progress_bar.setRange(0, 100)
-        self.progress_bar.setValue(0)
-        self.progress_bar.setFormat("%p%")
-        self.progress_operation_label.setText(f"{self.current_operation}...")
-        self.progress_file_label.setText("")
-        self.progress_counter_label.setText("")
-        self.update_progress_bar_color()
+        # Hide progress section for downloads (user preference), show for other operations
+        is_download = func_name in ["download_episodes", "download_with_detection"]
+        self.progress_group.setVisible(not is_download)
+        
+        if not is_download:
+            # Only configure progress bar if visible
+            self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(0)
+            self.progress_bar.setFormat("%p%")
+            self.progress_operation_label.setText(f"{self.current_operation}...")
+            self.progress_file_label.setText("")
+            self.progress_counter_label.setText("")
+            self.update_progress_bar_color()
         
         self.statusBar().showMessage("Running...")
         
@@ -2793,6 +2939,30 @@ class VideoProcessingApp(QMainWindow):
         else:
             self.log("✗ Operation failed. Check log for details.")
     
+    def on_source_changed(self):
+        """Handle source selection change."""
+        source = self.source_combo.currentData()
+        self.config["download_source"] = source
+        save_config(self.config)
+        self.update_commands_placeholder()
+    
+    def update_commands_placeholder(self):
+        """Update the commands placeholder text based on selected source."""
+        source = self.source_combo.currentData()
+        if source == "globoplay":
+            placeholder = (
+                '"https://egcdn-vod.video.globo.com/.../episode1.m3u8"\n'
+                '"https://egcdn-vod.video.globo.com/.../episode2.m3u8"\n'
+                '"https://egcdn-vod.video.globo.com/.../episode3.m3u8"'
+            )
+        else:  # tf1
+            placeholder = (
+                '"https://..." -H "..." --key KID:KEY --use-shaka-packager\n'
+                '"https://..." -H "..." --key KID:KEY --use-shaka-packager\n'
+                '"https://..." -H "..." --key KID:KEY --use-shaka-packager'
+            )
+        self.commands_text.setPlaceholderText(placeholder)
+    
     def download_episodes(self):
         """Download episodes."""
         commands_text = self.commands_text.toPlainText()
@@ -2800,12 +2970,17 @@ class VideoProcessingApp(QMainWindow):
             QMessageBox.warning(self, "Error", "Please paste commands in the text area.")
             return
         
+        # Get source and episode specification from UI
+        source = self.source_combo.currentData()
+        episode_spec = self.starting_episode_input.text().strip() or "1"
+        
         output_dir = get_downloads_dir()
         self.log(f"Starting download to: {output_dir}")
+        self.log(f"Source: {SOURCE_SETTINGS[source]['name']} | Episodes: {episode_spec}")
         
         # Create a wrapper that adds detection after download
-        def download_with_detection(commands_text, output_dir, progress_callback=None, log_callback=None):
-            result = download_episodes(commands_text, output_dir, progress_callback, log_callback)
+        def download_with_detection(commands_text, output_dir, source, episode_spec, progress_callback=None, log_callback=None):
+            result = download_episodes(commands_text, output_dir, source, episode_spec, progress_callback, log_callback)
             if result:
                 # Detect episode/scene for downloaded files
                 mkv_files = list(output_dir.glob("*.mkv"))
@@ -2817,7 +2992,7 @@ class VideoProcessingApp(QMainWindow):
                             log_callback(f"  {mkv_file.name}: {type_label} ({duration:.1f} min)")
             return result
         
-        self.run_script(download_with_detection, commands_text, output_dir)
+        self.run_script(download_with_detection, commands_text, output_dir, source, episode_spec)
     
     def add_videos(self):
         """Add videos manually."""

@@ -20,6 +20,33 @@ Added Whisper model detection to avoid redundant downloads and included all docu
 - User preference storage to avoid redundant model downloads
 - All documentation files now included in release packages (README.md, SETUP.md, CHANGELOG.md, batchdownloader_guide.md, LICENSE, requirements.txt, video_app_v8.py, flowcharts.png)
 
+## [9.0.0] "Três Graças" - 2026-01-19
+
+### What's New
+Multi-source batch downloader with support for TF1 (French) and Globoplay (Portuguese). The downloader now automatically adjusts language settings based on the selected source and no longer requires the "Episode X:" prefix format. Episode numbering now supports ranges and selections like Word's print dialog.
+
+### Added
+- Source selector dropdown in Download section (TF1, Globoplay)
+- Episode range input with support for:
+  - Single episodes: `1`
+  - Ranges: `1-5` (episodes 1, 2, 3, 4, 5)
+  - Multiple selections: `1,3,5` 
+  - Mixed: `1-3,5,7-10` (episodes 1, 2, 3, 5, 7, 8, 9, 10)
+- `SOURCE_SETTINGS` configuration for per-source language mappings
+- Dynamic placeholder text that changes based on selected source
+- Globoplay support with Portuguese audio/subtitle selection
+- `parse_episode_range()` helper function for parsing episode specifications
+
+### Changed
+- Command format simplified: no longer requires "Episode X:" prefix
+- Commands are now auto-numbered based on episode specification
+- Language selection (audio/subtitles) is now dynamic based on source
+- Episode input field now accepts ranges instead of just starting number
+- Updated batchdownloader_guide.md with Globoplay instructions and episode range examples
+
+### Removed
+- Hardcoded French language tags (`lang=fr`) from download function
+
 ## [8.1.1] "Torre de Babel" - 2026-01-19
 
 ### What's New
