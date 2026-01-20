@@ -34,7 +34,7 @@ Designed for non-technical users (too!). If you can download software on your la
 
 ### Option 1: Download Executable (Recommended)
 
-An "executable" is a ready-to-run version of the app that doesn't require any setup—just download and run! This is the easiest option for most users.
+An "executable" is a ready-to-run version of the app that doesn't require any setup, just download and run! This is the easiest option for most users.
 
 1. Go to the [Releases](../../releases) page
 2. Download the file for your operating system:
@@ -51,9 +51,13 @@ An "executable" is a ready-to-run version of the app that doesn't require any se
 
 The executable includes all documentation files (README, SETUP guide, etc.) in the same folder.
 
+❗️**Done?** You're almost there! Go to [External Dependencies](#external-dependencies)
+
+---
+
 ### Option 2: Run from Source
 
-"Running from source" means running the app directly from the Python code. This option requires Python to be installed on your computer.
+"Running from source" means running the app directly from the Python code. This option requires Python to be installed on your computer, but you already knew that because otherwise you wouldn't be considering option 2 😉
 
 **What you need:**
 - **Python 3.9 or higher** - Python is a programming language that runs the app. If you don't have it, download from [python.org](https://www.python.org/downloads/)
