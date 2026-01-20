@@ -71,7 +71,7 @@ The executable includes all documentation files (README, SETUP guide, etc.) in t
 
 2. **Navigate to the folder** where you downloaded this project:
    
-   First, get the actual path to your folder:
+   #### First, get the actual path to your folder:
    - **Windows**: 
      - Open File Explorer and find the `sp-workshop` folder
      - Click once on the folder (select it)
@@ -155,7 +155,7 @@ Only needed if you want to use the "Batch download episodes" feature. If you're 
      1. Move the executable to a folder (e.g., `/Users/YourName/bin` or create a new folder for it)
      2. Open Terminal
      3. Edit your shell config: `nano ~/.zshrc` (macOS) or `nano ~/.bashrc` (Linux)
-     4. Add this line (replace `/Users/YourName/bin` with your actual folder path): `export PATH="/Users/YourName/bin:$PATH"`
+     4. Add this line (replace `/Users/YourName/bin` with [your actual folder path](#first-get-the-actual-path-to-your-folder)): `export PATH="/Users/YourName/bin:$PATH"`
      5. Save: Press `Ctrl(⌃)` + `X`, then `Y`, then `Enter`
      6. Reload: Type `source ~/.zshrc` (macOS) or `source ~/.bashrc` (Linux), then `Enter`
    - **Windows:** Add the folder to your PATH using the same method as FFmpeg (see above)
