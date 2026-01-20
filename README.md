@@ -61,9 +61,9 @@ The executable includes all documentation files (README, SETUP guide, etc.) in t
 **Installation steps:**
 
 1. **Open Terminal** (macOS/Linux) or **Command Prompt** (Windows):
-   - **macOS**: Press `Cmd + Space`, type "Terminal", press Enter
-   - **Windows**: Press `Win + R`, type "cmd", press Enter
-   - **Linux**: Press `Ctrl + Alt + T` or find Terminal in your applications
+   - **macOS**: Press `Cmd(⌘)` + `Space`, type "Terminal", press Enter
+   - **Windows**: Press `Win` + `R`, type "cmd", press Enter
+   - **Linux**: Press `Ctrl` + `Alt` + `T` or find Terminal in your applications
 
 2. **Navigate to the folder** where you downloaded this project:
    
@@ -71,10 +71,10 @@ The executable includes all documentation files (README, SETUP guide, etc.) in t
    - **Windows**: 
      - Open File Explorer and find the `sp-workshop` folder
      - Click once on the folder (select it)
-     - Press `Ctrl + Shift + C` to copy the file path
+     - Press `Ctrl` + `Shift` + `C` to copy the file path
    - **macOS**: 
      - Open Finder and find the `sp-workshop` folder
-     - Show the path bar: Press `Cmd + Option + P` (or View → Show Path Bar)
+     - Show the path bar: Press `Cmd(⌘)` + `Option(⌥)` + `P` (or View → Show Path Bar)
      - Click once on the folder in the path bar at the bottom
      - Right-click and select "Copy [folder name] as Pathname"
    - **Linux**: 
@@ -86,10 +86,6 @@ The executable includes all documentation files (README, SETUP guide, etc.) in t
    ```bash
    cd [paste your path here]
    ```
-   
-   *Example: If your folder is in Downloads, it might look like:*
-   - Windows: `cd C:\Users\YourName\Downloads\sp-workshop`
-   - macOS/Linux: `cd /Users/YourName/Downloads/sp-workshop`
 
 3. **Install required Python packages** (this downloads the libraries the app needs):
    ```bash
@@ -105,13 +101,9 @@ The executable includes all documentation files (README, SETUP guide, etc.) in t
 
 ## External Dependencies
 
-The app needs some additional tools to work properly. These aren't included with the app itself, so you'll need to install them separately. Don't worry—we'll guide you through each one!
+The app needs some additional tools to work properly. These aren't included with the app itself, so you'll need to install them separately. Don't worry, I'll guide you through each one!
 
 ### FFmpeg (Required)
-
-**What it is:** FFmpeg is a powerful tool that handles all the video and audio processing—like extracting subtitles, burning them into videos, resizing videos, and adding watermarks. Without it, the app can't process videos.
-
-**Why you need it:** The app uses FFmpeg behind the scenes for all video operations. Think of it as the engine that powers the video processing features.
 
 **How to install:**
 
@@ -125,7 +117,7 @@ The app needs some additional tools to work properly. These aren't included with
   2. Download the Windows build (choose the "Windows builds from gyan.dev" link)
   3. Extract the ZIP file to a folder (e.g., `C:\ffmpeg`)
   4. **Add to PATH:** 
-     - Press `Win + X` and select "System"
+     - Press `Win` + `X` and select "System"
      - Click "Advanced system settings" → "Environment Variables"
      - Under "System variables", find "Path" and click "Edit"
      - Click "New" and add the path to the `bin` folder inside your FFmpeg folder (e.g., `C:\ffmpeg\bin`)
@@ -139,11 +131,7 @@ The app needs some additional tools to work properly. These aren't included with
 
 ### N_m3u8DL-RE (Optional)
 
-**What it is:** A tool for downloading videos from streaming services in batch (multiple episodes at once).
-
-**Why you need it:** Only needed if you want to use the "Batch download episodes" feature. If you're just processing videos you already have, you can skip this.
-
-**What "batch downloading" means:** Instead of downloading episodes one by one, you can paste multiple download commands and let the app download them all automatically.
+Only needed if you want to use the "Batch download episodes" feature. If you're just processing videos you already have, you can skip this. Instead of downloading episodes one by one, you can paste multiple download commands and let the app download them all automatically.
 
 **How to install:**
 
