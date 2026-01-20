@@ -401,6 +401,28 @@ SOURCE_SETTINGS = {
 
 
 # ============================================================================
+# ISO 639-2/T Language Codes for Subtitle Suffixes
+# ============================================================================
+
+ISO_639_CODES = {
+    "English": "eng",
+    "French": "fra",
+    "Spanish": "spa",
+    "Catalan": "cat",
+    "German": "deu",
+    "Italian": "ita",
+    "Portuguese": "por",
+    "Dutch": "nld",
+    "Chinese": "zho",
+    "Japanese": "jpn",
+    "Korean": "kor",
+    "Arabic": "ara",
+    "Thai": "tha",
+    "Greek": "ell",
+}
+
+
+# ============================================================================
 # Episode Range Parser
 # ============================================================================
 
@@ -777,8 +799,19 @@ def clean_subtitles(subtitles_dir: Path, progress_callback=None, log_callback=No
     return True
 
 
-def translate_subtitles(selected_srt_files: List[Path], api_key: Optional[str] = None, progress_callback=None, log_callback=None) -> bool:
-    """Translate selected subtitle files using gemini-srt-translator."""
+def translate_subtitles(selected_srt_files: List[Path], api_key: Optional[str] = None, 
+                       target_language: str = "English", use_iso639: bool = False,
+                       progress_callback=None, log_callback=None) -> bool:
+    """Translate selected subtitle files using gemini-srt-translator.
+    
+    Args:
+        selected_srt_files: List of SRT files to translate
+        api_key: Optional API key (uses env var if available)
+        target_language: Target language for translation (default: English)
+        use_iso639: Whether to add ISO 639 language suffix to output filename
+        progress_callback: Callback for progress updates
+        log_callback: Callback for log messages
+    """
     # Check for API key in environment variables first (most secure)
     env_api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GST_API_KEY")
     
@@ -823,7 +856,7 @@ def translate_subtitles(selected_srt_files: List[Path], api_key: Optional[str] =
             
             # Build command - only use -k flag if API key is NOT in environment variable
             # (gst will automatically use GEMINI_API_KEY or GST_API_KEY if set)
-            base_cmd = ["translate", "-i", str(og_file), "-l", "English", "-o", str(srt_file)]
+            base_cmd = ["translate", "-i", str(og_file), "-l", target_language, "-o", str(srt_file)]
             
             # Only pass -k if we have a non-env API key (from config)
             if not env_api_key and final_api_key:
@@ -889,9 +922,31 @@ def translate_subtitles(selected_srt_files: List[Path], api_key: Optional[str] =
                     pass
             
             if translation_success:
+                # Add ISO 639 language suffix if enabled
+                final_srt_file = srt_file
+                if use_iso639:
+                    target_code = ISO_639_CODES.get(target_language, "eng")
+                    
+                    # Check if source filename has existing language suffix to replace
+                    source_match = re.match(r'(.+)\.([a-z]{3})$', srt_file.stem)
+                    if source_match:
+                        # Replace existing suffix: video.spa → video.eng
+                        base_name = source_match.group(1)
+                    else:
+                        # No existing suffix: video → video
+                        base_name = srt_file.stem
+                    
+                    final_srt_file = srt_file.parent / f"{base_name}.{target_code}.srt"
+                    
+                    # Rename the translated file to include language suffix
+                    if srt_file != final_srt_file:
+                        srt_file.rename(final_srt_file)
+                        if log_callback:
+                            log_callback(f"    Renamed to: {final_srt_file.name}")
+                
                 success_count += 1
                 if log_callback:
-                    log_callback(f"  ✓ Translated: {srt_file.name}")
+                    log_callback(f"  ✓ Translated: {final_srt_file.name}")
             else:
                 if log_callback:
                     log_callback(f"  ✗ Failed: {srt_file.name}")
@@ -912,8 +967,15 @@ def translate_subtitles(selected_srt_files: List[Path], api_key: Optional[str] =
 
 
 def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_dir: Path,
-                 watermark_path: str, resolution: str, use_watermarks: bool = True, progress_callback=None, log_callback=None) -> bool:
-    """Process selected video files: burn subtitles, add watermark (if enabled), resize."""
+                 watermark_path: str, resolution: str, use_watermarks: bool = True,
+                 use_iso639: bool = False, target_language: str = "English",
+                 progress_callback=None, log_callback=None) -> bool:
+    """Process selected video files: burn subtitles, add watermark (if enabled), resize.
+    
+    Args:
+        use_iso639: Whether to look for ISO 639 suffixed subtitle files
+        target_language: Target language for ISO 639 suffix matching
+    """
     if not selected_video_files:
         if log_callback:
             log_callback("No video files selected.")
@@ -940,15 +1002,34 @@ def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_
     for idx, video_file in enumerate(video_files, start=1):
         base = video_file.stem
         
-        # Check for subtitle file in multiple locations (matching bash script behavior)
-        # 1. Same directory as video file (preferred, matches bash scripts)
-        srt_file = video_file.parent / f"{base}.srt"
-        srt_location = "video directory"
+        # Check for subtitle file in multiple locations
+        # Try different filename patterns based on ISO 639 settings
+        srt_file = None
+        srt_location = None
         
-        # 2. Fall back to subtitles_dir if not found
-        if not srt_file.exists():
-            srt_file = subtitles_dir / f"{base}.srt"
-            srt_location = "subtitles directory"
+        # Build list of filenames to try (in priority order)
+        filenames_to_try = [f"{base}.srt"]  # Always try exact match first
+        
+        if use_iso639:
+            # Also try with ISO 639 suffix for target language
+            target_code = ISO_639_CODES.get(target_language, "eng")
+            filenames_to_try.append(f"{base}.{target_code}.srt")
+        
+        # Check each location for each filename pattern
+        for filename in filenames_to_try:
+            # 1. Same directory as video file (preferred)
+            candidate = video_file.parent / filename
+            if candidate.exists():
+                srt_file = candidate
+                srt_location = "video directory"
+                break
+            
+            # 2. Subtitles directory
+            candidate = subtitles_dir / filename
+            if candidate.exists():
+                srt_file = candidate
+                srt_location = "subtitles directory"
+                break
         
         out_file = output_dir / f"{base}.mp4"
         
@@ -960,11 +1041,13 @@ def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_
                 log_callback(f"Skipping {video_file.name} - output file already exists: {out_file.name}")
             continue
         
-        if not srt_file.exists():
+        if not srt_file:
             if log_callback:
                 log_callback(f"Skipping {video_file.name} - subtitle file not found")
-                log_callback(f"  Checked: {video_file.parent / f'{base}.srt'}")
-                log_callback(f"  Checked: {subtitles_dir / f'{base}.srt'}")
+                checked_files = [f"  Checked: {video_file.parent / fn}" for fn in filenames_to_try]
+                checked_files.extend([f"  Checked: {subtitles_dir / fn}" for fn in filenames_to_try])
+                for checked in checked_files:
+                    log_callback(checked)
             continue
         
         if log_callback:
@@ -2091,7 +2174,7 @@ class AboutDialog(QDialog):
         <div style="padding: 24px;">
         <div class="app-name">Video Processing Studio</div>
         
-        <div class="version">Version 8</div>
+        <div class="version">Version 9.1.0</div>
         
         <div class="creator">
         <span style="color: #df4300; font-weight: 600;">Created by:</span> SLAPPEPOLSEN
@@ -2295,6 +2378,42 @@ class SettingsDialog(QDialog):
         wm1080_layout.addWidget(self.wm1080_browse)
         layout.addRow("Watermark 1080p:", wm1080_layout)
         
+        # Translation Settings
+        translation_section = QLabel("<b>Subtitle Translation Settings</b>")
+        layout.addRow("", translation_section)
+        
+        # Target language for translation
+        translation_info = QLabel(
+            "Select the target language for subtitle translation. "
+            "Subtitles will be translated from their original language to your selected target."
+        )
+        translation_info.setWordWrap(True)
+        translation_info.setStyleSheet("color: #666;")
+        layout.addRow("", translation_info)
+        
+        self.translation_target_combo = QComboBox()
+        for lang in ["English", "French", "Spanish", "Catalan", "German", "Italian", "Portuguese", "Dutch"]:
+            self.translation_target_combo.addItem(lang)
+        current_target = self.config.get("translation_target_language", "English")
+        target_index = self.translation_target_combo.findText(current_target)
+        if target_index >= 0:
+            self.translation_target_combo.setCurrentIndex(target_index)
+        layout.addRow("Translation Target:", self.translation_target_combo)
+        
+        # ISO 639 suffix checkbox
+        self.iso639_checkbox = QCheckBox("Use ISO 639 language suffixes (.eng.srt, .fra.srt)")
+        self.iso639_checkbox.setChecked(self.config.get("use_iso639_suffixes", False))
+        iso639_help = QLabel(
+            "When enabled, translated subtitles will include language codes in filenames. "
+            "This allows VLC and Jellyfin to automatically detect and select subtitles."
+        )
+        iso639_help.setWordWrap(True)
+        iso639_help.setStyleSheet("color: #666; font-size: 10px;")
+        iso639_layout = QVBoxLayout()
+        iso639_layout.addWidget(self.iso639_checkbox)
+        iso639_layout.addWidget(iso639_help)
+        layout.addRow("", iso639_layout)
+        
         # Lesbian Flag theme toggle (joke feature - doesn't actually turn off)
         self.lesbian_flag_checkbox = QCheckBox("Toggle Lesbian Flag theme OFF")
         self.lesbian_flag_checkbox.setChecked(False)  # Always unchecked (meaning theme is ON)
@@ -2372,6 +2491,8 @@ class SettingsDialog(QDialog):
         self.config["watermark_1080p"] = self.watermark_1080p_input.text()
         self.config["use_watermarks"] = self.use_watermarks_checkbox.isChecked()
         self.config["whisper_model"] = self.whisper_model_combo.currentText()
+        self.config["translation_target_language"] = self.translation_target_combo.currentText()
+        self.config["use_iso639_suffixes"] = self.iso639_checkbox.isChecked()
         save_config(self.config)
         self.accept()
 
@@ -2559,7 +2680,7 @@ class VideoProcessingApp(QMainWindow):
         header_left_layout.addWidget(app_name_label)
         
         # Version number below title
-        version_label = QLabel('version 8.1.1 "Torre de Babel"')
+        version_label = QLabel('version 9.1.0 "Polyglot"')
         version_label.setFont(QFont("Arial", 18))
         version_label.setStyleSheet("color: #999; font-style: italic;")
         header_left_layout.addWidget(version_label)
@@ -3061,8 +3182,13 @@ class VideoProcessingApp(QMainWindow):
         if not file_paths:
             return
         
+        # Get translation settings from config
+        target_language = self.config.get("translation_target_language", "English")
+        use_iso639 = self.config.get("use_iso639_suffixes", False)
+        
         self.log(f"Starting subtitle translation for {len(file_paths)} file(s)...")
-        self.run_script(translate_subtitles, file_paths, api_key)
+        self.log(f"Target language: {target_language}, ISO 639 suffixes: {'enabled' if use_iso639 else 'disabled'}")
+        self.run_script(translate_subtitles, file_paths, api_key, target_language, use_iso639)
     
     def process_video(self, resolution: str):
         """Process video."""
@@ -3091,10 +3217,16 @@ class VideoProcessingApp(QMainWindow):
                 )
                 return
         
+        # Get ISO 639 settings from config
+        use_iso639 = self.config.get("use_iso639_suffixes", False)
+        target_language = self.config.get("translation_target_language", "English")
+        
         self.log(f"Starting video processing ({resolution}p) for {len(file_paths)} file(s)...")
+        if use_iso639:
+            self.log(f"ISO 639 mode enabled - looking for .{ISO_639_CODES.get(target_language, 'eng')}.srt files")
         self.run_script(
             process_video, file_paths, subtitles_dir, output_dir,
-            watermark_path, resolution, use_watermarks
+            watermark_path, resolution, use_watermarks, use_iso639, target_language
         )
     
     def open_lossless_cut(self):

@@ -8,6 +8,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ...
 
+## [9.1.0] "Polyglot" - 2026-01-20
+
+### What's New
+Major subtitle translation enhancements with ISO 639 language suffix support for automatic media player detection and flexible target language selection.
+
+### Added
+- Translation target language selection (8 languages: English, French, Spanish, Catalan, German, Italian, Portuguese, Dutch)
+- ISO 639 language suffix support (.eng.srt, .fra.srt, etc.) for VLC and Jellyfin auto-detection
+- Settings UI for configuring translation preferences:
+  - "Translation Target Language" dropdown
+  - "Use ISO 639 language suffixes" checkbox with help text
+- Smart subtitle filename handling:
+  - Auto-replaces existing language suffixes (e.g., video.spa.srt → video.eng.srt)
+  - Maintains backward compatibility with non-suffixed files
+- Video processor now matches ISO 639 suffixed subtitle files
+  - Priority: exact match first (video.srt), then target language suffix (video.eng.srt)
+  - Works with both video directory and subtitles directory
+
+### Changed
+- `translate_subtitles()` now accepts `target_language` and `use_iso639` parameters
+- `process_video()` now accepts `use_iso639` and `target_language` parameters for subtitle matching
+- Translation no longer hardcoded to English - uses user-selected target language
+- Subtitle matching logic enhanced to support multiple filename patterns
+
+### Technical
+- Added `ISO_639_CODES` constant with 14 language mappings
+- All changes are backward compatible (ISO 639 mode disabled by default)
+- Config keys: `translation_target_language`, `use_iso639_suffixes`
+
+## [9.0.0] "Três Graças" - 2026-01-19
+
+### What's New
+Enhanced batch downloader with multi-source support and flexible episode numbering. The downloader now automatically adjusts language settings based on the selected source. Episode numbering supports ranges and selections like Word's print dialog.
+
+### Added
+- Source selector dropdown in Download section
+- Episode range input with support for:
+  - Single episodes: `1`
+  - Ranges: `1-5` (episodes 1, 2, 3, 4, 5)
+  - Multiple selections: `1,3,5` 
+  - Mixed: `1-3,5,7-10` (episodes 1, 2, 3, 5, 7, 8, 9, 10)
+- `SOURCE_SETTINGS` configuration for per-source language mappings
+- Dynamic placeholder text that changes based on selected source
+- `parse_episode_range()` helper function for parsing episode specifications
+
+### Changed
+- Command format simplified: no longer requires "Episode X:" prefix
+- Commands are now auto-numbered based on episode specification
+- Language selection (audio/subtitles) is now dynamic based on source
+- Episode input field now accepts ranges instead of just starting number
+
+### Removed
+- Hardcoded language tags from download function
+
 ## [8.1.2] "Torre de Babel" - 2026-01-19
 
 ### What's New
@@ -19,33 +73,6 @@ Added Whisper model detection to avoid redundant downloads and included all docu
 - Auto-detection of existing Whisper models in default cache location (~/.cache/whisper/)
 - User preference storage to avoid redundant model downloads
 - All documentation files now included in release packages (README.md, SETUP.md, CHANGELOG.md, batchdownloader_guide.md, LICENSE, requirements.txt, video_app_v8.py, flowcharts.png)
-
-## [9.0.0] "Três Graças" - 2026-01-19
-
-### What's New
-Multi-source batch downloader with support for TF1 (French) and Globoplay (Portuguese). The downloader now automatically adjusts language settings based on the selected source and no longer requires the "Episode X:" prefix format. Episode numbering now supports ranges and selections like Word's print dialog.
-
-### Added
-- Source selector dropdown in Download section (TF1, Globoplay)
-- Episode range input with support for:
-  - Single episodes: `1`
-  - Ranges: `1-5` (episodes 1, 2, 3, 4, 5)
-  - Multiple selections: `1,3,5` 
-  - Mixed: `1-3,5,7-10` (episodes 1, 2, 3, 5, 7, 8, 9, 10)
-- `SOURCE_SETTINGS` configuration for per-source language mappings
-- Dynamic placeholder text that changes based on selected source
-- Globoplay support with Portuguese audio/subtitle selection
-- `parse_episode_range()` helper function for parsing episode specifications
-
-### Changed
-- Command format simplified: no longer requires "Episode X:" prefix
-- Commands are now auto-numbered based on episode specification
-- Language selection (audio/subtitles) is now dynamic based on source
-- Episode input field now accepts ranges instead of just starting number
-- Updated batchdownloader_guide.md with Globoplay instructions and episode range examples
-
-### Removed
-- Hardcoded French language tags (`lang=fr`) from download function
 
 ## [8.1.1] "Torre de Babel" - 2026-01-19
 
