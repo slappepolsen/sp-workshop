@@ -36,6 +36,8 @@ jobs:
           mv dist/SP_Workshop.app dist/SP_Workshop_macOS/ 2>/dev/null || mv dist/SP_Workshop dist/SP_Workshop_macOS/
           cp whisper_auto.sh dist/SP_Workshop_macOS/
           cp icon.icns dist/SP_Workshop_macOS/
+          cp README.md SETUP.md CHANGELOG.md batchdownloader_guide.md LICENSE requirements.txt video_app_v8.py dist/SP_Workshop_macOS/
+          cp flowcharts.png icon.png dist/SP_Workshop_macOS/
       
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
@@ -73,6 +75,16 @@ jobs:
           mkdir dist\SP_Workshop_Windows
           move dist\SP_Workshop.exe dist\SP_Workshop_Windows\
           copy icon.ico dist\SP_Workshop_Windows\
+          copy whisper_auto.sh dist\SP_Workshop_Windows\
+          copy README.md dist\SP_Workshop_Windows\
+          copy SETUP.md dist\SP_Workshop_Windows\
+          copy CHANGELOG.md dist\SP_Workshop_Windows\
+          copy batchdownloader_guide.md dist\SP_Workshop_Windows\
+          copy LICENSE dist\SP_Workshop_Windows\
+          copy requirements.txt dist\SP_Workshop_Windows\
+          copy video_app_v8.py dist\SP_Workshop_Windows\
+          copy flowcharts.png dist\SP_Workshop_Windows\
+          copy icon.png dist\SP_Workshop_Windows\
         shell: cmd
       
       - name: Upload Windows artifact
@@ -114,6 +126,8 @@ jobs:
           chmod +x dist/SP_Workshop_Linux/SP_Workshop
           chmod +x dist/SP_Workshop_Linux/whisper_auto.sh
           cp icon.png dist/SP_Workshop_Linux/
+          cp README.md SETUP.md CHANGELOG.md batchdownloader_guide.md LICENSE requirements.txt video_app_v8.py dist/SP_Workshop_Linux/
+          cp flowcharts.png dist/SP_Workshop_Linux/
       
       - name: Upload Linux artifact
         uses: actions/upload-artifact@v4

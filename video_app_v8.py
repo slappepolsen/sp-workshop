@@ -2189,6 +2189,12 @@ class SettingsDialog(QDialog):
         wm1080_layout.addWidget(self.wm1080_browse)
         layout.addRow("Watermark 1080p:", wm1080_layout)
         
+        # Lesbian Flag theme toggle (joke feature - doesn't actually turn off)
+        self.lesbian_flag_checkbox = QCheckBox("Toggle Lesbian Flag theme OFF")
+        self.lesbian_flag_checkbox.setChecked(False)  # Always unchecked (meaning theme is ON)
+        self.lesbian_flag_checkbox.stateChanged.connect(self.toggle_lesbian_flag_theme)
+        layout.addRow("", self.lesbian_flag_checkbox)
+        
         # Whisper Model Selection
         whisper_info = QLabel(
             "Turbo is the best model for accuracy and speed, but it's also the largest (~1.5 GB). "
@@ -2230,6 +2236,20 @@ class SettingsDialog(QDialog):
         self.watermark_1080p_input.setEnabled(enabled)
         self.wm720_browse.setEnabled(enabled)
         self.wm1080_browse.setEnabled(enabled)
+    
+    def toggle_lesbian_flag_theme(self, state):
+        """Joke feature - shows a message and keeps the theme ON."""
+        if state == Qt.Checked:  # User tried to check it (turn theme OFF)
+            # Show the message
+            QMessageBox.warning(
+                self, 
+                "Wait a minute...",
+                "That kinda homophobic, isn't it?"
+            )
+            # Immediately uncheck it (keep theme ON)
+            self.lesbian_flag_checkbox.blockSignals(True)
+            self.lesbian_flag_checkbox.setChecked(False)
+            self.lesbian_flag_checkbox.blockSignals(False)
     
     def browse_file(self, line_edit, title):
         """Browse for a file."""
