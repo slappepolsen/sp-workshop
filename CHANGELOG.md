@@ -6,11 +6,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+...
+
+## [8.1.2] "Torre de Babel" - 2026-01-19
+
+### What's New
+Added Whisper model detection to avoid redundant downloads and included all documentation in release packages. Also added a humorous Settings feature that keeps the Lesbian Flag theme always enabled.
+
 ### Added
 - Whisper model detection to check if models already exist in cache directory
 - First-time user dialog asking if user already has a Whisper model installed
 - Auto-detection of existing Whisper models in default cache location (~/.cache/whisper/)
 - User preference storage to avoid redundant model downloads
+- All documentation files now included in release packages (README.md, SETUP.md, CHANGELOG.md, batchdownloader_guide.md, LICENSE, requirements.txt, video_app_v8.py, flowcharts.png)
+- Humorous "Toggle Lesbian Flag theme OFF" checkbox in Settings (doesn't actually turn off the theme)
 
 ## [8.1.1] "Torre de Babel" - 2026-01-19
 
