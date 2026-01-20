@@ -11,9 +11,7 @@
 
 🌐 Extract, translate, transcribe, and burn subtitles into videos  
 
-🏳️‍🌈 Built from the need for representation and accessible international WLW/sapphic content
-
-🆓 But works for any audiovisual media
+🏳️‍🌈 Built from the need for representation and accessible international WLW/sapphic content (but works for any audiovisual media)
 
 #### Intended users
 SP Workshop is built for subtitle editors, translators, archivists, and  **anyone** determined to watch their favorite (WLW / Sapphic) shows or ships with subtitles in the language they actually want.
