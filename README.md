@@ -66,9 +66,30 @@ The executable includes all documentation files (README, SETUP guide, etc.) in t
    - **Linux**: Press `Ctrl + Alt + T` or find Terminal in your applications
 
 2. **Navigate to the folder** where you downloaded this project:
+   
+   First, get the actual path to your folder:
+   - **Windows**: 
+     - Open File Explorer and find the `sp-workshop` folder
+     - Click once on the folder (select it)
+     - Press `Ctrl + Shift + C` to copy the file path
+   - **macOS**: 
+     - Open Finder and find the `sp-workshop` folder
+     - Show the path bar: Press `Cmd + Option + P` (or View → Show Path Bar)
+     - Click once on the folder in the path bar at the bottom
+     - Right-click and select "Copy [folder name] as Pathname"
+   - **Linux**: 
+     - Right-click the `sp-workshop` folder
+     - Look for "Copy path" or "Copy location" option (varies by file manager)
+     - Or simply drag the folder into the Terminal window
+   
+   Then, in Terminal/Command Prompt, type `cd ` (with a space) and paste the path:
    ```bash
-   cd path/to/sp-workshop
+   cd [paste your path here]
    ```
+   
+   *Example: If your folder is in Downloads, it might look like:*
+   - Windows: `cd C:\Users\YourName\Downloads\sp-workshop`
+   - macOS/Linux: `cd /Users/YourName/Downloads/sp-workshop`
 
 3. **Install required Python packages** (this downloads the libraries the app needs):
    ```bash
