@@ -7,7 +7,13 @@
 [![Python](https://img.shields.io/badge/python-3.9+-blue)](https://www.python.org)
 [![Platform](https://img.shields.io/badge/platform-macOS%20|%20Windows%20|%20Linux-lightgrey)](#installation)
 
-Video Processing Studio - A GUI application for video/subtitle processing, translation, and more.
+## Video processing studio GUI 🎬 
+
+🌐 Extract, translate, transcribe, and burn subtitles into videos  
+
+🏳️‍🌈 Built from the need for representation and accessible international WLW/sapphic content
+
+🆓 But works for any audiovisual media
 
 #### Intended users
 SP Workshop is built for subtitle editors, translators, archivists, and  **anyone** determined to watch their favorite (WLW / Sapphic) shows or ships with subtitles in the language they actually want.
