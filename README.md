@@ -34,34 +34,127 @@ Designed for non-technical users (too!). If you can download software on your la
 
 ### Option 1: Download Executable (Recommended)
 
-Go to the [Releases](../../releases) page and download the executable for your platform:
-- **macOS**: `SP_Workshop-macOS.zip`
-- **Windows**: `SP_Workshop-Windows.zip`
-- **Linux**: `SP_Workshop-Linux.tar.gz`
+An "executable" is a ready-to-run version of the app that doesn't require any setup—just download and run! This is the easiest option for most users.
+
+1. Go to the [Releases](../../releases) page
+2. Download the file for your operating system:
+   - **macOS** (Apple computers): Download `SP_Workshop-macOS.zip`
+   - **Windows**: Download `SP_Workshop-Windows.zip`
+   - **Linux**: Download `SP_Workshop-Linux.tar.gz`
+3. **Extract the file**: 
+   - On **macOS/Windows**: Double-click the `.zip` file to extract it (creates a folder)
+   - On **Linux**: Right-click the `.tar.gz` file and select "Extract" or use your file manager
+4. **Run the app**:
+   - On **macOS**: Open the extracted folder and double-click `SP_Workshop.app`
+   - On **Windows**: Open the extracted folder and double-click `SP_Workshop.exe`
+   - On **Linux**: Open the extracted folder, right-click `SP_Workshop`, select "Properties" → "Permissions" → check "Execute", then double-click to run
+
+The executable includes all documentation files (README, SETUP guide, etc.) in the same folder.
 
 ### Option 2: Run from Source
 
-Requires Python 3.9+
+"Running from source" means running the app directly from the Python code. This option requires Python to be installed on your computer.
 
-```bash
-pip install -r requirements.txt
-python3 video_app_v8.py
-```
+**What you need:**
+- **Python 3.9 or higher** - Python is a programming language that runs the app. If you don't have it, download from [python.org](https://www.python.org/downloads/)
+
+**Installation steps:**
+
+1. **Open Terminal** (macOS/Linux) or **Command Prompt** (Windows):
+   - **macOS**: Press `Cmd + Space`, type "Terminal", press Enter
+   - **Windows**: Press `Win + R`, type "cmd", press Enter
+   - **Linux**: Press `Ctrl + Alt + T` or find Terminal in your applications
+
+2. **Navigate to the folder** where you downloaded this project:
+   ```bash
+   cd path/to/sp-workshop
+   ```
+
+3. **Install required Python packages** (this downloads the libraries the app needs):
+   ```bash
+   pip install -r requirements.txt
+   ```
+   *Note: If you get an error, try `pip3` instead of `pip`, or `python -m pip install -r requirements.txt`*
+
+4. **Run the app**:
+   ```bash
+   python3 video_app_v8.py
+   ```
+   *Note: On Windows, you might need to use `python` instead of `python3`*
 
 ## External Dependencies
 
-The app requires these external tools (not included):
+The app needs some additional tools to work properly. These aren't included with the app itself, so you'll need to install them separately. Don't worry—we'll guide you through each one!
 
-- **FFmpeg** - For video/subtitle processing
-  - macOS: `brew install ffmpeg`
-  - Windows: [ffmpeg.org/download.html](https://ffmpeg.org/download.html)
-  - Linux: `sudo apt install ffmpeg`
+### FFmpeg (Required)
 
-- **N_m3u8DL-RE** (optional) - For batch downloading
-  - [github.com/nilaoda/N_m3u8DL-RE](https://github.com/nilaoda/N_m3u8DL-RE/releases)
+**What it is:** FFmpeg is a powerful tool that handles all the video and audio processing—like extracting subtitles, burning them into videos, resizing videos, and adding watermarks. Without it, the app can't process videos.
 
-- **Google Gemini API Key** (for translation)
-  - Get yours at [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)
+**Why you need it:** The app uses FFmpeg behind the scenes for all video operations. Think of it as the engine that powers the video processing features.
+
+**How to install:**
+
+- **macOS:**
+  1. If you don't have Homebrew, install it first from [brew.sh](https://brew.sh) (copy the command from the website and paste it into Terminal)
+  2. Then run: `brew install ffmpeg`
+  3. **Verify it worked:** Type `ffmpeg -version` in Terminal. If you see version information, it's installed!
+
+- **Windows:**
+  1. Go to [ffmpeg.org/download.html](https://ffmpeg.org/download.html)
+  2. Download the Windows build (choose the "Windows builds from gyan.dev" link)
+  3. Extract the ZIP file to a folder (e.g., `C:\ffmpeg`)
+  4. **Add to PATH:** 
+     - Press `Win + X` and select "System"
+     - Click "Advanced system settings" → "Environment Variables"
+     - Under "System variables", find "Path" and click "Edit"
+     - Click "New" and add the path to the `bin` folder inside your FFmpeg folder (e.g., `C:\ffmpeg\bin`)
+     - Click OK on all windows
+  5. **Verify it worked:** Open Command Prompt (Win + R, type "cmd"), type `ffmpeg -version`. If you see version information, it's installed!
+
+- **Linux:**
+  1. Open Terminal
+  2. Run: `sudo apt install ffmpeg` (for Debian/Ubuntu) or `sudo dnf install ffmpeg` (for Fedora)
+  3. **Verify it worked:** Type `ffmpeg -version`. If you see version information, it's installed!
+
+### N_m3u8DL-RE (Optional)
+
+**What it is:** A tool for downloading videos from streaming services in batch (multiple episodes at once).
+
+**Why you need it:** Only needed if you want to use the "Batch download episodes" feature. If you're just processing videos you already have, you can skip this.
+
+**What "batch downloading" means:** Instead of downloading episodes one by one, you can paste multiple download commands and let the app download them all automatically.
+
+**How to install:**
+
+1. Go to [github.com/nilaoda/N_m3u8DL-RE/releases](https://github.com/nilaoda/N_m3u8DL-RE/releases)
+2. Download the latest release for your platform
+3. Extract the ZIP file to a folder
+4. **Add to PATH** (so the app can find it):
+   - **macOS/Linux:** Add the folder path to your PATH in `~/.zshrc` or `~/.bashrc`
+   - **Windows:** Add the folder to your PATH using the same method as FFmpeg (see above)
+5. **Verify it worked:** Open Terminal/Command Prompt, type `N_m3u8DL-RE --version`. If you see version information, it's installed!
+
+*Note: You don't need this if you're only using the app to process videos you already have or transcribe videos.*
+
+### Google Gemini API Key (Required for Translation)
+
+**What it is:** An API key is like a password that lets the app use Google's AI translation service. It's free to get and use.
+
+**Why you need it:** The app uses Google Gemini AI to translate subtitles. Without an API key, the translation feature won't work. You can still use other features like extracting subtitles or processing videos without it.
+
+**How to get one:**
+
+1. Go to [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)
+2. Sign in with your Google account (if you're not already signed in)
+3. Click "Create API Key" or "Get API Key"
+4. Copy the API key that appears (it looks like a long string of letters and numbers)
+5. **Set it up in the app:**
+   - Open SP Workshop
+   - Go to **Settings** (button in top right)
+   - Paste your API key in the "API Key (Legacy)" field, OR
+   - **Recommended (more secure):** Set it as an environment variable on your computer instead of saving it in the app
+
+**Don't worry if you don't have one yet!** You can always get it later when you need to translate subtitles. The app will remind you if you try to use translation without an API key.
 
 ## Documentation
 
