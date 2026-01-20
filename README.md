@@ -19,8 +19,6 @@ SP Workshop is built for subtitle editors, translators, archivists, and  **anyon
 #### Skill level
 Designed for non-technical users (too!). If you can download software on your laptop, you can use SP Workshop. No command-line experience required.
 
-*Version 8.1.1 "Torre de Babel" [reference](https://en.wikipedia.org/wiki/Tower_of_Babel)*
-
 ## Features
 
 - Batch download episodes from streaming services
