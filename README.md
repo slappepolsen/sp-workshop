@@ -140,10 +140,24 @@ Only needed if you want to use the "Batch download episodes" feature. If you're 
 **How to install:**
 
 1. Go to [github.com/nilaoda/N_m3u8DL-RE/releases](https://github.com/nilaoda/N_m3u8DL-RE/releases)
-2. Download the latest release for your platform
-3. Extract the ZIP file to a folder
+2. Download the file for your platform:
+   - **Windows x64** (most modern Windows): `win-x64.zip`
+   - **Windows ARM64** (Surface Pro X): `win-arm64.zip`
+   - **Windows 32-bit**: `win-NT6.0-x86.zip`
+   - **Linux x64** (Ubuntu, etc.): `linux-x64.tar.gz`
+   - **Linux ARM64** (Raspberry Pi): `linux-arm64.tar.gz`
+   - **macOS Intel**: `osx-x64.tar.gz`
+   - **macOS Apple Silicon** (M1/M2/M3/M4/...): `osx-arm64.tar.gz`
+   - *Click "Show all 13 assets" if you don't see these files*
+3. Extract the downloaded file, you'll get a single executable file (e.g., `N_m3u8DL-RE` or `N_m3u8DL-RE.exe`)
 4. **Add to PATH** (so the app can find it):
-   - **macOS/Linux:** Add the folder path to your PATH in `~/.zshrc` or `~/.bashrc`
+   - **macOS/Linux:**
+     1. Move the executable to a folder (e.g., `/Users/YourName/bin` or create a new folder for it)
+     2. Open Terminal
+     3. Edit your shell config: `nano ~/.zshrc` (macOS) or `nano ~/.bashrc` (Linux)
+     4. Add this line (replace `/Users/YourName/bin` with your actual folder path): `export PATH="/Users/YourName/bin:$PATH"`
+     5. Save: Press `Ctrl(⌃)` + `X`, then `Y`, then `Enter`
+     6. Reload: Type `source ~/.zshrc` (macOS) or `source ~/.bashrc` (Linux), then `Enter`
    - **Windows:** Add the folder to your PATH using the same method as FFmpeg (see above)
 5. **Verify it worked:** Open Terminal/Command Prompt, type `N_m3u8DL-RE --version`. If you see version information, it's installed!
 
@@ -165,7 +179,7 @@ Only needed if you want to use the "Batch download episodes" feature. If you're 
    - Open SP Workshop
    - Go to **Settings** (button in top right)
    - Paste your API key in the "API Key (Legacy)" field, OR
-   - **Recommended (more secure):** Set it as an environment variable on your computer instead of saving it in the app
+   - **Recommended (more secure):** Set it as an environment variable on your computer instead of saving it in the app.
 
 **Don't worry if you don't have one yet!** You can always get it later when you need to translate subtitles. The app will remind you if you try to use translation without an API key.
 
