@@ -839,7 +839,16 @@ def translate_subtitles(selected_srt_files: List[Path], api_key: Optional[str] =
         
         try:
             # Rename original (in same directory as the SRT file)
-            og_file = srt_file.parent / f"{srt_file.stem}_OG.srt"
+            # Check if the file has an ISO 639 language suffix (e.g., .spa in subtitle.spa.srt)
+            iso_match = re.match(r'(.+)\.([a-z]{3})$', srt_file.stem)
+            if iso_match:
+                # File has ISO suffix: subtitle.spa.srt → subtitle_OG.srt
+                base_name = iso_match.group(1)
+                og_file = srt_file.parent / f"{base_name}_OG.srt"
+            else:
+                # No ISO suffix: subtitle.srt → subtitle_OG.srt
+                og_file = srt_file.parent / f"{srt_file.stem}_OG.srt"
+            
             if not og_file.exists():
                 srt_file.rename(og_file)
             
@@ -854,19 +863,22 @@ def translate_subtitles(selected_srt_files: List[Path], api_key: Optional[str] =
                     log_callback(f"    Error: gst command not found. Make sure gemini-srt-translator is installed.")
                 continue
             
-            # Build command - only use -k flag if API key is NOT in environment variable
+            # Build command - NEVER use -k flag, always set environment variable
             # (gst will automatically use GEMINI_API_KEY or GST_API_KEY if set)
             base_cmd = ["translate", "-i", str(og_file), "-l", target_language, "-o", str(srt_file)]
-            
-            # Only pass -k if we have a non-env API key (from config)
-            if not env_api_key and final_api_key:
-                base_cmd.extend(["-k", final_api_key])
             
             # Handle Python module format (e.g., "python3 -m gemini_srt_translator")
             if " -m " in gst_cmd:
                 cmd_parts = gst_cmd.split() + base_cmd
             else:
                 cmd_parts = [gst_cmd] + base_cmd
+            
+            # Prepare environment with API key set
+            # Copy current environment and add/override API key
+            env = os.environ.copy()
+            if final_api_key:
+                # Set GEMINI_API_KEY in the subprocess environment
+                env["GEMINI_API_KEY"] = final_api_key
             
             # Use Popen to stream output in real-time
             process = subprocess.Popen(
@@ -875,7 +887,8 @@ def translate_subtitles(selected_srt_files: List[Path], api_key: Optional[str] =
                 stderr=subprocess.STDOUT,  # Combine stderr into stdout
                 text=True,
                 bufsize=1,
-                universal_newlines=True
+                universal_newlines=True,
+                env=env  # Pass environment with API key
             )
             
             # Stream output line by line
@@ -1065,7 +1078,7 @@ def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_
         audio_filter = None
         if audio_channels and audio_channels > 2:
             if log_callback:
-                log_callback(f"  Audio: {audio_channels} channels detected, converting to stereo (2.0)")
+                log_callback(f"  Audio: {audio_channels} channels detected, converting to stereo (2.0) for higher compatibility")
             # For 5.1 (6 channels): downmix to stereo
             # Channel mapping: FL=0, FR=1, FC=2, LFE=3, BL=4, BR=5
             # Stereo output: mix center + front L/R + rear L/R
@@ -1097,6 +1110,9 @@ def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_
                 )
             cmd = [
                 "ffmpeg", "-y",
+                "-err_detect", "ignore_err",  # Ignore non-critical decoder errors
+                "-fflags", "+discardcorrupt+genpts",  # Discard corrupt packets and generate PTS
+                "-max_error_rate", "1.0",  # Allow up to 100% error rate (essentially ignore all errors)
                 "-i", str(video_file),
                 "-i", watermark_path,
                 "-filter_complex", filter_complex,
@@ -1114,6 +1130,9 @@ def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_
             )
             cmd = [
                 "ffmpeg", "-y",
+                "-err_detect", "ignore_err",  # Ignore non-critical decoder errors
+                "-fflags", "+discardcorrupt+genpts",  # Discard corrupt packets and generate PTS
+                "-max_error_rate", "1.0",  # Allow up to 100% error rate (essentially ignore all errors)
                 "-i", str(video_file),
                 "-vf", filter_complex,
                 "-c:v", "libx264", "-preset", preset, "-crf", "20",
@@ -1207,25 +1226,22 @@ def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_
                     current_time = time.time()
                     should_update = (last_progress_time is None or (current_time - last_progress_time) >= 2.0)
                     
-                    if log_callback and should_update:
-                        # Only log progress every few seconds to avoid spam
-                        if percentage is not None:
-                            progress_msg = f"    Progress: {percentage:.1f}%"
-                            if eta_str:
-                                progress_msg += f" (ETA: {eta_str})"
-                            log_callback(progress_msg)
-                        else:
-                            log_callback(f"    Progress: {', '.join(progress_info)}")
+                    # Update time tracking
+                    if should_update:
                         last_progress_time = current_time
                     
                     # Update progress callback with enhanced filename including percentage
+                    # (No text logging - only visual progress bar updates)
                     if progress_callback and should_update and percentage is not None:
                         # Include percentage in filename for display
                         enhanced_filename = f"{video_file.name} ({percentage:.1f}%)"
                         progress_callback(idx, total, enhanced_filename)
                 
                 elif "Error" in line or "error" in line.lower() or "failed" in line.lower():
-                    # Log errors immediately
+                    # Skip eac3/ac3 decoder packet submission errors (we handle these gracefully)
+                    if "Error submitting packet to decoder" in line and ("/eac3 @" in line or "/ac3 @" in line):
+                        continue
+                    # Log other errors immediately
                     if log_callback:
                         log_callback(f"    ⚠ {line}")
             
