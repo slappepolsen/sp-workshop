@@ -22,6 +22,18 @@ This guide explains how to use SP Workshop's batch downloader with different str
 
 ---
 
+## Quick Reference: Globoplay
+
+**TL;DR for Globoplay:**
+1. Play episode in browser → Open DevTools (F12) → Network tab → Filter `.m3u8`
+2. Copy the m3u8 URL (right-click → Copy URL)
+3. Repeat for each episode
+4. In SP Workshop: Select "Globoplay (Portuguese)" → Paste URLs (one per line) → Set episode numbers → Click download
+
+**That's it!** Headers are added automatically. No keys needed.
+
+---
+
 ## TF1 (French)
 
 TF1 uses Widevine DRM, so you need to extract decryption keys using WidevineProxy2.
@@ -73,26 +85,60 @@ After capturing streams with Widevine Proxy 2:
 
 ## Globoplay (Portuguese)
 
-Globoplay does **not** use DRM encryption for browser streams, so no keys are needed.
+Globoplay does **not** use DRM encryption for browser streams, so no keys are needed. The downloader automatically adds browser headers to bypass 403 errors.
 
 ### How to Get the m3u8 URLs
 
-1. Open DevTools (`F12`) while playing an episode
-2. Go to the **Network** tab
-3. Filter by `.m3u8`
-4. Copy the main manifest URL (contains the video ID and token)
+1. **Open Globoplay** in your browser and start playing an episode
+2. **Open DevTools**: Press `F12` (Windows/Linux) or `Cmd+Option+I` (Mac)
+3. **Go to Network tab** in DevTools
+4. **Filter by `.m3u8`** in the search box
+5. **Find the main manifest URL** - it will look like:
+   ```
+   https://egcdn-vod.video.globo.com/r360_1080/v1/.../14242569.m3u8
+   ```
+   or
+   ```
+   https://egcdn-vod.video.globo.com/.../manifest.ism/.../14242569.m3u8
+   ```
+6. **Right-click the URL** → Copy → Copy URL
+7. **Repeat for each episode** you want to download
+8. **Paste all URLs** into SP Workshop (one per line, with or without quotes)
+
+### Using SP Workshop
+
+1. **Select Source**: Choose "Globoplay (Portuguese)" from the dropdown
+2. **Set Episode Numbers**: Enter the starting episode number or range
+   - Single: `71`
+   - Range: `71-80` (episodes 71 through 80)
+   - Multiple: `71,73,75` (specific episodes)
+3. **Paste URLs**: Paste your m3u8 URLs (one per line):
+   ```
+   "https://egcdn-vod.video.globo.com/.../episode1.m3u8"
+   "https://egcdn-vod.video.globo.com/.../episode2.m3u8"
+   "https://egcdn-vod.video.globo.com/.../episode3.m3u8"
+   ```
+4. **Click "Batch download episodes"**
 
 ### Example Commands (Globoplay)
 
 ```
-"https://egcdn-vod.video.globo.com/r360_1080/v1/.../episode1.m3u8"
+"https://egcdn-vod.video.globo.com/r360_1080/v1/45/ba/4b/14272492_4bcf821e00c8e77d0aa260f332de4bdf464cbbe8/14272492-gGlFB4o-manifest.ism/edge-cache-token=Expires=1769044238&KeyName=media-cdn-keyset-prod&Signature=.../14272492.m3u8"
 "https://egcdn-vod.video.globo.com/r360_1080/v1/.../episode2.m3u8"
 "https://egcdn-vod.video.globo.com/r360_1080/v1/.../episode3.m3u8"
 ```
 
-### Token Expiration
+**Note**: You can paste URLs with or without quotes - the downloader handles both.
 
-Globoplay URLs contain a token that expires after ~2.5 hours. If you get 403 errors, grab fresh URLs from DevTools.
+### Troubleshooting
+
+#### 403 Forbidden Errors
+
+If you get 403 errors:
+
+1. **Get fresh URLs**: Globoplay URLs expire after ~2.5 hours. Get new URLs from DevTools.
+2. **Make sure you're logged in** when capturing URLs from DevTools.
+3. **Check the URL format**: Make sure you're copying the `.m3u8` URL, not the `.ism` manifest URL.
 
 ---
 

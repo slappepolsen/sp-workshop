@@ -33,6 +33,81 @@ def quote_path(path: str) -> str:
         return shlex.quote(str(path))
 
 
+def extract_cookies_from_har(har_file: Path) -> Optional[str]:
+    """Extract cookies from a HAR file for use in requests.
+    
+    Returns a cookie string in the format "name1=value1; name2=value2" or None.
+    Extracts from both request and response cookies, prioritizing request cookies.
+    """
+    if not har_file or not har_file.exists():
+        return None
+    
+    try:
+        with open(har_file, 'r', encoding='utf-8') as f:
+            har_data = json.load(f)
+        
+        # Collect cookies from all requests and responses
+        cookies = {}
+        
+        # First, try to get cookies from the browser's cookie store (if present in HAR)
+        if 'log' in har_data and 'pages' in har_data['log']:
+            for page in har_data['log'].get('pages', []):
+                # Some HAR files store cookies at page level
+                pass
+        
+        # Get cookies from all entries
+        for entry in har_data.get('log', {}).get('entries', []):
+            url = entry.get('request', {}).get('url', '')
+            # Only process globoplay-related requests
+            if 'globoplay' not in url.lower() and 'globo.com' not in url.lower():
+                continue
+            
+            # Get cookies from request headers (Cookie header)
+            request = entry.get('request', {})
+            for header in request.get('headers', []):
+                if header.get('name', '').lower() == 'cookie':
+                    # Parse Cookie header: "name1=value1; name2=value2"
+                    cookie_header = header.get('value', '')
+                    for cookie_pair in cookie_header.split(';'):
+                        cookie_pair = cookie_pair.strip()
+                        if '=' in cookie_pair:
+                            name, value = cookie_pair.split('=', 1)
+                            name = name.strip()
+                            value = value.strip()
+                            if name:
+                                cookies[name] = value
+            
+            # Get cookies from request.cookies array
+            for cookie in request.get('cookies', []):
+                name = cookie.get('name', '')
+                value = cookie.get('value', '')
+                if name:
+                    cookies[name] = value
+            
+            # Get cookies from response (Set-Cookie headers)
+            response = entry.get('response', {})
+            for header in response.get('headers', []):
+                if header.get('name', '').lower() == 'set-cookie':
+                    # Parse Set-Cookie header: "name=value; path=/; domain=..."
+                    cookie_value = header.get('value', '')
+                    if '=' in cookie_value:
+                        cookie_name = cookie_value.split('=')[0].strip()
+                        cookie_val = cookie_value.split('=')[1].split(';')[0].strip()
+                        if cookie_name:
+                            cookies[cookie_name] = cookie_val
+        
+        if cookies:
+            cookie_string = '; '.join(f"{name}={value}" for name, value in sorted(cookies.items()))
+            return cookie_string
+    except Exception as e:
+        # Log error for debugging
+        import traceback
+        print(f"Error extracting cookies from HAR: {e}")
+        traceback.print_exc()
+    
+    return None
+
+
 def get_temp_dir() -> str:
     """Get a cross-platform temporary directory path."""
     return tempfile.gettempdir()
@@ -505,7 +580,8 @@ def parse_episode_range(range_str: str) -> List[int]:
 # ============================================================================
 
 def download_episodes(commands_text: str, output_dir: Path, source: str = "tf1", 
-                      episode_spec: str = "1", progress_callback=None, log_callback=None) -> bool:
+                      episode_spec: str = "1", har_file: Optional[Path] = None, 
+                      progress_callback=None, log_callback=None) -> bool:
     """Download episodes using commands from text.
     
     Args:
@@ -521,7 +597,13 @@ def download_episodes(commands_text: str, output_dir: Path, source: str = "tf1",
             log_callback("Error: No commands provided.")
         return False
     
-    lines = [line.strip() for line in commands_text.strip().split('\n') if line.strip()]
+    # Filter out HAR file lines (starting with @) and empty lines
+    lines = []
+    for line in commands_text.strip().split('\n'):
+        line = line.strip()
+        # Skip empty lines, comments, and HAR file references
+        if line and not line.startswith('#') and not line.startswith('@'):
+            lines.append(line)
     
     if not lines:
         if log_callback:
@@ -542,6 +624,18 @@ def download_episodes(commands_text: str, output_dir: Path, source: str = "tf1",
     settings = SOURCE_SETTINGS.get(source, SOURCE_SETTINGS["tf1"])
     audio_lang = settings["audio_lang"]
     subtitle_lang = settings["subtitle_lang"]
+    
+    # Extract cookies from HAR file if provided
+    cookies = None
+    if har_file:
+        cookies = extract_cookies_from_har(har_file)
+        if cookies and log_callback:
+            cookie_count = len(cookies.split(';'))
+            # Show first few cookie names for debugging (not values for security)
+            cookie_names = [c.split('=')[0] for c in cookies.split(';')[:5]]
+            log_callback(f"Extracted {cookie_count} cookies from HAR file: {', '.join(cookie_names)}{'...' if cookie_count > 5 else ''}")
+        elif log_callback:
+            log_callback(f"Warning: No cookies found in HAR file {har_file}")
     
     downloaded_files = []
     total = len(lines)
@@ -573,8 +667,32 @@ def download_episodes(commands_text: str, output_dir: Path, source: str = "tf1",
         else:
             quoted_url = base_command
         
+        # Build headers list for Globoplay
+        headers = []
+        if source == "globoplay":
+            # Add browser-like headers to mimic legitimate requests
+            # N_m3u8DL-RE uses -H flag (same as TF1)
+            # Headers should be placed BEFORE the URL
+            headers.extend([
+                f'-H {shlex.quote("User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")}',
+                f'-H {shlex.quote("Referer: https://globoplay.globo.com/")}',
+                f'-H {shlex.quote("Accept: */*")}',
+                f'-H {shlex.quote("Accept-Language: pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7")}',
+                f'-H {shlex.quote("Origin: https://globoplay.globo.com")}',
+                f'-H {shlex.quote("Sec-Fetch-Site: same-origin")}',
+                f'-H {shlex.quote("Sec-Fetch-Mode: no-cors")}',
+                f'-H {shlex.quote("Sec-Fetch-Dest: video")}',
+            ])
+            # Add cookies if available (cookies are critical for authentication)
+            if cookies:
+                headers.append(f'-H {shlex.quote(f"Cookie: {cookies}")}')
+        
+        # Build the command - headers go BEFORE the URL
+        header_str = ' '.join(headers) if headers else ''
         command = (
-            f"N_m3u8DL-RE {quoted_url} "
+            f"N_m3u8DL-RE "
+            f"{header_str} "
+            f"{quoted_url} "
             f"--tmp-dir {quote_path(get_temp_dir())} "
             f"--del-after-done "
             f"--check-segments-count False "
@@ -592,6 +710,14 @@ def download_episodes(commands_text: str, output_dir: Path, source: str = "tf1",
         if log_callback:
             log_callback(f"\n--- Task {i + 1}/{total}: Episode {episode_number} ---")
             log_callback(f"Running: {base_command[:80]}...")
+            # Debug: show if headers/cookies are being used
+            if source == "globoplay" and headers:
+                header_count = len([h for h in headers if 'Cookie' not in h])
+                if cookies:
+                    cookie_count = len(cookies.split(';'))
+                    log_callback(f"  Using {header_count} headers + {cookie_count} cookies from HAR file")
+                else:
+                    log_callback(f"  Using {header_count} headers (no cookies - may cause 403 errors)")
         
         # Use Popen to stream output in real-time
         try:
@@ -5370,7 +5496,19 @@ class VideoProcessingApp(QMainWindow):
         
         # Create a wrapper that adds detection after download
         def download_with_detection(commands_text, output_dir, source, episode_spec, progress_callback=None, log_callback=None):
-            result = download_episodes(commands_text, output_dir, source, episode_spec, progress_callback, log_callback)
+            # Try to find HAR file path in commands or check common locations
+            har_file = None
+            # Check if there's a HAR file path mentioned (user might paste it)
+            har_pattern = r'@([^\s]+\.har)'
+            har_match = re.search(har_pattern, commands_text)
+            if har_match:
+                har_path = Path(har_match.group(1))
+                if har_path.exists():
+                    har_file = har_path
+                    if log_callback:
+                        log_callback(f"Found HAR file: {har_file}")
+            
+            result = download_episodes(commands_text, output_dir, source, episode_spec, har_file, progress_callback, log_callback)
             if result:
                 # Detect episode/scene for downloaded files
                 mkv_files = list(output_dir.glob("*.mkv"))
