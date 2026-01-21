@@ -12,7 +12,7 @@
 
 🏳️‍🌈 Built from the need for representation and accessible international WLW/sapphic content (but works for any audiovisual media)
 
-![Views](https://yourdomain.com/svg/count/9/Repository%20Views/your-repo)
+[![Views](https://ishan-rest.vercel.app/svg/count/1/Repository%20Views/sp-workshop)](https://github.com/slappepolsen/sp-workshop)
 
 #### Intended users
 SP Workshop is built for subtitle editors, translators, archivists, and  **anyone** determined to watch their favorite (WLW / Sapphic) shows or ships with subtitles in the language they actually want.
