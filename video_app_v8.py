@@ -2190,7 +2190,7 @@ class AboutDialog(QDialog):
         <div style="padding: 24px;">
         <div class="app-name">Video Processing Studio</div>
         
-        <div class="version">Version 9.1.0</div>
+        <div class="version">Version 9.1.2</div>
         
         <div class="creator">
         <span style="color: #df4300; font-weight: 600;">Created by:</span> SLAPPEPOLSEN
@@ -2696,7 +2696,7 @@ class VideoProcessingApp(QMainWindow):
         header_left_layout.addWidget(app_name_label)
         
         # Version number below title
-        version_label = QLabel('version 9.1.0 "Polyglot"')
+        version_label = QLabel('version 9.1.2 "Polyglot"')
         version_label.setFont(QFont("Arial", 18))
         version_label.setStyleSheet("color: #999; font-style: italic;")
         header_left_layout.addWidget(version_label)
