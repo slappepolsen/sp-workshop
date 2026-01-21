@@ -1,5 +1,7 @@
 # SP Workshop
 
+![Developer Banner 13](https://ishan-rest.vercel.app/svg/banner/dev13/slappepolsen)
+
 [![Release](https://img.shields.io/github/v/release/slappepolsen/sp-workshop)](../../releases)
 [![Downloads](https://img.shields.io/github/downloads/slappepolsen/sp-workshop/total)](../../releases)
 [![License](https://img.shields.io/github/license/slappepolsen/sp-workshop)](LICENSE)
@@ -11,8 +13,6 @@
 🌐 Extract, translate, transcribe, and burn subtitles into videos  
 
 🏳️‍🌈 Built from the need for representation and accessible international WLW/sapphic content (but works for any audiovisual media)
-
-[![Views](https://ishan-rest.vercel.app/svg/count/1/Repository%20Views/sp-workshop)](https://github.com/slappepolsen/sp-workshop)
 
 #### Intended users
 SP Workshop is built for subtitle editors, translators, archivists, and  **anyone** determined to watch their favorite (WLW / Sapphic) shows or ships with subtitles in the language they actually want.
@@ -260,7 +260,6 @@ The app was primarily built and tested on macOS, so some things might need tweak
 - The app icon might look different on non-macOS systems (that's fine, it'll still work)
 
 ## Documentation
-
 - [batchdownloader_guide.md](batchdownloader_guide.md) - How to extract download commands from streaming sources
 - [CHANGELOG.md](CHANGELOG.md) - Version history
 
@@ -275,3 +274,6 @@ This project is licensed under the [MIT License](LICENSE).
 Made with ❤️ by [@slappepolsen](https://x.com/slappepolsen)
 
 [![Follow](https://img.shields.io/twitter/follow/slappepolsen?style=social)](https://x.com/slappepolsen)
+
+[![Views](https://dynamic-repo-badges.vercel.app/svg/count/9/Repository%20Views/sp-workshop)](https://github.com/slappepolsen/sp-workshop)
+
