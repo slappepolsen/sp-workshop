@@ -42,9 +42,9 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QTextEdit, QFileDialog, QDialog,
     QLineEdit, QFormLayout, QMessageBox, QProgressBar, QGroupBox, QStyleFactory, QCheckBox, QStackedWidget, QTextBrowser, QComboBox,
-    QGraphicsDropShadowEffect
+    QGraphicsDropShadowEffect, QTabWidget, QSpinBox, QDoubleSpinBox, QScrollArea, QTimeEdit
 )
-from PyQt5.QtCore import QThread, pyqtSignal, Qt, QProcess, QUrl
+from PyQt5.QtCore import QThread, pyqtSignal, Qt, QProcess, QUrl, QTime, QTimer
 from PyQt5.QtGui import QFont, QIcon, QPainter, QPen
 
 
@@ -103,13 +103,34 @@ def load_config() -> Dict:
         "ffmpeg_preset": "medium",
         "setup_complete": False,
         "use_watermarks": True,
-        "download_source": "tf1"
+        "download_source": "tf1",
+        "whisper_options": {
+            "max_line_width": 42,
+            "max_line_count": 2,
+            "subtitle_style_preset": "Standard",
+            "beam_size": 5,
+            "patience": 1.0,
+            "best_of": 5,
+            "temperature": 0.0,
+            "no_speech_threshold": 0.6,
+            "compression_ratio_threshold": 2.4,
+            "logprob_threshold": -1.0,
+            "condition_on_previous_text": True,
+            "initial_prompt": "",
+            "word_timestamps": True,
+            "highlight_words": False,
+            "length_penalty": None
+        }
     }
     
     if config_path.exists():
         try:
             with open(config_path, 'r') as f:
                 user_config = json.load(f)
+                # Merge whisper_options separately to ensure all defaults exist
+                if "whisper_options" in user_config:
+                    default_config["whisper_options"].update(user_config["whisper_options"])
+                    del user_config["whisper_options"]
                 default_config.update(user_config)
         except Exception as e:
             print(f"Error loading config: {e}")
@@ -1387,7 +1408,7 @@ def remux_mkv_with_srt_batch(folder_path: Path, progress_callback=None, log_call
     return success_count > 0
 
 
-def transcribe_video(video_path: Path, language_code: str, model: str, progress_callback=None, log_callback=None) -> bool:
+def transcribe_video(video_path: Path, language_code: str, model: str, whisper_options: Dict = None, progress_callback=None, log_callback=None) -> bool:
     """Transcribe video using whisper_auto.sh script."""
     if not video_path.exists():
         if log_callback:
@@ -1406,11 +1427,29 @@ def transcribe_video(video_path: Path, language_code: str, model: str, progress_
             log_callback(f"Starting transcription of: {video_path.name}")
             log_callback(f"Language: {language_code}, Model: {model}")
         
+        # Prepare environment variables with whisper options
+        env = os.environ.copy()
+        if whisper_options:
+            env["WHISPER_MAX_LINE_WIDTH"] = str(whisper_options.get("max_line_width", 42))
+            env["WHISPER_MAX_LINE_COUNT"] = str(whisper_options.get("max_line_count", 2))
+            env["WHISPER_BEAM_SIZE"] = str(whisper_options.get("beam_size", 5))
+            env["WHISPER_PATIENCE"] = str(whisper_options.get("patience", 1.0))
+            env["WHISPER_BEST_OF"] = str(whisper_options.get("best_of", 5))
+            env["WHISPER_TEMPERATURE"] = str(whisper_options.get("temperature", 0.0))
+            env["WHISPER_NO_SPEECH_THRESHOLD"] = str(whisper_options.get("no_speech_threshold", 0.6))
+            env["WHISPER_COMPRESSION_RATIO"] = str(whisper_options.get("compression_ratio_threshold", 2.4))
+            env["WHISPER_LOGPROB_THRESHOLD"] = str(whisper_options.get("logprob_threshold", -1.0))
+            env["WHISPER_CONDITION_ON_PREVIOUS"] = str(whisper_options.get("condition_on_previous_text", True))
+            env["WHISPER_INITIAL_PROMPT"] = whisper_options.get("initial_prompt", "")
+            env["WHISPER_WORD_TIMESTAMPS"] = str(whisper_options.get("word_timestamps", True))
+            env["WHISPER_HIGHLIGHT_WORDS"] = str(whisper_options.get("highlight_words", False))
+        
         # Run the script with video path, language code, and model as arguments
         result = subprocess.run(
             ["bash", str(script_path), str(video_path), language_code, model],
             capture_output=True,
-            text=True
+            text=True,
+            env=env
         )
         
         # Log output
@@ -1454,6 +1493,230 @@ def transcribe_video(video_path: Path, language_code: str, model: str, progress_
         return False
 
 
+def adjust_srt_timestamps(srt_path: Path, offset_seconds: int) -> bool:
+    """Adjust all timestamps in an SRT file by adding an offset.
+    
+    Args:
+        srt_path: Path to the SRT file
+        offset_seconds: Number of seconds to add to all timestamps
+    
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        with open(srt_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        # Regex to match SRT timestamps (e.g., 00:00:01,234 --> 00:00:05,678)
+        timestamp_pattern = r'(\d{2}):(\d{2}):(\d{2}),(\d{3}) --> (\d{2}):(\d{2}):(\d{2}),(\d{3})'
+        
+        def add_offset(match):
+            # Parse start time
+            start_h, start_m, start_s, start_ms = map(int, [match.group(1), match.group(2), match.group(3), match.group(4)])
+            # Parse end time
+            end_h, end_m, end_s, end_ms = map(int, [match.group(5), match.group(6), match.group(7), match.group(8)])
+            
+            # Convert to total milliseconds
+            start_total_ms = (start_h * 3600 + start_m * 60 + start_s) * 1000 + start_ms
+            end_total_ms = (end_h * 3600 + end_m * 60 + end_s) * 1000 + end_ms
+            
+            # Add offset (convert seconds to milliseconds)
+            start_total_ms += offset_seconds * 1000
+            end_total_ms += offset_seconds * 1000
+            
+            # Convert back to hours, minutes, seconds, milliseconds
+            def ms_to_time(total_ms):
+                hours = total_ms // (3600 * 1000)
+                total_ms %= (3600 * 1000)
+                minutes = total_ms // (60 * 1000)
+                total_ms %= (60 * 1000)
+                seconds = total_ms // 1000
+                milliseconds = total_ms % 1000
+                return f"{hours:02d}:{minutes:02d}:{seconds:02d},{milliseconds:03d}"
+            
+            start_str = ms_to_time(start_total_ms)
+            end_str = ms_to_time(end_total_ms)
+            
+            return f"{start_str} --> {end_str}"
+        
+        # Replace all timestamps
+        adjusted_content = re.sub(timestamp_pattern, add_offset, content)
+        
+        # Write back to file
+        with open(srt_path, 'w', encoding='utf-8') as f:
+            f.write(adjusted_content)
+        
+        return True
+    except Exception as e:
+        print(f"Error adjusting SRT timestamps: {e}")
+        return False
+
+
+def transcribe_video_time_range(
+    video_path: Path, 
+    start_seconds: int, 
+    end_seconds: int,
+    language_code: str,
+    model: str,
+    whisper_options: Dict = None,
+    adjust_timestamps: bool = True,
+    progress_callback=None, 
+    log_callback=None
+) -> bool:
+    """Transcribe a specific time range of a video using FFmpeg + Whisper.
+    
+    Args:
+        video_path: Path to the video file
+        start_seconds: Start time in seconds
+        end_seconds: End time in seconds
+        language_code: Language code for transcription
+        model: Whisper model to use
+        whisper_options: Dictionary of whisper options
+        adjust_timestamps: If True, adjust SRT timestamps to match original video
+        progress_callback: Callback for progress updates
+        log_callback: Callback for logging
+    
+    Returns:
+        True if successful, False otherwise
+    """
+    if not video_path.exists():
+        if log_callback:
+            log_callback(f"Error: Video file not found: {video_path}")
+        return False
+    
+    try:
+        duration = end_seconds - start_seconds
+        
+        if log_callback:
+            log_callback(f"Extracting time range: {start_seconds}s to {end_seconds}s ({duration}s duration)")
+        
+        # Create temporary audio file for the time range
+        video_dir = video_path.parent
+        temp_audio = video_dir / f"{video_path.stem}_temp_range.wav"
+        
+        # Convert seconds to HH:MM:SS format for FFmpeg
+        def seconds_to_hhmmss(seconds):
+            hours = seconds // 3600
+            minutes = (seconds % 3600) // 60
+            secs = seconds % 60
+            return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+        
+        start_str = seconds_to_hhmmss(start_seconds)
+        end_str = seconds_to_hhmmss(end_seconds)
+        
+        # Extract audio segment with FFmpeg
+        if log_callback:
+            log_callback("Extracting audio segment...")
+        
+        ffmpeg_cmd = [
+            "ffmpeg", "-ss", start_str, "-to", end_str, "-i", str(video_path),
+            "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le",
+            "-af", "dynaudnorm", str(temp_audio),
+            "-loglevel", "warning", "-hide_banner", "-y"
+        ]
+        
+        result = subprocess.run(ffmpeg_cmd, capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            if log_callback:
+                log_callback(f"FFmpeg error: {result.stderr}")
+            return False
+        
+        if not temp_audio.exists():
+            if log_callback:
+                log_callback("Error: Temporary audio file was not created")
+            return False
+        
+        # Transcribe the audio segment using whisper
+        if log_callback:
+            log_callback("Transcribing audio segment with Whisper...")
+        
+        # Prepare environment variables with whisper options
+        env = os.environ.copy()
+        if whisper_options:
+            env["WHISPER_MAX_LINE_WIDTH"] = str(whisper_options.get("max_line_width", 42))
+            env["WHISPER_MAX_LINE_COUNT"] = str(whisper_options.get("max_line_count", 2))
+            env["WHISPER_BEAM_SIZE"] = str(whisper_options.get("beam_size", 5))
+            env["WHISPER_PATIENCE"] = str(whisper_options.get("patience", 1.0))
+            env["WHISPER_BEST_OF"] = str(whisper_options.get("best_of", 5))
+            env["WHISPER_TEMPERATURE"] = str(whisper_options.get("temperature", 0.0))
+            env["WHISPER_NO_SPEECH_THRESHOLD"] = str(whisper_options.get("no_speech_threshold", 0.6))
+            env["WHISPER_COMPRESSION_RATIO"] = str(whisper_options.get("compression_ratio_threshold", 2.4))
+            env["WHISPER_LOGPROB_THRESHOLD"] = str(whisper_options.get("logprob_threshold", -1.0))
+            env["WHISPER_CONDITION_ON_PREVIOUS"] = str(whisper_options.get("condition_on_previous_text", True))
+            env["WHISPER_INITIAL_PROMPT"] = whisper_options.get("initial_prompt", "")
+            env["WHISPER_WORD_TIMESTAMPS"] = str(whisper_options.get("word_timestamps", True))
+            env["WHISPER_HIGHLIGHT_WORDS"] = str(whisper_options.get("highlight_words", False))
+        
+        # Build whisper command
+        whisper_cmd = ["whisper", str(temp_audio), "--model", model, "--output_format", "srt", "--output_dir", str(video_dir)]
+        
+        if language_code != "auto":
+            whisper_cmd.extend(["--language", language_code])
+        
+        # Add whisper options from environment
+        if whisper_options:
+            whisper_cmd.extend([
+                "--beam_size", str(whisper_options.get("beam_size", 5)),
+                "--patience", str(whisper_options.get("patience", 1.0)),
+                "--max_line_width", str(whisper_options.get("max_line_width", 42)),
+                "--max_line_count", str(whisper_options.get("max_line_count", 2)),
+                "--word_timestamps", str(whisper_options.get("word_timestamps", True)),
+            ])
+        
+        result = subprocess.run(whisper_cmd, capture_output=True, text=True, env=env)
+        
+        if log_callback and result.stdout:
+            log_callback(result.stdout)
+        if log_callback and result.stderr:
+            log_callback(result.stderr)
+        
+        # Find the generated SRT file
+        temp_srt = video_dir / f"{temp_audio.stem}.srt"
+        final_srt = video_dir / f"{video_path.stem}_range_{start_seconds}_{end_seconds}.srt"
+        
+        if temp_srt.exists():
+            # Adjust timestamps if requested
+            if adjust_timestamps:
+                if log_callback:
+                    log_callback(f"Adjusting timestamps by +{start_seconds}s...")
+                adjust_srt_timestamps(temp_srt, start_seconds)
+            
+            # Rename to final name
+            if final_srt.exists():
+                # Add number suffix if file exists
+                n = 1
+                while True:
+                    numbered_srt = video_dir / f"{video_path.stem}_range_{start_seconds}_{end_seconds}_{n}.srt"
+                    if not numbered_srt.exists():
+                        final_srt = numbered_srt
+                        break
+                    n += 1
+            
+            temp_srt.rename(final_srt)
+            
+            # Clean up temporary audio file
+            if temp_audio.exists():
+                temp_audio.unlink()
+            
+            if log_callback:
+                log_callback(f"✓ Time range transcription complete: {final_srt.name}")
+            return True
+        else:
+            if log_callback:
+                log_callback("Error: SRT file was not generated")
+            # Clean up temporary audio file
+            if temp_audio.exists():
+                temp_audio.unlink()
+            return False
+        
+    except Exception as e:
+        if log_callback:
+            log_callback(f"Error during time range transcription: {e}")
+            log_callback(f"Traceback: {traceback.format_exc()}")
+        return False
+
+
 # ============================================================================
 # Worker Thread for Script Execution
 # ============================================================================
@@ -1469,22 +1732,39 @@ class ScriptWorker(QThread):
         self.script_func = script_func
         self.args = args
         self.kwargs = kwargs
+        self._stop_requested = False
+    
+    def stop(self):
+        """Request the worker to stop."""
+        self._stop_requested = True
+        self.log_message.emit("⚠ Stop requested - cancelling operation...")
+    
+    def is_stop_requested(self):
+        """Check if stop was requested."""
+        return self._stop_requested
     
     def run(self):
         """Execute the script function."""
         def log_callback(msg):
-            self.log_message.emit(msg)
+            if not self._stop_requested:
+                self.log_message.emit(msg)
         
         def progress_callback(current, total, filename):
-            self.progress_update.emit(current, total, filename)
+            if not self._stop_requested:
+                self.progress_update.emit(current, total, filename)
         
         self.kwargs['log_callback'] = log_callback
         self.kwargs['progress_callback'] = progress_callback
         try:
             result = self.script_func(*self.args, **self.kwargs)
-            self.finished.emit(result)
+            if self._stop_requested:
+                self.log_message.emit("✗ Operation cancelled by user")
+                self.finished.emit(False)
+            else:
+                self.finished.emit(result)
         except Exception as e:
-            self.log_message.emit(f"Error: {e}")
+            if not self._stop_requested:
+                self.log_message.emit(f"Error: {e}")
             self.finished.emit(False)
 
 
@@ -2190,7 +2470,7 @@ class AboutDialog(QDialog):
         <div style="padding: 24px;">
         <div class="app-name">Video Processing Studio</div>
         
-        <div class="version">Version 9.1.2</div>
+        <div class="version">Version 9.1.3</div>
         
         <div class="creator">
         <span style="color: #df4300; font-weight: 600;">Created by:</span> SLAPPEPOLSEN
@@ -2331,6 +2611,199 @@ class WhisperModelDialog(QDialog):
     def get_result(self) -> bool:
         """Get whether user has existing model."""
         return self.result if self.result is not None else False
+
+
+# ============================================================================
+# Time Range Transcription Dialog
+# ============================================================================
+
+class TimeRangeTranscriptionDialog(QDialog):
+    """Dialog for transcribing a specific time range of a video."""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Transcribe Time Range")
+        self.setMinimumWidth(600)
+        
+        self.video_path = None
+        
+        layout = QVBoxLayout()
+        form_layout = QFormLayout()
+        
+        # Info label
+        info_label = QLabel(
+            "Transcribe only a specific portion of a video/audio file. "
+            "This is useful for correcting missing sections or processing specific segments."
+        )
+        info_label.setWordWrap(True)
+        info_label.setStyleSheet("color: #666; margin-bottom: 10px;")
+        layout.addWidget(info_label)
+        
+        # File selection
+        file_layout = QHBoxLayout()
+        self.file_input = QLineEdit()
+        self.file_input.setReadOnly(True)
+        self.file_input.setPlaceholderText("No file selected")
+        browse_btn = QPushButton("Browse...")
+        browse_btn.clicked.connect(self.browse_file)
+        file_layout.addWidget(self.file_input)
+        file_layout.addWidget(browse_btn)
+        form_layout.addRow("Video/Audio File:", file_layout)
+        
+        # Language selection
+        self.language_combo = QComboBox()
+        languages = [
+            ("Auto-detect", "auto"),
+            ("English (English)", "en"),
+            ("French (Français)", "fr"),
+            ("Spanish (Español)", "es"),
+            ("Catalan (Català)", "ca"),
+            ("German (Deutsch)", "de"),
+            ("Italian (Italiano)", "it"),
+            ("Portuguese (Português)", "pt"),
+            ("Dutch (Nederlands)", "nl"),
+        ]
+        for name, code in languages:
+            self.language_combo.addItem(name, code)
+        default_index = self.language_combo.findData("en")
+        if default_index >= 0:
+            self.language_combo.setCurrentIndex(default_index)
+        form_layout.addRow("Language:", self.language_combo)
+        
+        # Start time
+        self.start_time = QTimeEdit()
+        self.start_time.setDisplayFormat("HH:mm:ss")
+        self.start_time.setTime(QTime(0, 0, 0))
+        self.start_time.timeChanged.connect(self.update_preview)
+        form_layout.addRow("Start Time (HH:MM:SS):", self.start_time)
+        
+        # End time
+        self.end_time = QTimeEdit()
+        self.end_time.setDisplayFormat("HH:mm:ss")
+        self.end_time.setTime(QTime(0, 1, 0))  # Default 1 minute
+        self.end_time.timeChanged.connect(self.update_preview)
+        form_layout.addRow("End Time (HH:MM:SS):", self.end_time)
+        
+        # Preview label
+        self.preview_label = QLabel("")
+        self.preview_label.setStyleSheet("color: #0066cc; font-weight: bold;")
+        form_layout.addRow("", self.preview_label)
+        
+        # Adjust timestamps checkbox
+        self.adjust_timestamps_checkbox = QCheckBox(
+            "Adjust timestamps to match original video timing"
+        )
+        self.adjust_timestamps_checkbox.setChecked(True)
+        self.adjust_timestamps_checkbox.setToolTip(
+            "When enabled, the SRT timestamps will be offset to match the original video. "
+            "For example, if you transcribe from 00:01:30 onwards, the first subtitle will "
+            "start at 00:01:30 instead of 00:00:00."
+        )
+        help_label = QLabel(
+            "When enabled, subtitle timestamps will align with the original video position. "
+            "Disable this if you want timestamps to start at 00:00:00."
+        )
+        help_label.setWordWrap(True)
+        help_label.setStyleSheet("color: #666; font-size: 10px;")
+        checkbox_layout = QVBoxLayout()
+        checkbox_layout.addWidget(self.adjust_timestamps_checkbox)
+        checkbox_layout.addWidget(help_label)
+        form_layout.addRow("", checkbox_layout)
+        
+        layout.addLayout(form_layout)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        self.ok_btn = QPushButton("Start Transcription")
+        self.ok_btn.clicked.connect(self.validate_and_accept)
+        self.ok_btn.setEnabled(False)  # Disabled until file is selected
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        button_layout.addWidget(self.ok_btn)
+        button_layout.addWidget(cancel_btn)
+        layout.addLayout(button_layout)
+        
+        self.setLayout(layout)
+        self.update_preview()
+    
+    def browse_file(self):
+        """Browse for video/audio file."""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Select Video or Audio File",
+            str(Path.home()),
+            "Media Files (*.mkv *.mp4 *.mov *.avi *.mp3 *.wav *.m4a);;All Files (*)"
+        )
+        if file_path:
+            self.video_path = Path(file_path)
+            self.file_input.setText(str(self.video_path))
+            self.ok_btn.setEnabled(True)
+            self.update_preview()
+    
+    def update_preview(self):
+        """Update the preview label showing duration."""
+        start_seconds = self.time_to_seconds(self.start_time.time())
+        end_seconds = self.time_to_seconds(self.end_time.time())
+        
+        if end_seconds > start_seconds:
+            duration_seconds = end_seconds - start_seconds
+            duration_str = self.seconds_to_time_str(duration_seconds)
+            start_str = self.start_time.time().toString("HH:mm:ss")
+            end_str = self.end_time.time().toString("HH:mm:ss")
+            self.preview_label.setText(
+                f"Will transcribe {duration_str} of audio ({start_str} → {end_str})"
+            )
+            self.preview_label.setStyleSheet("color: #0066cc; font-weight: bold;")
+        else:
+            self.preview_label.setText("⚠ End time must be after start time")
+            self.preview_label.setStyleSheet("color: #cc0000; font-weight: bold;")
+    
+    def time_to_seconds(self, qtime: QTime) -> int:
+        """Convert QTime to total seconds."""
+        return qtime.hour() * 3600 + qtime.minute() * 60 + qtime.second()
+    
+    def seconds_to_time_str(self, seconds: int) -> str:
+        """Convert seconds to readable time string."""
+        hours = seconds // 3600
+        minutes = (seconds % 3600) // 60
+        secs = seconds % 60
+        if hours > 0:
+            return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+        else:
+            return f"{minutes:02d}:{secs:02d}"
+    
+    def validate_and_accept(self):
+        """Validate inputs before accepting."""
+        if not self.video_path:
+            QMessageBox.warning(self, "No File", "Please select a video or audio file.")
+            return
+        
+        start_seconds = self.time_to_seconds(self.start_time.time())
+        end_seconds = self.time_to_seconds(self.end_time.time())
+        
+        if end_seconds <= start_seconds:
+            QMessageBox.warning(
+                self, "Invalid Time Range",
+                "End time must be after start time."
+            )
+            return
+        
+        self.accept()
+    
+    def get_parameters(self) -> Dict:
+        """Get the transcription parameters."""
+        start_seconds = self.time_to_seconds(self.start_time.time())
+        end_seconds = self.time_to_seconds(self.end_time.time())
+        
+        return {
+            "video_path": self.video_path,
+            "language_code": self.language_combo.currentData(),
+            "start_time": start_seconds,
+            "end_time": end_seconds,
+            "start_time_str": self.start_time.time().toString("HH:mm:ss"),
+            "end_time_str": self.end_time.time().toString("HH:mm:ss"),
+            "adjust_timestamps": self.adjust_timestamps_checkbox.isChecked()
+        }
 
 
 # ============================================================================
@@ -2514,6 +2987,268 @@ class SettingsDialog(QDialog):
 
 
 # ============================================================================
+# Whisper Options Dialog (Standalone)
+# ============================================================================
+
+class WhisperOptionsDialog(QDialog):
+    """Standalone dialog for Whisper transcription options."""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Whisper Advanced Options")
+        self.setMinimumWidth(700)
+        self.setMinimumHeight(600)
+        
+        self.config = load_config()
+        
+        main_layout = QVBoxLayout()
+        
+        # Create scroll area for the content
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+        
+        content = QWidget()
+        layout = QVBoxLayout()
+        
+        # Basic Section
+        basic_group = QGroupBox("Subtitle Formatting")
+        basic_layout = QFormLayout()
+        
+        # Subtitle Style Preset
+        preset_info = QLabel("Choose a preset or customize subtitle formatting")
+        preset_info.setStyleSheet("color: #666;")
+        preset_info.setWordWrap(True)
+        basic_layout.addRow("", preset_info)
+        
+        self.subtitle_preset_combo = QComboBox()
+        self.subtitle_preset_combo.addItems(["Standard (42/2)", "Narrow (30/2)", "Wide (60/2)", "Custom"])
+        preset = self.config.get("whisper_options", {}).get("subtitle_style_preset", "Standard")
+        preset_index = self.subtitle_preset_combo.findText(preset, Qt.MatchStartsWith)
+        if preset_index >= 0:
+            self.subtitle_preset_combo.setCurrentIndex(preset_index)
+        self.subtitle_preset_combo.currentTextChanged.connect(self.on_preset_changed)
+        basic_layout.addRow("Subtitle Style:", self.subtitle_preset_combo)
+        
+        # Max Words Per Line
+        self.max_line_width_spin = QSpinBox()
+        self.max_line_width_spin.setRange(20, 80)
+        self.max_line_width_spin.setValue(self.config.get("whisper_options", {}).get("max_line_width", 42))
+        self.max_line_width_spin.setToolTip("Controls how many characters fit on one subtitle line")
+        basic_layout.addRow("Max Characters Per Line:", self.max_line_width_spin)
+        
+        # Max Lines Per Subtitle
+        self.max_line_count_spin = QSpinBox()
+        self.max_line_count_spin.setRange(1, 3)
+        self.max_line_count_spin.setValue(self.config.get("whisper_options", {}).get("max_line_count", 2))
+        self.max_line_count_spin.setToolTip("How many lines each subtitle can have (standard is 2)")
+        basic_layout.addRow("Max Lines Per Subtitle:", self.max_line_count_spin)
+        
+        basic_group.setLayout(basic_layout)
+        layout.addWidget(basic_group)
+        
+        # Advanced Section (collapsible)
+        self.advanced_group = QGroupBox("Advanced Options")
+        self.advanced_group.setCheckable(True)
+        self.advanced_group.setChecked(False)
+        advanced_layout = QVBoxLayout()
+        
+        # Quality & Performance Group
+        quality_group = QGroupBox("Quality & Performance")
+        quality_layout = QFormLayout()
+        
+        self.beam_size_spin = QSpinBox()
+        self.beam_size_spin.setRange(1, 10)
+        self.beam_size_spin.setValue(self.config.get("whisper_options", {}).get("beam_size", 5))
+        self.beam_size_spin.setToolTip("Search width for better accuracy (higher = slower)")
+        quality_layout.addRow("Beam Size:", self.beam_size_spin)
+        
+        self.patience_spin = QDoubleSpinBox()
+        self.patience_spin.setRange(0.5, 2.0)
+        self.patience_spin.setSingleStep(0.1)
+        self.patience_spin.setValue(self.config.get("whisper_options", {}).get("patience", 1.0))
+        self.patience_spin.setToolTip("Beam search patience")
+        quality_layout.addRow("Patience:", self.patience_spin)
+        
+        self.best_of_spin = QSpinBox()
+        self.best_of_spin.setRange(1, 10)
+        self.best_of_spin.setValue(self.config.get("whisper_options", {}).get("best_of", 5))
+        self.best_of_spin.setToolTip("Number of candidates when sampling")
+        quality_layout.addRow("Best Of:", self.best_of_spin)
+        
+        self.temperature_spin = QDoubleSpinBox()
+        self.temperature_spin.setRange(0.0, 1.0)
+        self.temperature_spin.setSingleStep(0.1)
+        self.temperature_spin.setValue(self.config.get("whisper_options", {}).get("temperature", 0.0))
+        self.temperature_spin.setToolTip("Sampling randomness (0 = deterministic)")
+        quality_layout.addRow("Temperature:", self.temperature_spin)
+        
+        quality_group.setLayout(quality_layout)
+        advanced_layout.addWidget(quality_group)
+        
+        # Silence & Music Handling Group
+        silence_group = QGroupBox("Silence & Music Handling")
+        silence_layout = QFormLayout()
+        
+        self.no_speech_threshold_spin = QDoubleSpinBox()
+        self.no_speech_threshold_spin.setRange(0.0, 1.0)
+        self.no_speech_threshold_spin.setSingleStep(0.1)
+        self.no_speech_threshold_spin.setValue(self.config.get("whisper_options", {}).get("no_speech_threshold", 0.6))
+        self.no_speech_threshold_spin.setToolTip("Threshold to skip silent segments (higher = more aggressive)")
+        silence_layout.addRow("No Speech Threshold:", self.no_speech_threshold_spin)
+        
+        self.compression_ratio_spin = QDoubleSpinBox()
+        self.compression_ratio_spin.setRange(1.5, 3.0)
+        self.compression_ratio_spin.setSingleStep(0.1)
+        self.compression_ratio_spin.setValue(self.config.get("whisper_options", {}).get("compression_ratio_threshold", 2.4))
+        self.compression_ratio_spin.setToolTip("Detect and retry overly compressed output")
+        silence_layout.addRow("Compression Ratio:", self.compression_ratio_spin)
+        
+        self.logprob_threshold_spin = QDoubleSpinBox()
+        self.logprob_threshold_spin.setRange(-2.0, 0.0)
+        self.logprob_threshold_spin.setSingleStep(0.1)
+        self.logprob_threshold_spin.setValue(self.config.get("whisper_options", {}).get("logprob_threshold", -1.0))
+        self.logprob_threshold_spin.setToolTip("Minimum confidence to accept transcription")
+        silence_layout.addRow("Log Prob Threshold:", self.logprob_threshold_spin)
+        
+        silence_group.setLayout(silence_layout)
+        advanced_layout.addWidget(silence_group)
+        
+        # Context & Prompting Group
+        context_group = QGroupBox("Context & Prompting")
+        context_layout = QFormLayout()
+        
+        self.condition_on_previous_checkbox = QCheckBox("Use previous text as context")
+        self.condition_on_previous_checkbox.setChecked(self.config.get("whisper_options", {}).get("condition_on_previous_text", True))
+        self.condition_on_previous_checkbox.setToolTip("Helps continuity across long audio")
+        context_layout.addRow("", self.condition_on_previous_checkbox)
+        
+        self.initial_prompt_input = QLineEdit()
+        self.initial_prompt_input.setText(self.config.get("whisper_options", {}).get("initial_prompt", ""))
+        self.initial_prompt_input.setPlaceholderText("e.g., 'Um, like, you know...' for filler words")
+        self.initial_prompt_input.setToolTip("Starting prompt to bias vocabulary/style")
+        context_layout.addRow("Initial Prompt:", self.initial_prompt_input)
+        
+        context_group.setLayout(context_layout)
+        advanced_layout.addWidget(context_group)
+        
+        # Advanced Decoding Group
+        decoding_group = QGroupBox("Advanced Decoding")
+        decoding_layout = QFormLayout()
+        
+        self.word_timestamps_checkbox = QCheckBox("Enable word-level timestamps")
+        self.word_timestamps_checkbox.setChecked(self.config.get("whisper_options", {}).get("word_timestamps", True))
+        self.word_timestamps_checkbox.setToolTip("Refines timestamps for more accurate subtitle timing")
+        decoding_layout.addRow("", self.word_timestamps_checkbox)
+        
+        self.highlight_words_checkbox = QCheckBox("Highlight words as spoken")
+        self.highlight_words_checkbox.setChecked(self.config.get("whisper_options", {}).get("highlight_words", False))
+        self.highlight_words_checkbox.setToolTip("Add highlighting in SRT/VTT as words are spoken")
+        decoding_layout.addRow("", self.highlight_words_checkbox)
+        
+        decoding_group.setLayout(decoding_layout)
+        advanced_layout.addWidget(decoding_group)
+        
+        # Reset to defaults button
+        reset_btn = QPushButton("Reset to Defaults")
+        reset_btn.clicked.connect(self.reset_whisper_defaults)
+        advanced_layout.addWidget(reset_btn)
+        
+        self.advanced_group.setLayout(advanced_layout)
+        layout.addWidget(self.advanced_group)
+        
+        layout.addStretch()
+        content.setLayout(layout)
+        scroll.setWidget(content)
+        
+        main_layout.addWidget(scroll)
+        
+        # Buttons at bottom
+        button_layout = QHBoxLayout()
+        save_btn = QPushButton("Save")
+        save_btn.clicked.connect(self.save_settings)
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        button_layout.addWidget(save_btn)
+        button_layout.addWidget(cancel_btn)
+        main_layout.addLayout(button_layout)
+        
+        self.setLayout(main_layout)
+        
+        # Set initial enabled state for custom fields
+        self.on_preset_changed(self.subtitle_preset_combo.currentText())
+    
+    def on_preset_changed(self, preset_text):
+        """Handle preset selection changes."""
+        is_custom = "Custom" in preset_text
+        self.max_line_width_spin.setEnabled(is_custom)
+        self.max_line_count_spin.setEnabled(is_custom)
+        
+        if not is_custom:
+            if "Standard" in preset_text:
+                self.max_line_width_spin.setValue(42)
+                self.max_line_count_spin.setValue(2)
+            elif "Narrow" in preset_text:
+                self.max_line_width_spin.setValue(30)
+                self.max_line_count_spin.setValue(2)
+            elif "Wide" in preset_text:
+                self.max_line_width_spin.setValue(60)
+                self.max_line_count_spin.setValue(2)
+    
+    def reset_whisper_defaults(self):
+        """Reset all whisper options to default values."""
+        self.subtitle_preset_combo.setCurrentText("Standard (42/2)")
+        self.max_line_width_spin.setValue(42)
+        self.max_line_count_spin.setValue(2)
+        self.beam_size_spin.setValue(5)
+        self.patience_spin.setValue(1.0)
+        self.best_of_spin.setValue(5)
+        self.temperature_spin.setValue(0.0)
+        self.no_speech_threshold_spin.setValue(0.6)
+        self.compression_ratio_spin.setValue(2.4)
+        self.logprob_threshold_spin.setValue(-1.0)
+        self.condition_on_previous_checkbox.setChecked(True)
+        self.initial_prompt_input.setText("")
+        self.word_timestamps_checkbox.setChecked(True)
+        self.highlight_words_checkbox.setChecked(False)
+    
+    def save_settings(self):
+        """Save whisper options and close dialog."""
+        preset_text = self.subtitle_preset_combo.currentText()
+        if "Custom" in preset_text:
+            preset = "Custom"
+        elif "Standard" in preset_text:
+            preset = "Standard"
+        elif "Narrow" in preset_text:
+            preset = "Narrow"
+        elif "Wide" in preset_text:
+            preset = "Wide"
+        else:
+            preset = "Standard"
+        
+        self.config["whisper_options"] = {
+            "max_line_width": self.max_line_width_spin.value(),
+            "max_line_count": self.max_line_count_spin.value(),
+            "subtitle_style_preset": preset,
+            "beam_size": self.beam_size_spin.value(),
+            "patience": self.patience_spin.value(),
+            "best_of": self.best_of_spin.value(),
+            "temperature": self.temperature_spin.value(),
+            "no_speech_threshold": self.no_speech_threshold_spin.value(),
+            "compression_ratio_threshold": self.compression_ratio_spin.value(),
+            "logprob_threshold": self.logprob_threshold_spin.value(),
+            "condition_on_previous_text": self.condition_on_previous_checkbox.isChecked(),
+            "initial_prompt": self.initial_prompt_input.text(),
+            "word_timestamps": self.word_timestamps_checkbox.isChecked(),
+            "highlight_words": self.highlight_words_checkbox.isChecked(),
+            "length_penalty": None
+        }
+        
+        save_config(self.config)
+        self.accept()
+
+
+# ============================================================================
 # Main Window
 # ============================================================================
 
@@ -2663,6 +3398,260 @@ class VideoProcessingApp(QMainWindow):
         if about_button:
             self.apply_button_style(about_button, colors[5])
     
+    def create_transcription_tab(self):
+        """Create the dedicated transcription tab."""
+        tab = QWidget()
+        layout = QVBoxLayout()
+        layout.setSpacing(15)
+        
+        # Header
+        header_label = QLabel("Transcribe Audio/Video to Subtitles")
+        header_label.setFont(QFont("Arial", 14, QFont.Bold))
+        layout.addWidget(header_label)
+        
+        desc_label = QLabel("Use OpenAI Whisper to generate subtitles from audio/video")
+        desc_label.setStyleSheet("color: #666;")
+        layout.addWidget(desc_label)
+        
+        # File selection
+        file_group = QGroupBox("File Selection")
+        file_layout = QVBoxLayout()
+        
+        file_row = QHBoxLayout()
+        file_label = QLabel("Select file:")
+        self.transcribe_file_input = QLineEdit()
+        self.transcribe_file_input.setReadOnly(True)
+        self.transcribe_file_input.setPlaceholderText("No file selected")
+        browse_btn = QPushButton("Browse")
+        browse_btn.clicked.connect(self.browse_transcribe_file)
+        file_row.addWidget(file_label, 0)
+        file_row.addWidget(self.transcribe_file_input, 1)
+        file_row.addWidget(browse_btn, 0)
+        file_layout.addLayout(file_row)
+        
+        # Language selection
+        lang_row = QHBoxLayout()
+        lang_label = QLabel("Language:")
+        self.transcribe_language_combo = QComboBox()
+        languages = [
+            ("Auto-detect", "auto"),
+            ("English (English)", "en"),
+            ("French (Français)", "fr"),
+            ("Spanish (Español)", "es"),
+            ("Catalan (Català)", "ca"),
+            ("German (Deutsch)", "de"),
+            ("Italian (Italiano)", "it"),
+            ("Portuguese (Português)", "pt"),
+            ("Dutch (Nederlands)", "nl"),
+            ("Chinese (中文)", "zh"),
+            ("Japanese (日本語)", "ja"),
+            ("Korean (한국어)", "ko"),
+        ]
+        for name, code in languages:
+            self.transcribe_language_combo.addItem(name, code)
+        lang_row.addWidget(lang_label, 0)
+        lang_row.addWidget(self.transcribe_language_combo, 1)
+        lang_row.addStretch()
+        file_layout.addLayout(lang_row)
+        
+        file_group.setLayout(file_layout)
+        layout.addWidget(file_group)
+        
+        # Action buttons
+        buttons_layout = QHBoxLayout()
+        
+        self.transcribe_main_btn = QPushButton("Transcribe")
+        # Apply same styling as other buttons in the app
+        hover_color = "#b1588a"
+        self.transcribe_main_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: #d168a3;
+                color: white;
+                border: none;
+                border-radius: 5px;
+                padding: 4px 12px;
+                font-weight: bold;
+                min-height: 18px;
+                outline: none;
+            }}
+            QPushButton:hover {{
+                background-color: {hover_color};
+                border: none;
+                outline: none;
+            }}
+            QPushButton:pressed {{
+                background-color: {hover_color};
+                border: none;
+                outline: none;
+            }}
+        """)
+        self.transcribe_main_btn.clicked.connect(self.transcribe_from_tab)
+        
+        time_range_btn = QPushButton("Transcribe Time Range")
+        time_range_btn.clicked.connect(self.transcribe_time_range)
+        
+        advanced_btn = QPushButton("Advanced Options...")
+        advanced_btn.clicked.connect(self.open_whisper_options)
+        
+        buttons_layout.addWidget(self.transcribe_main_btn, 2)
+        buttons_layout.addWidget(time_range_btn, 1)
+        buttons_layout.addWidget(advanced_btn, 1)
+        layout.addLayout(buttons_layout)
+        
+        # Processing logs
+        logs_label = QLabel("Processing Logs:")
+        logs_label.setFont(QFont("Arial", 10, QFont.Bold))
+        layout.addWidget(logs_label)
+        
+        self.transcribe_log_output = QTextEdit()
+        self.transcribe_log_output.setReadOnly(True)
+        self.transcribe_log_output.setMinimumHeight(200)
+        self.transcribe_log_output.setStyleSheet("""
+            QTextEdit {
+                background-color: #f5f5f5;
+                border: 1px solid #ddd;
+                border-radius: 3px;
+                font-family: 'Courier New', monospace;
+                font-size: 11px;
+            }
+        """)
+        layout.addWidget(self.transcribe_log_output)
+        
+        # Progress bar for transcription
+        progress_layout = QHBoxLayout()
+        self.transcribe_progress_bar = QProgressBar()
+        self.transcribe_progress_bar.setMinimumHeight(25)
+        self.transcribe_progress_bar.setVisible(False)
+        self.transcribe_progress_bar.setStyleSheet("""
+            QProgressBar {
+                border: 1px solid #ccc;
+                border-radius: 5px;
+                text-align: center;
+                background-color: #f0f0f0;
+            }
+            QProgressBar::chunk {
+                background-color: #5dade2;
+                border-radius: 4px;
+            }
+        """)
+        
+        self.transcribe_stop_btn = QPushButton("Stop")
+        self.transcribe_stop_btn.setFixedWidth(80)
+        self.transcribe_stop_btn.setVisible(False)
+        self.transcribe_stop_btn.clicked.connect(self.stop_operation)
+        self.transcribe_stop_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #cc0000;
+                color: white;
+                border: none;
+                border-radius: 5px;
+                padding: 4px 12px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #990000;
+            }
+        """)
+        
+        progress_layout.addWidget(self.transcribe_progress_bar)
+        progress_layout.addWidget(self.transcribe_stop_btn)
+        layout.addLayout(progress_layout)
+        
+        tab.setLayout(layout)
+        return tab
+    
+    def browse_transcribe_file(self):
+        """Browse for file to transcribe."""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Select Video or Audio File to Transcribe",
+            str(get_downloads_dir()),
+            "Media Files (*.mkv *.mp4 *.mov *.mp3 *.wav *.m4a);;All Files (*)"
+        )
+        if file_path:
+            self.transcribe_file_input.setText(file_path)
+    
+    def transcribe_from_tab(self):
+        """Transcribe video from the dedicated tab."""
+        file_path = self.transcribe_file_input.text()
+        if not file_path or file_path == "No file selected":
+            QMessageBox.warning(self, "No File", "Please select a video or audio file to transcribe.")
+            return
+        
+        video_path = Path(file_path)
+        if not video_path.exists():
+            QMessageBox.warning(self, "File Not Found", f"The selected file does not exist:\n{file_path}")
+            return
+        
+        # Get language from combo
+        language_code = self.transcribe_language_combo.currentData()
+        
+        # Get model and whisper options from config
+        config = load_config()
+        model = config.get("whisper_model", "turbo")
+        whisper_options = config.get("whisper_options", {})
+        
+        # Check if this is first time using transcription
+        whisper_model_asked = config.get("whisper_model_asked", False)
+        
+        if not whisper_model_asked:
+            # Ask user if they already have a model
+            model_dialog = WhisperModelDialog(self, model)
+            if model_dialog.exec_() != QDialog.Accepted:
+                return  # User cancelled
+            
+            has_existing_model = model_dialog.get_result()
+            
+            # Save preference to config
+            config["whisper_model_asked"] = True
+            config["whisper_has_existing_model"] = has_existing_model
+            save_config(config)
+            
+            if has_existing_model:
+                self.transcribe_log(f"Using existing Whisper model '{model}' from cache.")
+            else:
+                self.transcribe_log(f"Will download Whisper model '{model}' on first use.")
+        
+        self.transcribe_log(f"Starting transcription of: {video_path.name}")
+        lang_display = "Auto-detect" if language_code == "auto" else language_code
+        self.transcribe_log(f"Language: {lang_display}, Model: {model}")
+        
+        # Show progress bar and stop button
+        self.transcribe_progress_bar.setVisible(True)
+        self.transcribe_stop_btn.setVisible(True)
+        self.transcribe_stop_btn.setEnabled(True)
+        self.transcribe_progress_bar.setRange(0, 0)  # Indeterminate
+        
+        # Run transcription with language, model, and whisper options
+        def transcribe_with_params(video_path, language_code, model, whisper_options, progress_callback=None, log_callback=None):
+            return transcribe_video(video_path, language_code, model, whisper_options, progress_callback, log_callback)
+        
+        # Use custom callbacks for the tab
+        def tab_log_callback(msg):
+            self.transcribe_log(msg)
+        
+        self.worker = ScriptWorker(transcribe_with_params, video_path, language_code, model, whisper_options)
+        self.worker.log_message.connect(tab_log_callback)
+        self.worker.finished.connect(self.on_transcribe_finished)
+        self.worker.start()
+    
+    def transcribe_log(self, message):
+        """Add message to transcription log."""
+        from datetime import datetime
+        timestamp = datetime.now().strftime("[%H:%M:%S]")
+        self.transcribe_log_output.append(f"{timestamp} {message}")
+        # Also log to main log
+        self.log(message)
+    
+    def on_transcribe_finished(self, success: bool):
+        """Handle transcription completion."""
+        self.transcribe_progress_bar.setVisible(False)
+        self.transcribe_stop_btn.setVisible(False)
+        if success:
+            self.transcribe_log("✓ Transcription completed successfully!")
+        else:
+            self.transcribe_log("✗ Transcription failed. Check log for details.")
+        self.worker = None
+    
     def init_ui(self):
         """Initialize the UI."""
         self.setWindowTitle("SP workshop (WLW video processing, translation & subtitling hub)")
@@ -2675,8 +3664,8 @@ class VideoProcessingApp(QMainWindow):
         
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
-        layout = QVBoxLayout()
-        central_widget.setLayout(layout)
+        main_layout = QVBoxLayout()
+        central_widget.setLayout(main_layout)
         
         # Header with app name
         header_left_layout = QVBoxLayout()
@@ -2696,7 +3685,7 @@ class VideoProcessingApp(QMainWindow):
         header_left_layout.addWidget(app_name_label)
         
         # Version number below title
-        version_label = QLabel('version 9.1.2 "Polyglot"')
+        version_label = QLabel('version 9.1.3 "Polyglot"')
         version_label.setFont(QFont("Arial", 18))
         version_label.setStyleSheet("color: #999; font-style: italic;")
         header_left_layout.addWidget(version_label)
@@ -2720,7 +3709,15 @@ class VideoProcessingApp(QMainWindow):
         header_layout.addWidget(faq_btn)
         header_layout.addWidget(settings_btn)
         
-        layout.addLayout(header_layout)
+        main_layout.addLayout(header_layout)
+        
+        # Create tab widget for main content
+        self.main_tabs = QTabWidget()
+        
+        # Create "Main" tab with all existing sections
+        main_tab = QWidget()
+        layout = QVBoxLayout()
+        main_tab.setLayout(layout)
         
         # Download section
         download_group = QGroupBox("DOWNLOAD")
@@ -2834,16 +3831,6 @@ class VideoProcessingApp(QMainWindow):
         remux_group.setLayout(remux_layout)
         layout.addWidget(remux_group)
         
-        # Transcribe section
-        transcribe_group = QGroupBox("TRANSCRIBE")
-        transcribe_group.setStyleSheet("QGroupBox { font-weight: bold; }")
-        transcribe_layout = QHBoxLayout()
-        transcribe_btn = QPushButton("Transcribe video...")
-        transcribe_btn.clicked.connect(self.transcribe_video)
-        transcribe_layout.addWidget(transcribe_btn)
-        transcribe_group.setLayout(transcribe_layout)
-        layout.addWidget(transcribe_group)
-        
         # Progress section (above log output)
         progress_group = QGroupBox("PROGRESS")
         progress_layout = QVBoxLayout()
@@ -2887,6 +3874,34 @@ class VideoProcessingApp(QMainWindow):
         self.progress_counter_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         progress_bar_layout.addWidget(self.progress_bar)
         progress_bar_layout.addWidget(self.progress_counter_label)
+        
+        # Stop button
+        self.stop_btn = QPushButton("Stop")
+        self.stop_btn.setFixedWidth(80)
+        self.stop_btn.clicked.connect(self.stop_operation)
+        self.stop_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #cc0000;
+                color: white;
+                border: none;
+                border-radius: 5px;
+                padding: 4px 12px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #990000;
+            }
+            QPushButton:pressed {
+                background-color: #660000;
+            }
+            QPushButton:disabled {
+                background-color: #cccccc;
+                color: #666666;
+            }
+        """)
+        self.stop_btn.setToolTip("Stop the current operation (Ctrl+C)")
+        progress_bar_layout.addWidget(self.stop_btn)
+        
         progress_layout.addLayout(progress_bar_layout)
         
         progress_group.setLayout(progress_layout)
@@ -2904,6 +3919,16 @@ class VideoProcessingApp(QMainWindow):
         log_layout.addWidget(self.log_output)
         log_group.setLayout(log_layout)
         layout.addWidget(log_group)
+        
+        # Add main tab to tabs widget
+        self.main_tabs.addTab(main_tab, "Main")
+        
+        # Add transcription tab
+        transcription_tab = self.create_transcription_tab()
+        self.main_tabs.addTab(transcription_tab, "Transcription")
+        
+        # Add tabs to main layout
+        main_layout.addWidget(self.main_tabs)
         
         # Status bar
         self.statusBar().showMessage("Ready")
@@ -2939,6 +3964,14 @@ class VideoProcessingApp(QMainWindow):
             self.config = load_config()
             self.log("Settings saved.")
     
+    def open_whisper_options(self):
+        """Open Whisper advanced options dialog."""
+        dialog = WhisperOptionsDialog(self)
+        if dialog.exec_() == QDialog.Accepted:
+            # Reload config after whisper options are saved
+            self.config = load_config()
+            self.log("Whisper options updated.")
+    
     def run_script(self, script_func, *args, **kwargs):
         """Run a script in a worker thread."""
         if self.worker and self.worker.isRunning():
@@ -2971,6 +4004,8 @@ class VideoProcessingApp(QMainWindow):
             self.progress_file_label.setText("")
             self.progress_counter_label.setText("")
             self.update_progress_bar_color()
+            # Enable stop button
+            self.stop_btn.setEnabled(True)
         
         self.statusBar().showMessage("Running...")
         
@@ -3064,10 +4099,39 @@ class VideoProcessingApp(QMainWindow):
         self.progress_counter_label.setText("")
         self.current_operation = None
         self.statusBar().showMessage("Ready" if success else "Error occurred")
+        # Disable stop button and reset text
+        self.stop_btn.setEnabled(False)
+        self.stop_btn.setText("Stop")
         if success:
             self.log("✓ Operation completed successfully.")
         else:
             self.log("✗ Operation failed. Check log for details.")
+        self.worker = None
+    
+    def stop_operation(self):
+        """Stop the currently running operation."""
+        if self.worker and self.worker.isRunning():
+            # Request the worker to stop
+            self.worker.stop()
+            # Disable the button to prevent multiple clicks
+            self.stop_btn.setEnabled(False)
+            self.stop_btn.setText("Stopping...")
+            self.statusBar().showMessage("Stopping operation...")
+            
+            # Wait a moment for graceful shutdown, then terminate if needed
+            QTimer.singleShot(3000, self.force_terminate_worker)
+        else:
+            self.log("No operation is currently running")
+    
+    def force_terminate_worker(self):
+        """Force terminate the worker if it hasn't stopped gracefully."""
+        if self.worker and self.worker.isRunning():
+            self.log("⚠ Force terminating operation...")
+            self.worker.terminate()
+            self.worker.wait()
+            self.on_script_finished(False)
+        # Reset button text
+        self.stop_btn.setText("Stop")
     
     def on_source_changed(self):
         """Handle source selection change."""
@@ -3308,9 +4372,10 @@ class VideoProcessingApp(QMainWindow):
             
             language_code = lang_dialog.get_language_code()
             
-            # Get model from config
+            # Get model and whisper options from config
             config = load_config()
             model = config.get("whisper_model", "turbo")
+            whisper_options = config.get("whisper_options", {})
             
             # Check if this is first time using transcription
             whisper_model_asked = config.get("whisper_model_asked", False)
@@ -3337,11 +4402,78 @@ class VideoProcessingApp(QMainWindow):
             lang_display = "Auto-detect" if language_code == "auto" else language_code
             self.log(f"Language: {lang_display}, Model: {model}")
             
-            # Run transcription with language and model
-            def transcribe_with_params(video_path, language_code, model, progress_callback=None, log_callback=None):
-                return transcribe_video(video_path, language_code, model, progress_callback, log_callback)
+            # Run transcription with language, model, and whisper options
+            def transcribe_with_params(video_path, language_code, model, whisper_options, progress_callback=None, log_callback=None):
+                return transcribe_video(video_path, language_code, model, whisper_options, progress_callback, log_callback)
             
-            self.run_script(transcribe_with_params, video_path, language_code, model)
+            self.run_script(transcribe_with_params, video_path, language_code, model, whisper_options)
+    
+    def transcribe_time_range(self):
+        """Transcribe a specific time range of a video."""
+        # Show time range transcription dialog
+        dialog = TimeRangeTranscriptionDialog(self)
+        if dialog.exec_() != QDialog.Accepted:
+            return  # User cancelled
+        
+        # Get parameters from dialog
+        params = dialog.get_parameters()
+        video_path = params["video_path"]
+        language_code = params["language_code"]
+        start_seconds = params["start_time"]
+        end_seconds = params["end_time"]
+        start_str = params["start_time_str"]
+        end_str = params["end_time_str"]
+        adjust_timestamps = params["adjust_timestamps"]
+        
+        # Get model and whisper options from config
+        config = load_config()
+        model = config.get("whisper_model", "turbo")
+        whisper_options = config.get("whisper_options", {})
+        
+        # Check if this is first time using transcription
+        whisper_model_asked = config.get("whisper_model_asked", False)
+        
+        if not whisper_model_asked:
+            # Ask user if they already have a model
+            model_dialog = WhisperModelDialog(self, model)
+            if model_dialog.exec_() != QDialog.Accepted:
+                return  # User cancelled
+            
+            has_existing_model = model_dialog.get_result()
+            
+            # Save preference to config
+            config["whisper_model_asked"] = True
+            config["whisper_has_existing_model"] = has_existing_model
+            save_config(config)
+            
+            if has_existing_model:
+                self.log(f"Using existing Whisper model '{model}' from cache.")
+            else:
+                self.log(f"Will download Whisper model '{model}' on first use.")
+        
+        self.log(f"Starting time range transcription of: {video_path.name}")
+        self.log(f"Time range: {start_str} → {end_str}")
+        lang_display = "Auto-detect" if language_code == "auto" else language_code
+        self.log(f"Language: {lang_display}, Model: {model}")
+        if adjust_timestamps:
+            self.log("Timestamps will be adjusted to match original video timing")
+        else:
+            self.log("Timestamps will start at 00:00:00")
+        
+        # Run time range transcription
+        def transcribe_range_with_params(
+            video_path, start_seconds, end_seconds, language_code, model, 
+            whisper_options, adjust_timestamps, progress_callback=None, log_callback=None
+        ):
+            return transcribe_video_time_range(
+                video_path, start_seconds, end_seconds, language_code, model,
+                whisper_options, adjust_timestamps, progress_callback, log_callback
+            )
+        
+        self.run_script(
+            transcribe_range_with_params, video_path, start_seconds, end_seconds, 
+            language_code, model, whisper_options, adjust_timestamps
+        )
 
 
 # ============================================================================

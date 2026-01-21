@@ -77,6 +77,24 @@ lang_code="${2:-en}"
 # Get model (default to "turbo" if not provided)
 model="${3:-turbo}"
 
+# -----------------------
+# Whisper Options (from environment or defaults)
+# -----------------------
+# These can be set by the calling Python script via environment variables
+WHISPER_MAX_LINE_WIDTH="${WHISPER_MAX_LINE_WIDTH:-42}"
+WHISPER_MAX_LINE_COUNT="${WHISPER_MAX_LINE_COUNT:-2}"
+WHISPER_BEAM_SIZE="${WHISPER_BEAM_SIZE:-5}"
+WHISPER_PATIENCE="${WHISPER_PATIENCE:-1.0}"
+WHISPER_BEST_OF="${WHISPER_BEST_OF:-5}"
+WHISPER_TEMPERATURE="${WHISPER_TEMPERATURE:-0.0}"
+WHISPER_NO_SPEECH_THRESHOLD="${WHISPER_NO_SPEECH_THRESHOLD:-0.6}"
+WHISPER_COMPRESSION_RATIO="${WHISPER_COMPRESSION_RATIO:-2.4}"
+WHISPER_LOGPROB_THRESHOLD="${WHISPER_LOGPROB_THRESHOLD:--1.0}"
+WHISPER_CONDITION_ON_PREVIOUS="${WHISPER_CONDITION_ON_PREVIOUS:-True}"
+WHISPER_INITIAL_PROMPT="${WHISPER_INITIAL_PROMPT:-}"
+WHISPER_WORD_TIMESTAMPS="${WHISPER_WORD_TIMESTAMPS:-True}"
+WHISPER_HIGHLIGHT_WORDS="${WHISPER_HIGHLIGHT_WORDS:-False}"
+
 # Normalize paths
 input_video_dir=$(dirname "$input_video")
 input_basename=$(basename "$input_video")
@@ -108,40 +126,46 @@ echo "Extracting and normalizing audio..."
 ffmpeg -i "$input_video" -ac 1 -ar 16000 -c:a pcm_s16le -af dynaudnorm "$audio_path" -loglevel warning -hide_banner 2>&1 || true
 
 echo "Transcribing with Whisper..."
-# Build whisper command, omit --language if auto-detect
-# Using optimized settings for best SRT quality:
-# - beam_size 5 (default)
-# - word_timestamps: Refines timestamps for more accurate subtitle timing
-# - max_line_width 42: Typical subtitle width (~2 lines, readable)
-# - max_line_count 2: Maximum 2 lines per subtitle (standard)
-# - condition_on_previous_text: Uses context from previous segments (default True)
-# - patience 1.0: Standard beam search patience (default)
-if [ "$lang_code" = "auto" ]; then
-  whisper "$audio_path" \
-    --model "$model" \
-    --fp16 False \
-    --output_format srt \
-    --beam_size 5 \
-    --word_timestamps True \
-    --max_line_width 42 \
-    --max_line_count 2 \
-    --condition_on_previous_text True \
-    --patience 1.0 \
-    --output_dir "$input_video_dir"
-else
-  whisper "$audio_path" \
-    --model "$model" \
-    --language "$lang_code" \
-    --fp16 False \
-    --output_format srt \
-    --beam_size 5 \
-    --word_timestamps True \
-    --max_line_width 42 \
-    --max_line_count 2 \
-    --condition_on_previous_text True \
-    --patience 1.0 \
-    --output_dir "$input_video_dir"
+# Build whisper command with configurable options
+# Options are set via environment variables or use defaults
+
+# Build the base command
+WHISPER_CMD=(
+  whisper "$audio_path"
+  --model "$model"
+  --fp16 False
+  --output_format srt
+  --output_dir "$input_video_dir"
+  --beam_size "$WHISPER_BEAM_SIZE"
+  --patience "$WHISPER_PATIENCE"
+  --best_of "$WHISPER_BEST_OF"
+  --temperature "$WHISPER_TEMPERATURE"
+  --word_timestamps "$WHISPER_WORD_TIMESTAMPS"
+  --max_line_width "$WHISPER_MAX_LINE_WIDTH"
+  --max_line_count "$WHISPER_MAX_LINE_COUNT"
+  --condition_on_previous_text "$WHISPER_CONDITION_ON_PREVIOUS"
+  --no_speech_threshold "$WHISPER_NO_SPEECH_THRESHOLD"
+  --compression_ratio_threshold "$WHISPER_COMPRESSION_RATIO"
+  --logprob_threshold "$WHISPER_LOGPROB_THRESHOLD"
+)
+
+# Add language if not auto-detect
+if [ "$lang_code" != "auto" ]; then
+  WHISPER_CMD+=(--language "$lang_code")
 fi
+
+# Add initial prompt if provided
+if [ -n "$WHISPER_INITIAL_PROMPT" ]; then
+  WHISPER_CMD+=(--initial_prompt "$WHISPER_INITIAL_PROMPT")
+fi
+
+# Add highlight_words if enabled
+if [ "$WHISPER_HIGHLIGHT_WORDS" = "True" ] || [ "$WHISPER_HIGHLIGHT_WORDS" = "true" ]; then
+  WHISPER_CMD+=(--highlight_words True)
+fi
+
+# Execute the command
+"${WHISPER_CMD[@]}"
 
 # Rename SRT file to match input video filename
 whisper_srt="$input_video_dir/${audio_stem}.srt"

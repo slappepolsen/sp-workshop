@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ...
 
+## [9.1.3] - 2026-01-21
+
+### Added
+
+- Whisper Advanced Options dialog with 15 configurable transcription parameters.
+- Subtitle formatting presets (Standard, Narrow, Wide, Custom) with manual line width/count controls.
+- Advanced Whisper settings: beam_size, patience, best_of, temperature, no_speech_threshold, compression_ratio_threshold, logprob_threshold.
+- Context and prompting controls: condition_on_previous_text, initial_prompt.
+- Word-level timestamps and highlight_words options.
+- Time-range transcription feature for transcribing specific video segments.
+- `TimeRangeTranscriptionDialog` with HH:MM:SS time pickers and timestamp adjustment option.
+- SRT timestamp offset adjustment function for time-range transcriptions.
+- Stop operation button with graceful shutdown (3-second timeout before force termination).
+- Browser-style tab navigation with "Main" and "Transcription" tabs.
+- Dedicated Transcription tab with file picker, language selection, and integrated logs.
+
+### Changed
+
+- Whisper options stored in `config.json` under `whisper_options` dictionary.
+- `whisper_auto.sh` accepts Whisper parameters via environment variables.
+- `transcribe_video()` passes whisper options from config to bash script.
+- Transcription functionality moved from section to dedicated tab.
+- Main window uses `QTabWidget` for tab-based navigation.
+- Worker thread enhanced with stop flag for operation cancellation.
+- Transcribe button color changed to pink (#d168a3).
+
 ## [9.1.2] - 2026-01-21
 
 ### Fixed
