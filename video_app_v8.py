@@ -42,7 +42,7 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QTextEdit, QFileDialog, QDialog,
     QLineEdit, QFormLayout, QMessageBox, QProgressBar, QGroupBox, QStyleFactory, QCheckBox, QStackedWidget, QTextBrowser, QComboBox,
-    QGraphicsDropShadowEffect, QTabWidget, QSpinBox, QDoubleSpinBox, QScrollArea, QTimeEdit
+    QGraphicsDropShadowEffect, QTabWidget, QSpinBox, QDoubleSpinBox, QScrollArea, QTimeEdit, QListWidget, QListWidgetItem, QTreeWidget, QTreeWidgetItem, QHeaderView, QMenu
 )
 from PyQt5.QtCore import QThread, pyqtSignal, Qt, QProcess, QUrl, QTime, QTimer
 from PyQt5.QtGui import QFont, QIcon, QPainter, QPen
@@ -104,6 +104,7 @@ def load_config() -> Dict:
         "setup_complete": False,
         "use_watermarks": True,
         "download_source": "tf1",
+        "whisper_output_format": "srt",
         "whisper_options": {
             "max_line_width": 42,
             "max_line_count": 2,
@@ -380,8 +381,16 @@ def detect_episode_or_scene(video_path: Path) -> tuple[str, Optional[float]]:
         return "scene", duration
 
 
-def open_in_lossless_cut(video_path: Path, log_callback=None) -> bool:
-    """Open video file in LosslessCut application (cross-platform)."""
+def open_in_lossless_cut(video_paths: List[Path], log_callback=None) -> bool:
+    """Open video file(s) in LosslessCut application (cross-platform).
+    
+    Args:
+        video_paths: List of Path objects for video files to open
+        log_callback: Optional logging function
+        
+    Returns:
+        True if successful, False otherwise
+    """
     lossless_cut = get_app_executable("LosslessCut")
     
     if not lossless_cut:
@@ -391,19 +400,24 @@ def open_in_lossless_cut(video_path: Path, log_callback=None) -> bool:
     
     try:
         system = platform.system()
+        path_strings = [str(p) for p in video_paths]
         
         if system == "Darwin":
             # macOS: use 'open -a' for .app bundles
-            subprocess.run(["open", "-a", str(lossless_cut), str(video_path)])
+            subprocess.run(["open", "-a", str(lossless_cut), *path_strings])
         elif system == "Windows":
-            # Windows: run the executable directly with the file as argument
-            subprocess.Popen([str(lossless_cut), str(video_path)])
+            # Windows: run the executable directly with the files as arguments
+            subprocess.Popen([str(lossless_cut), *path_strings])
         else:
             # Linux: run the executable directly
-            subprocess.Popen([str(lossless_cut), str(video_path)])
+            subprocess.Popen([str(lossless_cut), *path_strings])
         
         if log_callback:
-            log_callback(f"Opened {video_path.name} in LosslessCut")
+            count = len(video_paths)
+            if count == 1:
+                log_callback(f"Opened {video_paths[0].name} in LosslessCut")
+            else:
+                log_callback(f"Opened {count} files in LosslessCut")
         return True
     except Exception as e:
         if log_callback:
@@ -822,6 +836,7 @@ def clean_subtitles(subtitles_dir: Path, progress_callback=None, log_callback=No
 
 def translate_subtitles(selected_srt_files: List[Path], api_key: Optional[str] = None, 
                        target_language: str = "English", use_iso639: bool = False,
+                       api_key2: Optional[str] = None,
                        progress_callback=None, log_callback=None) -> bool:
     """Translate selected subtitle files using gemini-srt-translator.
     
@@ -830,6 +845,7 @@ def translate_subtitles(selected_srt_files: List[Path], api_key: Optional[str] =
         api_key: Optional API key (uses env var if available)
         target_language: Target language for translation (default: English)
         use_iso639: Whether to add ISO 639 language suffix to output filename
+        api_key2: Optional second API key for translation
         progress_callback: Callback for progress updates
         log_callback: Callback for log messages
     """
@@ -887,6 +903,10 @@ def translate_subtitles(selected_srt_files: List[Path], api_key: Optional[str] =
             # Build command - NEVER use -k flag, always set environment variable
             # (gst will automatically use GEMINI_API_KEY or GST_API_KEY if set)
             base_cmd = ["translate", "-i", str(og_file), "-l", target_language, "-o", str(srt_file)]
+            
+            # Add second API key if provided
+            if api_key2:
+                base_cmd.extend(["-k2", api_key2])
             
             # Handle Python module format (e.g., "python3 -m gemini_srt_translator")
             if " -m " in gst_cmd:
@@ -1294,121 +1314,391 @@ def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_
     return success_count > 0
 
 
-def remux_mkv_with_srt_batch(folder_path: Path, progress_callback=None, log_callback=None) -> bool:
-    """Batch remux MKV files with matching SRT files."""
+def analyze_tracks(video_path: Path, log_callback=None) -> Dict:
+    """Analyze video file tracks using mkvmerge or ffprobe.
+    
+    Args:
+        video_path: Path to video file
+        log_callback: Optional callback for logging
+    
+    Returns:
+        Dictionary with track info: {
+            'video': [{'track_id': int, 'codec': str, 'resolution': str, ...}],
+            'audio': [{'track_id': int, 'codec': str, 'channels': int, 'sample_rate': int, 'language': str, ...}],
+            'subtitles': [{'track_id': int, 'codec': str, 'language': str, ...}]
+        }
+    """
+    tracks = {'video': [], 'audio': [], 'subtitles': []}
+    
+    if not video_path.exists():
+        if log_callback:
+            log_callback(f"Error: File not found: {video_path}")
+        return tracks
+    
+    try:
+        # Try mkvmerge first (best for MKV files)
+        if video_path.suffix.lower() == '.mkv':
+            try:
+                cmd = ['mkvmerge', '--identify-verbose', str(video_path)]
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+                
+                if result.returncode == 0:
+                    current_track = None
+                    track_info = {}
+                    
+                    for line in result.stdout.split('\n'):
+                        line = line.strip()
+                        if line.startswith('Track ID'):
+                            if current_track and track_info:
+                                track_type = track_info.get('type', '').lower()
+                                if 'video' in track_type:
+                                    tracks['video'].append(track_info)
+                                elif 'audio' in track_type:
+                                    tracks['audio'].append(track_info)
+                                elif 'subtitles' in track_type or 'subtitle' in track_type:
+                                    tracks['subtitles'].append(track_info)
+                            
+                            # New track
+                            track_id_match = re.search(r'(\d+):', line)
+                            if track_id_match:
+                                current_track = int(track_id_match.group(1))
+                                track_info = {'track_id': current_track}
+                        
+                        elif current_track is not None:
+                            if ':' in line:
+                                key, value = line.split(':', 1)
+                                key = key.strip().lower().replace(' ', '_')
+                                value = value.strip()
+                                
+                                if key == 'type':
+                                    track_info['type'] = value
+                                elif key == 'codec':
+                                    track_info['codec'] = value
+                                elif key == 'channels':
+                                    try:
+                                        track_info['channels'] = int(value)
+                                    except ValueError:
+                                        pass
+                                elif key == 'sample_rate':
+                                    track_info['sample_rate'] = value
+                                elif key == 'language':
+                                    track_info['language'] = value
+                                elif 'video' in key and 'pixel_dimensions' in key:
+                                    track_info['resolution'] = value
+                    
+                    # Add last track
+                    if current_track and track_info:
+                        track_type = track_info.get('type', '').lower()
+                        if 'video' in track_type:
+                            tracks['video'].append(track_info)
+                        elif 'audio' in track_type:
+                            tracks['audio'].append(track_info)
+                        elif 'subtitles' in track_type or 'subtitle' in track_type:
+                            tracks['subtitles'].append(track_info)
+                    
+                    return tracks
+            except (subprocess.TimeoutExpired, FileNotFoundError):
+                # Fall back to ffprobe
+                pass
+        
+        # Use ffprobe (works for all formats)
+        cmd = [
+            'ffprobe', '-v', 'quiet', '-print_format', 'json',
+            '-show_streams', str(video_path)
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        
+        if result.returncode == 0:
+            data = json.loads(result.stdout)
+            
+            for stream in data.get('streams', []):
+                stream_type = stream.get('codec_type', '')
+                track_info = {
+                    'track_id': stream.get('index', 0),
+                    'codec': stream.get('codec_name', 'unknown'),
+                    'language': stream.get('tags', {}).get('language', 'unknown'),
+                }
+                
+                if stream_type == 'video':
+                    width = stream.get('width', 0)
+                    height = stream.get('height', 0)
+                    if width and height:
+                        track_info['resolution'] = f"{width}x{height}"
+                    tracks['video'].append(track_info)
+                    
+                elif stream_type == 'audio':
+                    channels = stream.get('channels', 0)
+                    sample_rate = stream.get('sample_rate', 0)
+                    track_info['channels'] = channels
+                    track_info['sample_rate'] = sample_rate
+                    tracks['audio'].append(track_info)
+                    
+                elif stream_type == 'subtitle':
+                    codec = stream.get('codec_name', 'unknown')
+                    # Determine format
+                    if codec == 'subrip' or codec == 'srt':
+                        track_info['format'] = 'SRT'
+                    elif codec == 'webvtt' or codec == 'vtt':
+                        track_info['format'] = 'VTT'
+                    else:
+                        track_info['format'] = codec.upper()
+                    tracks['subtitles'].append(track_info)
+        
+        return tracks
+        
+    except Exception as e:
+        if log_callback:
+            log_callback(f"Error analyzing tracks: {e}")
+        return tracks
+
+
+def split_audio_channels(video_path: Path, output_dir: Path, 
+                        channel_count: int, log_callback=None) -> bool:
+    """Extract individual audio channels from video.
+    
+    Args:
+        video_path: Path to video file
+        output_dir: Directory to save extracted channel files
+        channel_count: Number of channels detected (1-6 or more)
+        log_callback: Optional callback for logging
+    
+    Returns:
+        True if successful, False otherwise
+    """
+    if not video_path.exists():
+        if log_callback:
+            log_callback(f"Error: File not found: {video_path}")
+        return False
+    
+    output_dir.mkdir(parents=True, exist_ok=True)
+    base_name = video_path.stem
+    success_count = 0
+    
+    try:
+        # Extract audio first, then split channels
+        temp_audio = output_dir / f"{base_name}_temp_audio.wav"
+        
+        # First extract audio to WAV
+        cmd_extract = [
+            'ffmpeg', '-i', str(video_path),
+            '-vn', '-acodec', 'pcm_s16le', '-ar', '48000',
+            '-y', str(temp_audio)
+        ]
+        
+        result = subprocess.run(cmd_extract, capture_output=True, text=True, timeout=300)
+        if result.returncode != 0:
+            if log_callback:
+                log_callback(f"Error extracting audio: {result.stderr}")
+            return False
+        
+        # Now split into individual channels
+        for channel in range(channel_count):
+            channel_num = channel + 1  # 1-indexed
+            output_file = output_dir / f"{base_name}_channel_{channel_num}.wav"
+            
+            # Extract individual channel using pan filter
+            # pan=mono|c0=c{channel} extracts channel {channel} to mono output
+            cmd_split = [
+                'ffmpeg', '-i', str(temp_audio),
+                '-af', f'pan=mono|c0=c{channel}',
+                '-y', str(output_file)
+            ]
+            
+            result = subprocess.run(cmd_split, capture_output=True, text=True, timeout=300)
+            
+            if result.returncode == 0 and output_file.exists():
+                success_count += 1
+                if log_callback:
+                    log_callback(f"  ✓ Extracted channel {channel_num}: {output_file.name}")
+            else:
+                if log_callback:
+                    log_callback(f"  ✗ Failed to extract channel {channel_num}")
+        
+        # Clean up temp file
+        if temp_audio.exists():
+            temp_audio.unlink()
+        
+        return success_count > 0
+        
+    except Exception as e:
+        if log_callback:
+            log_callback(f"Error splitting audio channels: {e}")
+        return False
+
+
+def convert_audio_format(video_path: Path, output_path: Path,
+                        target_format: str, log_callback=None) -> bool:
+    """Convert audio track to target format (MP3, AAC, etc.).
+    
+    Args:
+        video_path: Path to input video file
+        output_path: Path to output file
+        target_format: 'mp3', 'aac', or 'keep'
+        log_callback: Optional callback for logging
+    
+    Returns:
+        True if successful, False otherwise
+    """
+    if target_format == 'keep':
+        return True  # No conversion needed
+    
+    if not video_path.exists():
+        if log_callback:
+            log_callback(f"Error: File not found: {video_path}")
+        return False
+    
+    try:
+        if target_format == 'mp3':
+            cmd = [
+                'ffmpeg', '-i', str(video_path),
+                '-vn', '-acodec', 'libmp3lame', '-b:a', '192k',
+                '-ar', '44100', '-y', str(output_path)
+            ]
+        elif target_format == 'aac':
+            cmd = [
+                'ffmpeg', '-i', str(video_path),
+                '-vn', '-acodec', 'aac', '-b:a', '192k',
+                '-ar', '48000', '-y', str(output_path)
+            ]
+        else:
+            if log_callback:
+                log_callback(f"Error: Unsupported format: {target_format}")
+            return False
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        
+        if result.returncode == 0 and output_path.exists():
+            if log_callback:
+                log_callback(f"  ✓ Converted to {target_format.upper()}: {output_path.name}")
+            return True
+        else:
+            if log_callback:
+                log_callback(f"  ✗ Conversion failed: {result.stderr}")
+            return False
+            
+    except Exception as e:
+        if log_callback:
+            log_callback(f"Error converting audio: {e}")
+        return False
+
+
+def remux_mkv_with_srt_batch(folder_path: Path, output_format: str = "mkv", 
+                             progress_callback=None, log_callback=None) -> bool:
+    """Batch remux video files (MKV/MP4) with matching subtitle files (SRT/VTT).
+    
+    Args:
+        folder_path: Folder containing video and subtitle files
+        output_format: Output format ("mkv" or "mp4")
+        progress_callback: Optional callback for progress updates
+        log_callback: Optional callback for logging (minimal - errors only)
+    """
     if not folder_path.exists():
         if log_callback:
             log_callback(f"Error: Folder not found: {folder_path}")
         return False
     
-    mkv_files = sorted(folder_path.glob("*.mkv"))
+    # Find video files (MKV and MP4)
+    video_files = sorted(list(folder_path.glob("*.mkv")) + list(folder_path.glob("*.mp4")))
     
-    if not mkv_files:
+    if not video_files:
         if log_callback:
-            log_callback("No MKV files found in folder.")
+            log_callback("Error: No MKV or MP4 files found in folder.")
         return False
     
     success_count = 0
-    total = len(mkv_files)
+    total = len(video_files)
+    errors = []
     
-    for idx, mkv_file in enumerate(mkv_files, start=1):
-        base = mkv_file.stem
-        # Try to find matching SRT file
+    for idx, video_file in enumerate(video_files, start=1):
+        base = video_file.stem
+        # Try to find matching subtitle file (SRT or VTT)
         # First try exact match, then try without _01, _02 suffixes (LosslessCut scenes)
         srt_file = folder_path / f"{base}.srt"
-        if not srt_file.exists():
-            # Remove _01, _02 suffixes that LosslessCut adds to scenes
+        vtt_file = folder_path / f"{base}.vtt"
+        subtitle_file = None
+        subtitle_format = None
+        
+        if srt_file.exists():
+            subtitle_file = srt_file
+            subtitle_format = "srt"
+        elif vtt_file.exists():
+            subtitle_file = vtt_file
+            subtitle_format = "vtt"
+        else:
+            # Try without _01, _02 suffixes
             base_clean = re.sub(r'_(\d+)$', '', base)
             srt_file = folder_path / f"{base_clean}.srt"
+            vtt_file = folder_path / f"{base_clean}.vtt"
+            if srt_file.exists():
+                subtitle_file = srt_file
+                subtitle_format = "srt"
+            elif vtt_file.exists():
+                subtitle_file = vtt_file
+                subtitle_format = "vtt"
         
         if progress_callback:
-            progress_callback(idx, total, mkv_file.name)
+            progress_callback(idx, total, video_file.name)
         
-        if not srt_file.exists():
-            if log_callback:
-                log_callback(f"Skipping {mkv_file.name} - no matching SRT file found")
+        if not subtitle_file or not subtitle_file.exists():
+            errors.append(f"{video_file.name}: no matching SRT/VTT file")
             continue
         
-        output_file = folder_path / f"{base}_remuxed.mkv"
+        # Determine output filename
+        output_ext = output_format.lower()
+        output_file = folder_path / f"{base}_remuxed.{output_ext}"
         
         if output_file.exists():
-            if log_callback:
-                log_callback(f"Skipping {mkv_file.name} - remuxed file already exists")
+            # Skip silently - no log needed
             continue
         
-        if log_callback:
-            log_callback(f"Remuxing: {mkv_file.name} + {srt_file.name}")
-        
+        # Build FFmpeg command
         cmd = [
             "ffmpeg", "-y",
-            "-i", str(mkv_file),
-            "-i", str(srt_file),
+            "-i", str(video_file),
+            "-i", str(subtitle_file),
             "-c", "copy",
-            "-c:s", "srt",
-            str(output_file)
+            "-c:s", subtitle_format,
         ]
         
-        # Stream FFmpeg output in real-time
+        # Add output file
+        cmd.append(str(output_file))
+        
+        # Run remux (minimal logging - only on error)
         try:
-            process = subprocess.Popen(
+            result = subprocess.run(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
-                bufsize=1,
-                universal_newlines=True
+                timeout=300
             )
             
-            # Read stderr line by line (FFmpeg outputs progress to stderr)
-            error_lines = []
-            while True:
-                line = process.stderr.readline()
-                if not line:
-                    break
-                
-                line = line.strip()
-                if not line:
-                    continue
-                
-                error_lines.append(line)
-                
-                # Log progress information
-                if "Stream #" in line or "Subtitle:" in line or "Output #" in line:
-                    if log_callback:
-                        log_callback(f"    {line}")
-                elif "Error" in line or "error" in line.lower():
-                    if log_callback:
-                        log_callback(f"    ⚠ {line}")
-            
-            # Wait for process to complete
-            returncode = process.wait()
-            
-            if returncode == 0 and output_file.exists():
+            if result.returncode == 0 and output_file.exists():
                 success_count += 1
-                if log_callback:
-                    log_callback(f"  ✓ Remuxed: {output_file.name}")
             else:
-                if log_callback:
-                    log_callback(f"  ✗ Failed: {mkv_file.name}")
-                    if returncode != 0:
-                        log_callback(f"    Return code: {returncode}")
-                    if error_lines:
-                        log_callback(f"    FFmpeg errors:")
-                        for err_line in error_lines[-5:]:
-                            log_callback(f"      {err_line}")
+                # Only log errors
+                error_msg = result.stderr.split('\n')[-10:] if result.stderr else ["Unknown error"]
+                errors.append(f"{video_file.name}: {'; '.join(error_msg)}")
         
+        except subprocess.TimeoutExpired:
+            errors.append(f"{video_file.name}: timeout")
         except Exception as e:
-            if log_callback:
-                log_callback(f"  ✗ Exception while remuxing {mkv_file.name}: {e}")
-                log_callback(f"    Traceback: {traceback.format_exc()}")
+            errors.append(f"{video_file.name}: {str(e)}")
     
-    if log_callback:
-        log_callback(f"\nRemux complete. Remuxed {success_count}/{total} files.")
+    # Minimal logging - only show errors if any
+    if errors and log_callback:
+        log_callback("Remux errors:")
+        for error in errors:
+            log_callback(f"  ✗ {error}")
+    
+    # Success summary (one line)
+    if log_callback and success_count > 0:
+        log_callback(f"✓ Remuxed {success_count}/{total} files")
     
     return success_count > 0
 
 
-def transcribe_video(video_path: Path, language_code: str, model: str, whisper_options: Dict = None, progress_callback=None, log_callback=None) -> bool:
+def transcribe_video(video_path: Path, language_code: str, model: str, whisper_options: Dict = None, output_format: str = "srt", progress_callback=None, log_callback=None) -> bool:
     """Transcribe video using whisper_auto.sh script."""
     if not video_path.exists():
         if log_callback:
@@ -1425,7 +1715,7 @@ def transcribe_video(video_path: Path, language_code: str, model: str, whisper_o
     try:
         if log_callback:
             log_callback(f"Starting transcription of: {video_path.name}")
-            log_callback(f"Language: {language_code}, Model: {model}")
+            log_callback(f"Language: {language_code}, Model: {model}, Format: {output_format}")
         
         # Prepare environment variables with whisper options
         env = os.environ.copy()
@@ -1444,9 +1734,9 @@ def transcribe_video(video_path: Path, language_code: str, model: str, whisper_o
             env["WHISPER_WORD_TIMESTAMPS"] = str(whisper_options.get("word_timestamps", True))
             env["WHISPER_HIGHLIGHT_WORDS"] = str(whisper_options.get("highlight_words", False))
         
-        # Run the script with video path, language code, and model as arguments
+        # Run the script with video path, language code, model, and output format as arguments
         result = subprocess.run(
-            ["bash", str(script_path), str(video_path), language_code, model],
+            ["bash", str(script_path), str(video_path), language_code, model, output_format],
             capture_output=True,
             text=True,
             env=env
@@ -1559,6 +1849,7 @@ def transcribe_video_time_range(
     language_code: str,
     model: str,
     whisper_options: Dict = None,
+    output_format: str = "srt",
     adjust_timestamps: bool = True,
     progress_callback=None, 
     log_callback=None
@@ -1572,6 +1863,7 @@ def transcribe_video_time_range(
         language_code: Language code for transcription
         model: Whisper model to use
         whisper_options: Dictionary of whisper options
+        output_format: Whisper output format (srt, vtt, txt, tsv, json, all)
         adjust_timestamps: If True, adjust SRT timestamps to match original video
         progress_callback: Callback for progress updates
         log_callback: Callback for logging
@@ -1631,6 +1923,17 @@ def transcribe_video_time_range(
         if log_callback:
             log_callback("Transcribing audio segment with Whisper...")
         
+        # Get the whisper_auto.sh script path
+        script_path = Path(__file__).parent / "whisper_auto.sh"
+        
+        if not script_path.exists():
+            if log_callback:
+                log_callback(f"Error: whisper_auto.sh not found at {script_path}")
+            # Clean up temp file
+            if temp_audio.exists():
+                temp_audio.unlink()
+            return False
+        
         # Prepare environment variables with whisper options
         env = os.environ.copy()
         if whisper_options:
@@ -1648,23 +1951,13 @@ def transcribe_video_time_range(
             env["WHISPER_WORD_TIMESTAMPS"] = str(whisper_options.get("word_timestamps", True))
             env["WHISPER_HIGHLIGHT_WORDS"] = str(whisper_options.get("highlight_words", False))
         
-        # Build whisper command
-        whisper_cmd = ["whisper", str(temp_audio), "--model", model, "--output_format", "srt", "--output_dir", str(video_dir)]
-        
-        if language_code != "auto":
-            whisper_cmd.extend(["--language", language_code])
-        
-        # Add whisper options from environment
-        if whisper_options:
-            whisper_cmd.extend([
-                "--beam_size", str(whisper_options.get("beam_size", 5)),
-                "--patience", str(whisper_options.get("patience", 1.0)),
-                "--max_line_width", str(whisper_options.get("max_line_width", 42)),
-                "--max_line_count", str(whisper_options.get("max_line_count", 2)),
-                "--word_timestamps", str(whisper_options.get("word_timestamps", True)),
-            ])
-        
-        result = subprocess.run(whisper_cmd, capture_output=True, text=True, env=env)
+        # Use whisper_auto.sh script (same as regular transcription)
+        result = subprocess.run(
+            ["bash", str(script_path), str(temp_audio), language_code, model, output_format],
+            capture_output=True,
+            text=True,
+            env=env
+        )
         
         if log_callback and result.stdout:
             log_callback(result.stdout)
@@ -2559,6 +2852,129 @@ class LanguageDialog(QDialog):
         return self.language_combo.currentData()
 
 
+class MediaInfoDialog(QDialog):
+    """Dialog showing detailed media information for a video file."""
+    
+    def __init__(self, parent=None, video_path: Path = None):
+        super().__init__(parent)
+        self.video_path = video_path
+        self.setWindowTitle(f"Media Info - {video_path.name if video_path else 'Unknown'}")
+        self.setMinimumSize(700, 500)
+        
+        layout = QVBoxLayout()
+        
+        # File path
+        path_label = QLabel(f"File: {video_path}")
+        path_label.setStyleSheet("font-weight: bold; color: #d168a3;")
+        layout.addWidget(path_label)
+        
+        # Track information
+        info_text = QTextEdit()
+        info_text.setReadOnly(True)
+        info_text.setFont(QFont("Courier New", 10))
+        info_text.setStyleSheet("""
+            QTextEdit {
+                background-color: #f5f5f5;
+                border: 1px solid #ddd;
+                border-radius: 3px;
+            }
+        """)
+        
+        # Analyze tracks and format info
+        if video_path and video_path.exists():
+            tracks = analyze_tracks(video_path)
+            info_lines = []
+            
+            # File info
+            try:
+                stat = video_path.stat()
+                size_mb = stat.st_size / (1024 * 1024)
+                info_lines.append(f"File Size: {size_mb:.2f} MB")
+            except:
+                pass
+            
+            info_lines.append("")
+            info_lines.append("=" * 60)
+            info_lines.append("VIDEO TRACKS")
+            info_lines.append("=" * 60)
+            
+            if tracks['video']:
+                for vid in tracks['video']:
+                    info_lines.append(f"\nTrack ID: {vid.get('track_id', 'N/A')}")
+                    info_lines.append(f"  Codec: {vid.get('codec', 'unknown')}")
+                    info_lines.append(f"  Resolution: {vid.get('resolution', 'unknown')}")
+                    info_lines.append(f"  Language: {vid.get('language', 'unknown')}")
+            else:
+                info_lines.append("\nNo video tracks found")
+            
+            info_lines.append("")
+            info_lines.append("=" * 60)
+            info_lines.append("AUDIO TRACKS")
+            info_lines.append("=" * 60)
+            
+            if tracks['audio']:
+                for aud in tracks['audio']:
+                    info_lines.append(f"\nTrack ID: {aud.get('track_id', 'N/A')}")
+                    info_lines.append(f"  Codec: {aud.get('codec', 'unknown')}")
+                    info_lines.append(f"  Channels: {aud.get('channels', 0)}")
+                    info_lines.append(f"  Sample Rate: {aud.get('sample_rate', 'unknown')} Hz")
+                    info_lines.append(f"  Language: {aud.get('language', 'unknown')}")
+            else:
+                info_lines.append("\nNo audio tracks found")
+            
+            info_lines.append("")
+            info_lines.append("=" * 60)
+            info_lines.append("SUBTITLE TRACKS")
+            info_lines.append("=" * 60)
+            
+            if tracks['subtitles']:
+                for sub in tracks['subtitles']:
+                    info_lines.append(f"\nTrack ID: {sub.get('track_id', 'N/A')}")
+                    info_lines.append(f"  Format: {sub.get('format', sub.get('codec', 'unknown'))}")
+                    info_lines.append(f"  Language: {sub.get('language', 'unknown')}")
+            else:
+                info_lines.append("\nNo embedded subtitle tracks found")
+            
+            # Try to get more detailed info using ffprobe
+            try:
+                result = subprocess.run(
+                    ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", str(video_path)],
+                    capture_output=True, text=True, timeout=10
+                )
+                if result.returncode == 0:
+                    import json
+                    probe_data = json.loads(result.stdout)
+                    if 'format' in probe_data:
+                        fmt = probe_data['format']
+                        info_lines.append("")
+                        info_lines.append("=" * 60)
+                        info_lines.append("CONTAINER INFO")
+                        info_lines.append("=" * 60)
+                        info_lines.append(f"Format: {fmt.get('format_name', 'unknown')}")
+                        info_lines.append(f"Duration: {fmt.get('duration', 'unknown')} seconds")
+                        if 'bit_rate' in fmt:
+                            bitrate_mbps = int(fmt['bit_rate']) / 1000000
+                            info_lines.append(f"Bitrate: {bitrate_mbps:.2f} Mbps")
+            except:
+                pass
+            
+            info_text.setText('\n'.join(info_lines))
+        else:
+            info_text.setText("File not found or cannot be analyzed.")
+        
+        layout.addWidget(info_text)
+        
+        # Close button
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        button_layout.addWidget(close_btn)
+        layout.addLayout(button_layout)
+        
+        self.setLayout(layout)
+
+
 class WhisperModelDialog(QDialog):
     """Dialog to ask if user already has a Whisper model installed."""
     
@@ -2731,7 +3147,7 @@ class TimeRangeTranscriptionDialog(QDialog):
         """Browse for video/audio file."""
         file_path, _ = QFileDialog.getOpenFileName(
             self, "Select Video or Audio File",
-            str(Path.home()),
+            str(get_downloads_dir()),
             "Media Files (*.mkv *.mp4 *.mov *.avi *.mp3 *.wav *.m4a);;All Files (*)"
         )
         if file_path:
@@ -2841,6 +3257,14 @@ class SettingsDialog(QDialog):
         legacy_label = QLabel("API Key (Legacy):")
         layout.addRow(legacy_label, self.api_key_input)
         
+        # Second API key input (optional, for multi-key translation)
+        self.api_key2_input = QLineEdit()
+        self.api_key2_input.setText(self.config.get("api_key2", ""))
+        self.api_key2_input.setEchoMode(QLineEdit.Password)
+        self.api_key2_input.setPlaceholderText("Optional: Second API key for translation")
+        api_key2_label = QLabel("API Key 2 (Optional):")
+        layout.addRow(api_key2_label, self.api_key2_input)
+        
         # Use watermarks checkbox
         self.use_watermarks_checkbox = QCheckBox("Use watermarks")
         self.use_watermarks_checkbox.setChecked(self.config.get("use_watermarks", True))
@@ -2909,25 +3333,6 @@ class SettingsDialog(QDialog):
         self.lesbian_flag_checkbox.stateChanged.connect(self.toggle_lesbian_flag_theme)
         layout.addRow("", self.lesbian_flag_checkbox)
         
-        # Whisper Model Selection
-        whisper_info = QLabel(
-            "Turbo is the best model for accuracy and speed, but it's also the largest (~1.5 GB). "
-            "The model will be downloaded automatically on first use."
-        )
-        whisper_info.setWordWrap(True)
-        whisper_info.setStyleSheet("color: #666;")
-        layout.addRow("", whisper_info)
-        
-        self.whisper_model_combo = QComboBox()
-        self.whisper_model_combo.addItems(["tiny", "base", "small", "medium", "large", "turbo"])
-        current_model = self.config.get("whisper_model", "turbo")
-        index = self.whisper_model_combo.findText(current_model)
-        if index >= 0:
-            self.whisper_model_combo.setCurrentIndex(index)
-        else:
-            self.whisper_model_combo.setCurrentText("turbo")
-        layout.addRow("Whisper Model:", self.whisper_model_combo)
-        
         # Set initial state
         self.toggle_watermark_fields()
         
@@ -2976,10 +3381,10 @@ class SettingsDialog(QDialog):
     def save_settings(self):
         """Save settings and close dialog."""
         self.config["api_key"] = self.api_key_input.text()
+        self.config["api_key2"] = self.api_key2_input.text()
         self.config["watermark_720p"] = self.watermark_720p_input.text()
         self.config["watermark_1080p"] = self.watermark_1080p_input.text()
         self.config["use_watermarks"] = self.use_watermarks_checkbox.isChecked()
-        self.config["whisper_model"] = self.whisper_model_combo.currentText()
         self.config["translation_target_language"] = self.translation_target_combo.currentText()
         self.config["use_iso639_suffixes"] = self.iso639_checkbox.isChecked()
         save_config(self.config)
@@ -3259,7 +3664,7 @@ class VideoProcessingApp(QMainWindow):
         super().__init__()
         self.config = load_config()
         self.worker = None
-        self.remux_folder_path = None
+        self.remux_selected_files = []  # Initialize selected files list
         
         # Set window icon
         self.setWindowIcon(get_app_icon())
@@ -3454,6 +3859,53 @@ class VideoProcessingApp(QMainWindow):
         lang_row.addStretch()
         file_layout.addLayout(lang_row)
         
+        # Output format selector
+        format_row = QHBoxLayout()
+        format_label = QLabel("Output Format:")
+        format_label.setFixedWidth(120)
+        self.transcribe_format_combo = QComboBox()
+        formats = [
+            ("SRT (Subtitles)", "srt"),
+            ("VTT (WebVTT)", "vtt"),
+            ("TXT (Plain Text)", "txt"),
+            ("TSV (Tab-Separated)", "tsv"),
+            ("JSON (Detailed)", "json"),
+            ("All Formats", "all"),
+        ]
+        for name, code in formats:
+            self.transcribe_format_combo.addItem(name, code)
+        # Default to SRT
+        default_format = self.config.get("whisper_output_format", "srt")
+        format_index = self.transcribe_format_combo.findData(default_format)
+        if format_index >= 0:
+            self.transcribe_format_combo.setCurrentIndex(format_index)
+        format_row.addWidget(format_label, 0)
+        format_row.addWidget(self.transcribe_format_combo, 1)
+        format_row.addStretch()
+        file_layout.addLayout(format_row)
+        
+        # Whisper Model selector
+        model_row = QHBoxLayout()
+        model_label = QLabel("Whisper Model:")
+        model_label.setFixedWidth(120)
+        self.transcribe_model_combo = QComboBox()
+        self.transcribe_model_combo.addItems(["tiny", "base", "small", "medium", "large", "turbo"])
+        current_model = self.config.get("whisper_model", "turbo")
+        model_index = self.transcribe_model_combo.findText(current_model)
+        if model_index >= 0:
+            self.transcribe_model_combo.setCurrentIndex(model_index)
+        else:
+            self.transcribe_model_combo.setCurrentText("turbo")
+        # Save model when changed
+        self.transcribe_model_combo.currentTextChanged.connect(self.save_whisper_model)
+        model_info = QLabel("(Turbo recommended for best accuracy/speed, ~1.5 GB)")
+        model_info.setStyleSheet("color: #666; font-size: 10px;")
+        model_row.addWidget(model_label, 0)
+        model_row.addWidget(self.transcribe_model_combo, 1)
+        model_row.addWidget(model_info, 1)
+        model_row.addStretch()
+        file_layout.addLayout(model_row)
+        
         file_group.setLayout(file_layout)
         layout.addWidget(file_group)
         
@@ -3560,6 +4012,13 @@ class VideoProcessingApp(QMainWindow):
         tab.setLayout(layout)
         return tab
     
+    def save_whisper_model(self, model: str):
+        """Save Whisper model selection to config."""
+        config = load_config()
+        config["whisper_model"] = model
+        save_config(config)
+        self.config["whisper_model"] = model
+    
     def browse_transcribe_file(self):
         """Browse for file to transcribe."""
         file_path, _ = QFileDialog.getOpenFileName(
@@ -3585,9 +4044,11 @@ class VideoProcessingApp(QMainWindow):
         # Get language from combo
         language_code = self.transcribe_language_combo.currentData()
         
-        # Get model and whisper options from config
+        # Get model from combo (saved to config automatically)
+        model = self.transcribe_model_combo.currentText()
+        
+        # Get whisper options from config
         config = load_config()
-        model = config.get("whisper_model", "turbo")
         whisper_options = config.get("whisper_options", {})
         
         # Check if this is first time using transcription
@@ -3611,9 +4072,12 @@ class VideoProcessingApp(QMainWindow):
             else:
                 self.transcribe_log(f"Will download Whisper model '{model}' on first use.")
         
+        # Get output format from combo
+        output_format = self.transcribe_format_combo.currentData()
+        
         self.transcribe_log(f"Starting transcription of: {video_path.name}")
         lang_display = "Auto-detect" if language_code == "auto" else language_code
-        self.transcribe_log(f"Language: {lang_display}, Model: {model}")
+        self.transcribe_log(f"Language: {lang_display}, Model: {model}, Format: {output_format}")
         
         # Show progress bar and stop button
         self.transcribe_progress_bar.setVisible(True)
@@ -3621,15 +4085,15 @@ class VideoProcessingApp(QMainWindow):
         self.transcribe_stop_btn.setEnabled(True)
         self.transcribe_progress_bar.setRange(0, 0)  # Indeterminate
         
-        # Run transcription with language, model, and whisper options
-        def transcribe_with_params(video_path, language_code, model, whisper_options, progress_callback=None, log_callback=None):
-            return transcribe_video(video_path, language_code, model, whisper_options, progress_callback, log_callback)
+        # Run transcription with language, model, whisper options, and output format
+        def transcribe_with_params(video_path, language_code, model, whisper_options, output_format, progress_callback=None, log_callback=None):
+            return transcribe_video(video_path, language_code, model, whisper_options, output_format, progress_callback, log_callback)
         
         # Use custom callbacks for the tab
         def tab_log_callback(msg):
             self.transcribe_log(msg)
         
-        self.worker = ScriptWorker(transcribe_with_params, video_path, language_code, model, whisper_options)
+        self.worker = ScriptWorker(transcribe_with_params, video_path, language_code, model, whisper_options, output_format)
         self.worker.log_message.connect(tab_log_callback)
         self.worker.finished.connect(self.on_transcribe_finished)
         self.worker.start()
@@ -3651,6 +4115,749 @@ class VideoProcessingApp(QMainWindow):
         else:
             self.transcribe_log("✗ Transcription failed. Check log for details.")
         self.worker = None
+    
+    def create_remuxing_tab(self):
+        """Create the dedicated remuxing tab."""
+        tab = QWidget()
+        layout = QVBoxLayout()
+        layout.setSpacing(15)
+        
+        # Header
+        header_label = QLabel("Remuxing Hub")
+        header_label.setFont(QFont("Arial", 14, QFont.Bold))
+        layout.addWidget(header_label)
+        
+        desc_label = QLabel(
+            "Combine video files (MKV/MP4) with subtitle files (SRT/VTT), split audio channels, "
+            "and convert audio formats. Use track analysis to see available tracks before remuxing."
+        )
+        desc_label.setWordWrap(True)
+        desc_label.setStyleSheet("color: #666;")
+        layout.addWidget(desc_label)
+        
+        # File management
+        file_group = QGroupBox("Files")
+        file_layout = QVBoxLayout()
+        
+        # Initialize selected files list and file configs
+        self.remux_selected_files = []
+        self.remux_file_configs = {}  # Store per-file configuration
+        
+        # Buttons row
+        buttons_row = QHBoxLayout()
+        add_files_btn = QPushButton("Add Files...")
+        add_files_btn.clicked.connect(self.add_remux_files)
+        remove_files_btn = QPushButton("Remove Selected")
+        remove_files_btn.clicked.connect(self.remove_remux_files)
+        clear_files_btn = QPushButton("Clear All")
+        clear_files_btn.clicked.connect(self.clear_remux_files)
+        media_info_btn = QPushButton("Media Info")
+        media_info_btn.clicked.connect(self.show_media_info)
+        buttons_row.addWidget(add_files_btn)
+        buttons_row.addWidget(remove_files_btn)
+        buttons_row.addWidget(clear_files_btn)
+        buttons_row.addWidget(media_info_btn)
+        file_layout.addLayout(buttons_row)
+        
+        # Files tree widget (like MKVToolNix GUI)
+        self.remux_files_tree = QTreeWidget()
+        self.remux_files_tree.setHeaderLabels(["File / Track", "Type", "Codec", "Language", "Channels", "Actions"])
+        self.remux_files_tree.setSelectionMode(QTreeWidget.ExtendedSelection)
+        self.remux_files_tree.setRootIsDecorated(True)
+        self.remux_files_tree.setAlternatingRowColors(True)
+        self.remux_files_tree.header().setStretchLastSection(False)
+        self.remux_files_tree.header().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.remux_files_tree.setStyleSheet("""
+            QTreeWidget {
+                background-color: #f5f5f5;
+                border: 1px solid #ddd;
+                border-radius: 3px;
+                font-size: 11px;
+            }
+            QTreeWidget::item {
+                padding: 3px;
+            }
+            QTreeWidget::item:selected {
+                background-color: #d168a3;
+                color: white;
+            }
+        """)
+        # Enable context menu
+        self.remux_files_tree.setContextMenuPolicy(3)  # Qt.CustomContextMenu
+        self.remux_files_tree.customContextMenuRequested.connect(self.show_track_context_menu)
+        file_layout.addWidget(self.remux_files_tree)
+        
+        # File count label
+        self.remux_file_count_label = QLabel("No files selected")
+        self.remux_file_count_label.setStyleSheet("color: #666; font-size: 10px;")
+        file_layout.addWidget(self.remux_file_count_label)
+        
+        file_group.setLayout(file_layout)
+        layout.addWidget(file_group)
+        
+        # Global options (defaults for new files)
+        options_group = QGroupBox("Default Options (for new files)")
+        options_layout = QVBoxLayout()
+        
+        # Output format
+        format_row = QHBoxLayout()
+        format_label = QLabel("Output Format:")
+        format_label.setFixedWidth(150)
+        self.remux_default_output_format = QComboBox()
+        self.remux_default_output_format.addItem("MKV", "mkv")
+        self.remux_default_output_format.addItem("MP4", "mp4")
+        format_row.addWidget(format_label)
+        format_row.addWidget(self.remux_default_output_format)
+        format_row.addStretch()
+        options_layout.addLayout(format_row)
+        
+        options_group.setLayout(options_layout)
+        layout.addWidget(options_group)
+        
+        # Action buttons
+        buttons_layout = QHBoxLayout()
+        
+        remux_selected_btn = QPushButton("Remux Selected Files")
+        remux_selected_btn.clicked.connect(self.remux_selected_files_action)
+        buttons_layout.addWidget(remux_selected_btn, 2)
+        
+        split_audio_btn = QPushButton("Split Audio Channels")
+        split_audio_btn.clicked.connect(self.split_audio_channels_batch)
+        buttons_layout.addWidget(split_audio_btn, 1)
+        
+        layout.addLayout(buttons_layout)
+        
+        # Minimal log (single line)
+        log_label = QLabel("Status:")
+        log_label.setFont(QFont("Arial", 10, QFont.Bold))
+        layout.addWidget(log_label)
+        
+        self.remux_log_output = QLineEdit()
+        self.remux_log_output.setReadOnly(True)
+        self.remux_log_output.setPlaceholderText("Remuxing operations will show status here (errors only)")
+        self.remux_log_output.setStyleSheet("""
+            QLineEdit {
+                background-color: #f5f5f5;
+                border: 1px solid #ddd;
+                border-radius: 3px;
+                padding: 5px;
+                font-size: 11px;
+            }
+        """)
+        layout.addWidget(self.remux_log_output)
+        
+        layout.addStretch()
+        tab.setLayout(layout)
+        return tab
+    
+    def add_remux_files(self):
+        """Add video files to the remux selection and analyze tracks."""
+        file_paths, _ = QFileDialog.getOpenFileNames(
+            self, "Select Video Files (MKV/MP4)",
+            str(get_downloads_dir()),
+            "Video Files (*.mkv *.mp4);;All Files (*)"
+        )
+        
+        if not file_paths:
+            return
+        
+        # Add new files (avoid duplicates)
+        for file_path in file_paths:
+            video_path = Path(file_path)
+            if video_path not in self.remux_selected_files:
+                self.remux_selected_files.append(video_path)
+                # Initialize file config
+                self.remux_file_configs[video_path] = {
+                    'output_format': self.remux_default_output_format.currentData(),
+                    'subtitle_file': None,  # Will be auto-detected or manually set
+                    'selected_video_tracks': [],
+                    'selected_audio_tracks': [],
+                    'selected_subtitle_tracks': []
+                }
+                # Add to tree widget
+                self.add_file_to_tree(video_path)
+        
+        self.update_remux_file_count()
+    
+    def add_file_to_tree(self, video_path: Path):
+        """Add a file to the tree widget with its tracks."""
+        if not video_path.exists():
+            return
+        
+        # Create file item
+        file_item = QTreeWidgetItem(self.remux_files_tree)
+        file_item.setText(0, video_path.name)
+        file_item.setText(1, "File")
+        file_item.setExpanded(True)
+        file_item.setData(0, 256, str(video_path))  # Store path in data
+        
+        # Analyze tracks
+        tracks = analyze_tracks(video_path)
+        
+        # Add video tracks
+        if tracks['video']:
+            for vid_track in tracks['video']:
+                track_item = QTreeWidgetItem(file_item)
+                track_id = vid_track.get('track_id', 0)
+                codec = vid_track.get('codec', 'unknown')
+                res = vid_track.get('resolution', 'unknown')
+                track_item.setText(0, f"Video Track {track_id}")
+                track_item.setText(1, "Video")
+                track_item.setText(2, codec)
+                track_item.setText(3, vid_track.get('language', 'unknown'))
+                track_item.setText(4, res)
+                # Add checkbox
+                track_item.setCheckState(0, 1)  # Checked by default
+                track_item.setData(0, 256, f"video:{track_id}")  # Store track info
+        
+        # Add audio tracks
+        if tracks['audio']:
+            for aud_track in tracks['audio']:
+                track_item = QTreeWidgetItem(file_item)
+                track_id = aud_track.get('track_id', 0)
+                codec = aud_track.get('codec', 'unknown')
+                channels = aud_track.get('channels', 0)
+                sample_rate = aud_track.get('sample_rate', 'unknown')
+                track_item.setText(0, f"Audio Track {track_id}")
+                track_item.setText(1, "Audio")
+                track_item.setText(2, codec)
+                track_item.setText(3, aud_track.get('language', 'unknown'))
+                track_item.setText(4, f"{channels}ch, {sample_rate}Hz")
+                # Add checkbox
+                track_item.setCheckState(0, 1)  # Checked by default
+                track_item.setData(0, 256, f"audio:{track_id}")  # Store track info
+        
+        # Add embedded subtitle tracks
+        if tracks['subtitles']:
+            for sub_track in tracks['subtitles']:
+                track_item = QTreeWidgetItem(file_item)
+                track_id = sub_track.get('track_id', 0)
+                format_type = sub_track.get('format', sub_track.get('codec', 'unknown'))
+                track_item.setText(0, f"Subtitle Track {track_id}")
+                track_item.setText(1, "Subtitle")
+                track_item.setText(2, format_type)
+                track_item.setText(3, sub_track.get('language', 'unknown'))
+                track_item.setText(4, "")
+                # Add checkbox
+                track_item.setCheckState(0, 0)  # Unchecked by default (external subs preferred)
+                track_item.setData(0, 256, f"subtitle:{track_id}")  # Store track info
+        
+        # Add external subtitle file option
+        subtitle_item = QTreeWidgetItem(file_item)
+        subtitle_item.setText(0, "External Subtitle File")
+        subtitle_item.setText(1, "External")
+        subtitle_item.setText(2, "SRT/VTT")
+        subtitle_item.setText(3, "")
+        subtitle_item.setText(4, "")
+        # Add browse button in Actions column
+        browse_sub_btn = QPushButton("Browse...")
+        browse_sub_btn.setMaximumWidth(80)
+        browse_sub_btn.clicked.connect(lambda checked, path=video_path: self.browse_subtitle_file(path))
+        self.remux_files_tree.setItemWidget(subtitle_item, 5, browse_sub_btn)
+        subtitle_item.setData(0, 256, "external_subtitle")
+        
+        # Add per-file output format
+        format_item = QTreeWidgetItem(file_item)
+        format_item.setText(0, "Output Format")
+        format_item.setText(1, "Option")
+        format_combo = QComboBox()
+        format_combo.addItem("MKV", "mkv")
+        format_combo.addItem("MP4", "mp4")
+        # Set current format
+        default_format = self.remux_file_configs[video_path]['output_format']
+        format_index = format_combo.findData(default_format)
+        if format_index >= 0:
+            format_combo.setCurrentIndex(format_index)
+        format_combo.currentIndexChanged.connect(lambda idx, path=video_path: self.update_file_output_format(path, format_combo.currentData()))
+        self.remux_files_tree.setItemWidget(format_item, 2, format_combo)
+        format_item.setData(0, 256, "output_format")
+        
+        # Add remux button for this file
+        remux_file_item = QTreeWidgetItem(file_item)
+        remux_file_item.setText(0, "Actions")
+        remux_file_btn = QPushButton("Remux This File")
+        remux_file_btn.setMaximumWidth(120)
+        remux_file_btn.clicked.connect(lambda checked, path=video_path: self.remux_single_file(path))
+        self.remux_files_tree.setItemWidget(remux_file_item, 5, remux_file_btn)
+        remux_file_item.setData(0, 256, "remux_action")
+    
+    def remove_remux_files(self):
+        """Remove selected files from the remux selection."""
+        selected_items = self.remux_files_tree.selectedItems()
+        if not selected_items:
+            QMessageBox.information(self, "No Selection", "Please select files to remove.")
+            return
+        
+        # Get top-level items (files) from selection
+        files_to_remove = []
+        for item in selected_items:
+            # If it's a top-level item (file), use it directly
+            parent = item.parent()
+            if parent is None:
+                # It's a file item
+                file_path_str = item.data(0, 256)
+                if file_path_str:
+                    files_to_remove.append(Path(file_path_str))
+            else:
+                # It's a track item, get the parent file
+                file_path_str = parent.data(0, 256)
+                if file_path_str and Path(file_path_str) not in files_to_remove:
+                    files_to_remove.append(Path(file_path_str))
+        
+        # Remove files
+        for file_path in files_to_remove:
+            if file_path in self.remux_selected_files:
+                self.remux_selected_files.remove(file_path)
+            if file_path in self.remux_file_configs:
+                del self.remux_file_configs[file_path]
+            
+            # Remove from tree
+            root = self.remux_files_tree.invisibleRootItem()
+            for i in range(root.childCount()):
+                child = root.child(i)
+                if child.data(0, 256) == str(file_path):
+                    root.removeChild(child)
+                    break
+        
+        self.update_remux_file_count()
+    
+    def clear_remux_files(self):
+        """Clear all selected files."""
+        self.remux_selected_files.clear()
+        self.remux_file_configs.clear()
+        self.remux_files_tree.clear()
+        self.update_remux_file_count()
+    
+    def browse_subtitle_file(self, video_path: Path):
+        """Browse for external subtitle file for a specific video."""
+        subtitle_file, _ = QFileDialog.getOpenFileName(
+            self, f"Select Subtitle File for {video_path.name}",
+            str(get_subtitles_dir()),
+            "Subtitle Files (*.srt *.vtt);;All Files (*)"
+        )
+        
+        if subtitle_file:
+            self.remux_file_configs[video_path]['subtitle_file'] = Path(subtitle_file)
+            # Update the tree item text to show selected file
+            root = self.remux_files_tree.invisibleRootItem()
+            for i in range(root.childCount()):
+                file_item = root.child(i)
+                if file_item.data(0, 256) == str(video_path):
+                    # Find the external subtitle item
+                    for j in range(file_item.childCount()):
+                        child = file_item.child(j)
+                        if child.data(0, 256) == "external_subtitle":
+                            child.setText(2, Path(subtitle_file).name)
+                            break
+                    break
+    
+    def update_file_output_format(self, video_path: Path, output_format: str):
+        """Update output format for a specific file."""
+        if video_path in self.remux_file_configs:
+            self.remux_file_configs[video_path]['output_format'] = output_format
+    
+    def remux_single_file(self, video_path: Path):
+        """Remux a single file with its configured tracks and options."""
+        if video_path not in self.remux_file_configs:
+            self.remux_log_output.setText(f"Error: Configuration not found for {video_path.name}")
+            return
+        
+        config = self.remux_file_configs[video_path]
+        output_format = config['output_format']
+        
+        # Get selected tracks from tree
+        root = self.remux_files_tree.invisibleRootItem()
+        file_item = None
+        for i in range(root.childCount()):
+            child = root.child(i)
+            if child.data(0, 256) == str(video_path):
+                file_item = child
+                break
+        
+        if not file_item:
+            self.remux_log_output.setText(f"Error: File not found in tree")
+            return
+        
+        # Collect selected tracks
+        selected_video = []
+        selected_audio = []
+        selected_subtitles = []
+        external_subtitle = config.get('subtitle_file')
+        
+        for i in range(file_item.childCount()):
+            track_item = file_item.child(i)
+            if track_item.checkState(0) == 2:  # Checked
+                track_data = track_item.data(0, 256)
+                if track_data:
+                    track_type, track_id = track_data.split(':')
+                    track_id = int(track_id)
+                    if track_type == 'video':
+                        selected_video.append(track_id)
+                    elif track_type == 'audio':
+                        selected_audio.append(track_id)
+                    elif track_type == 'subtitle':
+                        selected_subtitles.append(track_id)
+        
+        # Remux the file
+        self.remux_log_output.setText(f"Remuxing {video_path.name}...")
+        success = self.remux_file_with_tracks(
+            video_path, output_format, selected_video, selected_audio, 
+            selected_subtitles, external_subtitle
+        )
+        
+        if success:
+            self.remux_log_output.setText(f"✓ Remuxed {video_path.name}")
+        else:
+            self.remux_log_output.setText(f"✗ Failed to remux {video_path.name}")
+    
+    def remux_file_with_tracks(self, video_path: Path, output_format: str,
+                               video_tracks: List[int], audio_tracks: List[int],
+                               subtitle_tracks: List[int], external_subtitle: Path = None) -> bool:
+        """Remux a file with specific track selections.
+        
+        Note: Track IDs from analyze_tracks correspond to FFmpeg stream indices.
+        """
+        if not video_path.exists():
+            return False
+        
+        base = video_path.stem
+        output_file = video_path.parent / f"{base}_remuxed.{output_format}"
+        
+        if output_file.exists():
+            return True  # Already exists
+        
+        # Build FFmpeg command with track selection
+        cmd = ["ffmpeg", "-y", "-i", str(video_path)]
+        
+        # Map selected tracks (track_id from analyze_tracks is the stream index)
+        for vid_track in video_tracks:
+            cmd.extend(["-map", f"0:{vid_track}"])
+        
+        for aud_track in audio_tracks:
+            cmd.extend(["-map", f"0:{aud_track}"])
+        
+        for sub_track in subtitle_tracks:
+            cmd.extend(["-map", f"0:{sub_track}"])
+        
+        # Add external subtitle if provided
+        if external_subtitle and external_subtitle.exists():
+            cmd.extend(["-i", str(external_subtitle)])
+            cmd.extend(["-map", "1:0"])  # Map first stream from second input
+            subtitle_format = "srt" if external_subtitle.suffix.lower() == ".srt" else "vtt"
+            cmd.extend(["-c:s", subtitle_format])
+        
+        # If no tracks explicitly selected, include all tracks (default)
+        if not video_tracks and not audio_tracks and not subtitle_tracks:
+            # Rebuild command to include all tracks
+            cmd = ["ffmpeg", "-y", "-i", str(video_path)]
+            
+            # Add external subtitle if provided
+            if external_subtitle and external_subtitle.exists():
+                cmd.extend(["-i", str(external_subtitle)])
+                cmd.extend(["-map", "0"])  # Map all tracks from video
+                cmd.extend(["-map", "1:0"])  # Map subtitle from external file
+                subtitle_format = "srt" if external_subtitle.suffix.lower() == ".srt" else "vtt"
+                cmd.extend(["-c", "copy", "-c:s", subtitle_format])
+            else:
+                # Check for auto-detected subtitle file
+                folder_path = video_path.parent
+                base = video_path.stem
+                srt_file = folder_path / f"{base}.srt"
+                vtt_file = folder_path / f"{base}.vtt"
+                
+                if srt_file.exists():
+                    cmd.extend(["-i", str(srt_file)])
+                    cmd.extend(["-map", "0"])  # All video tracks
+                    cmd.extend(["-map", "1:0"])  # Subtitle
+                    cmd.extend(["-c", "copy", "-c:s", "srt"])
+                elif vtt_file.exists():
+                    cmd.extend(["-i", str(vtt_file)])
+                    cmd.extend(["-map", "0"])  # All video tracks
+                    cmd.extend(["-map", "1:0"])  # Subtitle
+                    cmd.extend(["-c", "copy", "-c:s", "vtt"])
+                else:
+                    # Just copy all tracks
+                    cmd.extend(["-c", "copy"])
+            
+            cmd.append(str(output_file))
+        else:
+            # Copy codecs for selected tracks
+            cmd.extend(["-c", "copy"])
+            cmd.append(str(output_file))
+        
+        # Execute
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            if result.returncode != 0:
+                # Log error to minimal log
+                error_msg = result.stderr.split('\n')[-5:] if result.stderr else ["Unknown error"]
+                self.remux_log_output.setText(f"Error: {'; '.join(error_msg)}")
+            return result.returncode == 0 and output_file.exists()
+        except Exception as e:
+            self.remux_log_output.setText(f"Error: {str(e)}")
+            return False
+    
+    def remux_selected_files_action(self):
+        """Remux all selected files in the tree."""
+        selected_items = self.remux_files_tree.selectedItems()
+        if not selected_items:
+            QMessageBox.information(self, "No Selection", "Please select files to remux.")
+            return
+        
+        # Get top-level file items
+        files_to_remux = []
+        for item in selected_items:
+            parent = item.parent()
+            if parent is None:
+                # It's a file item
+                file_path_str = item.data(0, 256)
+                if file_path_str:
+                    files_to_remux.append(Path(file_path_str))
+            else:
+                # It's a track item, get the parent file
+                file_path_str = parent.data(0, 256)
+                if file_path_str and Path(file_path_str) not in files_to_remux:
+                    files_to_remux.append(Path(file_path_str))
+        
+        if not files_to_remux:
+            self.remux_log_output.setText("Error: No files selected")
+            return
+        
+        # Remux each file
+        success_count = 0
+        for video_path in files_to_remux:
+            self.remux_single_file(video_path)
+            if self.remux_log_output.text().startswith("✓"):
+                success_count += 1
+        
+        if success_count > 0:
+            self.remux_log_output.setText(f"✓ Remuxed {success_count}/{len(files_to_remux)} files")
+    
+    def show_track_context_menu(self, position):
+        """Show context menu for track items."""
+        item = self.remux_files_tree.itemAt(position)
+        if not item:
+            return
+        
+        # Check if it's a track item (has parent and track data)
+        parent = item.parent()
+        if not parent:
+            return  # It's a file item, not a track
+        
+        track_data = item.data(0, 256)
+        if not track_data or track_data in ["external_subtitle", "output_format", "remux_action"]:
+            return  # Not a track item
+        
+        # Create context menu
+        menu = QMenu(self)
+        
+        # Get track info
+        track_type, track_id = track_data.split(':')
+        track_id = int(track_id)
+        
+        # Get file path
+        file_path_str = parent.data(0, 256)
+        if not file_path_str:
+            return
+        
+        file_path = Path(file_path_str)
+        
+        # Add actions
+        info_action = menu.addAction("Show Track Info")
+        menu.addSeparator()
+        modify_action = menu.addAction("Modify Track Properties...")
+        
+        # Show menu
+        action = menu.exec_(self.remux_files_tree.mapToGlobal(position))
+        
+        if action == info_action:
+            self.show_track_info(file_path, track_type, track_id)
+        elif action == modify_action:
+            self.modify_track_properties(file_path, track_type, track_id, item)
+    
+    def show_track_info(self, file_path: Path, track_type: str, track_id: int):
+        """Show detailed information for a specific track."""
+        tracks = analyze_tracks(file_path)
+        
+        track_info = None
+        if track_type == 'video':
+            track_info = next((t for t in tracks['video'] if t.get('track_id') == track_id), None)
+        elif track_type == 'audio':
+            track_info = next((t for t in tracks['audio'] if t.get('track_id') == track_id), None)
+        elif track_type == 'subtitle':
+            track_info = next((t for t in tracks['subtitles'] if t.get('track_id') == track_id), None)
+        
+        if not track_info:
+            QMessageBox.warning(self, "Error", "Track information not found.")
+            return
+        
+        # Create info dialog
+        info_dialog = QDialog(self)
+        info_dialog.setWindowTitle(f"Track {track_id} Info - {file_path.name}")
+        info_dialog.setMinimumWidth(400)
+        
+        layout = QVBoxLayout()
+        
+        info_text = QTextEdit()
+        info_text.setReadOnly(True)
+        info_text.setFont(QFont("Courier New", 10))
+        
+        info_lines = [f"Track Type: {track_type.upper()}", f"Track ID: {track_id}", ""]
+        for key, value in track_info.items():
+            info_lines.append(f"{key.replace('_', ' ').title()}: {value}")
+        
+        info_text.setText('\n'.join(info_lines))
+        layout.addWidget(info_text)
+        
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(info_dialog.accept)
+        layout.addWidget(close_btn)
+        
+        info_dialog.setLayout(layout)
+        info_dialog.exec_()
+    
+    def modify_track_properties(self, file_path: Path, track_type: str, track_id: int, tree_item: QTreeWidgetItem):
+        """Open dialog to modify track properties (language, default flags, etc.)."""
+        # For now, show a simple dialog - can be enhanced later
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Modify Track {track_id} - {file_path.name}")
+        dialog.setMinimumWidth(300)
+        
+        layout = QVBoxLayout()
+        
+        info_label = QLabel(f"Track modification for {track_type} track {track_id}")
+        layout.addWidget(info_label)
+        
+        # Language selection
+        lang_label = QLabel("Language:")
+        lang_combo = QComboBox()
+        lang_combo.addItems(["eng", "fra", "spa", "deu", "ita", "jpn", "kor", "ara", "chi", "unknown"])
+        layout.addWidget(lang_label)
+        layout.addWidget(lang_combo)
+        
+        # Note about modification
+        note_label = QLabel("Note: Track modifications are applied during remuxing.\nUse mkvpropedit for in-place modifications.")
+        note_label.setWordWrap(True)
+        note_label.setStyleSheet("color: #666; font-size: 10px;")
+        layout.addWidget(note_label)
+        
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        ok_btn = QPushButton("OK")
+        cancel_btn = QPushButton("Cancel")
+        ok_btn.clicked.connect(dialog.accept)
+        cancel_btn.clicked.connect(dialog.reject)
+        button_layout.addWidget(ok_btn)
+        button_layout.addWidget(cancel_btn)
+        layout.addLayout(button_layout)
+        
+        dialog.setLayout(layout)
+        
+        if dialog.exec_() == QDialog.Accepted:
+            # Store language preference for this track (can be used during remux)
+            if file_path not in self.remux_file_configs:
+                self.remux_file_configs[file_path] = {'track_languages': {}}
+            elif 'track_languages' not in self.remux_file_configs[file_path]:
+                self.remux_file_configs[file_path]['track_languages'] = {}
+            
+            track_key = f"{track_type}:{track_id}"
+            self.remux_file_configs[file_path]['track_languages'][track_key] = lang_combo.currentText()
+            
+            # Update tree display
+            tree_item.setText(3, lang_combo.currentText())
+    
+    def show_media_info(self):
+        """Show detailed media information for selected file(s)."""
+        selected_items = self.remux_files_tree.selectedItems()
+        if not selected_items:
+            QMessageBox.information(self, "No Selection", "Please select a file to view media info.")
+            return
+        
+        # Get the file from selection
+        file_path = None
+        for item in selected_items:
+            parent = item.parent()
+            if parent is None:
+                # It's a file item
+                file_path_str = item.data(0, 256)
+                if file_path_str:
+                    file_path = Path(file_path_str)
+                    break
+            else:
+                # It's a track item, get the parent file
+                file_path_str = parent.data(0, 256)
+                if file_path_str:
+                    file_path = Path(file_path_str)
+                    break
+        
+        if not file_path or not file_path.exists():
+            QMessageBox.warning(self, "Error", "File not found.")
+            return
+        
+        # Create and show media info dialog
+        dialog = MediaInfoDialog(self, file_path)
+        dialog.exec_()
+    
+    def update_remux_file_count(self):
+        """Update the file count label."""
+        count = len(self.remux_selected_files)
+        if count == 0:
+            self.remux_file_count_label.setText("No files selected")
+        elif count == 1:
+            self.remux_file_count_label.setText("1 file selected")
+        else:
+            self.remux_file_count_label.setText(f"{count} files selected")
+    
+    
+    def split_audio_channels_batch(self):
+        """Batch split audio channels for selected video files."""
+        if not self.remux_selected_files:
+            QMessageBox.warning(self, "No Files", "Please add files first.")
+            return
+        
+        # Analyze first file to get channel count
+        first_file = self.remux_selected_files[0]
+        if not first_file.exists():
+            self.remux_log_output.setText(f"Error: File not found: {first_file.name}")
+            return
+        
+        tracks = analyze_tracks(first_file)
+        if not tracks['audio']:
+            self.remux_log_output.setText("Error: No audio tracks found in video files.")
+            return
+        
+        channel_count = tracks['audio'][0].get('channels', 0)
+        if channel_count == 0:
+            self.remux_log_output.setText("Error: Could not determine audio channel count.")
+            return
+        
+        # Create minimal log callback
+        success_count = 0
+        errors = []
+        
+        def split_log_callback(msg):
+            nonlocal success_count
+            if "✓ Extracted channel" in msg:
+                success_count += 1
+            elif "Error:" in msg or "✗" in msg:
+                errors.append(msg)
+                if len(errors) == 1:
+                    self.remux_log_output.setText(msg)
+                else:
+                    self.remux_log_output.setText(f"{len(errors)} error(s) occurred")
+        
+        self.remux_log_output.setText(f"Splitting audio channels ({channel_count} channels)...")
+        
+        # Process files directly (output to same directory as each file)
+        for video_file in self.remux_selected_files:
+            if video_file.exists():
+                output_dir = video_file.parent
+                split_audio_channels(video_file, output_dir, channel_count, split_log_callback)
+        
+        if errors:
+            self.remux_log_output.setText(f"Error: {len(errors)} file(s) failed")
+        else:
+            self.remux_log_output.setText(f"✓ Split {channel_count} channels for {len(self.remux_selected_files)} file(s)")
     
     def init_ui(self):
         """Initialize the UI."""
@@ -3816,21 +5023,6 @@ class VideoProcessingApp(QMainWindow):
         process_group.setLayout(process_layout)
         layout.addWidget(process_group)
         
-        # Remux section
-        remux_group = QGroupBox("REMUX")
-        remux_group.setStyleSheet("QGroupBox { font-weight: bold; }")
-        remux_layout = QHBoxLayout()
-        remux_folder_btn = QPushButton("Select folder...")
-        remux_folder_btn.clicked.connect(self.select_remux_folder)
-        self.remux_folder_label = QLabel("No folder selected")
-        remux_btn = QPushButton("Batch remux MKV + SRT")
-        remux_btn.clicked.connect(self.remux_batch)
-        remux_layout.addWidget(remux_folder_btn)
-        remux_layout.addWidget(self.remux_folder_label)
-        remux_layout.addWidget(remux_btn)
-        remux_group.setLayout(remux_layout)
-        layout.addWidget(remux_group)
-        
         # Progress section (above log output)
         progress_group = QGroupBox("PROGRESS")
         progress_layout = QVBoxLayout()
@@ -3921,11 +5113,15 @@ class VideoProcessingApp(QMainWindow):
         layout.addWidget(log_group)
         
         # Add main tab to tabs widget
-        self.main_tabs.addTab(main_tab, "Main")
+        self.main_tabs.addTab(main_tab, "Subtitles")
         
         # Add transcription tab
         transcription_tab = self.create_transcription_tab()
         self.main_tabs.addTab(transcription_tab, "Transcription")
+        
+        # Add remuxing tab
+        remuxing_tab = self.create_remuxing_tab()
+        self.main_tabs.addTab(remuxing_tab, "Remuxing")
         
         # Add tabs to main layout
         main_layout.addWidget(self.main_tabs)
@@ -4265,10 +5461,13 @@ class VideoProcessingApp(QMainWindow):
         # Get translation settings from config
         target_language = self.config.get("translation_target_language", "English")
         use_iso639 = self.config.get("use_iso639_suffixes", False)
+        api_key2 = self.config.get("api_key2", "")
         
         self.log(f"Starting subtitle translation for {len(file_paths)} file(s)...")
         self.log(f"Target language: {target_language}, ISO 639 suffixes: {'enabled' if use_iso639 else 'disabled'}")
-        self.run_script(translate_subtitles, file_paths, api_key, target_language, use_iso639)
+        if api_key2:
+            self.log("Using second API key for translation")
+        self.run_script(translate_subtitles, file_paths, api_key, target_language, use_iso639, api_key2)
     
     def process_video(self, resolution: str):
         """Process video."""
@@ -4310,49 +5509,32 @@ class VideoProcessingApp(QMainWindow):
         )
     
     def open_lossless_cut(self):
-        """Open video file in LosslessCut."""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "Select Video File to Open in LosslessCut",
+        """Open video file(s) in LosslessCut."""
+        file_paths, _ = QFileDialog.getOpenFileNames(
+            self, "Select Video Files to Open in LosslessCut",
             str(get_downloads_dir()),
             "Video Files (*.mkv *.mp4 *.mov);;All Files (*)"
         )
         
-        if file_path:
-            video_path = Path(file_path)
-            video_type, duration = detect_episode_or_scene(video_path)
+        if file_paths:
+            video_paths = [Path(p) for p in file_paths]
             
-            if duration:
-                type_label = "Episode" if video_type == "episode" else "Scene"
-                self.log(f"Opening {video_path.name} in LosslessCut ({type_label}, {duration:.1f} min)")
+            if len(video_paths) == 1:
+                # For single file, show detailed info
+                video_path = video_paths[0]
+                video_type, duration = detect_episode_or_scene(video_path)
+                
+                if duration:
+                    type_label = "Episode" if video_type == "episode" else "Scene"
+                    self.log(f"Opening {video_path.name} in LosslessCut ({type_label}, {duration:.1f} min)")
+                else:
+                    self.log(f"Opening {video_path.name} in LosslessCut")
             else:
-                self.log(f"Opening {video_path.name} in LosslessCut")
+                # For multiple files, show count
+                self.log(f"Opening {len(video_paths)} files in LosslessCut")
             
-            open_in_lossless_cut(video_path, log_callback=self.log)
+            open_in_lossless_cut(video_paths, log_callback=self.log)
     
-    def select_remux_folder(self):
-        """Select folder for remuxing."""
-        folder_path = QFileDialog.getExistingDirectory(
-            self, "Select Folder with MKV and SRT Files",
-            str(get_downloads_dir())
-        )
-        
-        if folder_path:
-            self.remux_folder_path = Path(folder_path)
-            self.remux_folder_label.setText(f"Folder: {self.remux_folder_path.name}")
-            self.log(f"Selected remux folder: {self.remux_folder_path}")
-    
-    def remux_batch(self):
-        """Batch remux MKV files with SRT files."""
-        if not hasattr(self, 'remux_folder_path') or not self.remux_folder_path:
-            QMessageBox.warning(self, "Error", "Please select a folder first.")
-            return
-        
-        if not self.remux_folder_path.exists():
-            QMessageBox.warning(self, "Error", "Selected folder does not exist.")
-            return
-        
-        self.log(f"Starting batch remux in: {self.remux_folder_path}")
-        self.run_script(remux_mkv_with_srt_batch, self.remux_folder_path)
     
     def transcribe_video(self):
         """Transcribe video file."""
@@ -4372,31 +5554,33 @@ class VideoProcessingApp(QMainWindow):
             
             language_code = lang_dialog.get_language_code()
             
-            # Get model and whisper options from config
-            config = load_config()
-            model = config.get("whisper_model", "turbo")
-            whisper_options = config.get("whisper_options", {})
+        # Get model from combo (saved to config automatically)
+        model = self.transcribe_model_combo.currentText()
+        
+        # Get whisper options from config
+        config = load_config()
+        whisper_options = config.get("whisper_options", {})
+        
+        # Check if this is first time using transcription
+        whisper_model_asked = config.get("whisper_model_asked", False)
+        
+        if not whisper_model_asked:
+            # Ask user if they already have a model
+            model_dialog = WhisperModelDialog(self, model)
+            if model_dialog.exec_() != QDialog.Accepted:
+                return  # User cancelled
             
-            # Check if this is first time using transcription
-            whisper_model_asked = config.get("whisper_model_asked", False)
+            has_existing_model = model_dialog.get_result()
             
-            if not whisper_model_asked:
-                # Ask user if they already have a model
-                model_dialog = WhisperModelDialog(self, model)
-                if model_dialog.exec_() != QDialog.Accepted:
-                    return  # User cancelled
-                
-                has_existing_model = model_dialog.get_result()
-                
-                # Save preference to config
-                config["whisper_model_asked"] = True
-                config["whisper_has_existing_model"] = has_existing_model
-                save_config(config)
-                
-                if has_existing_model:
-                    self.log(f"Using existing Whisper model '{model}' from cache.")
-                else:
-                    self.log(f"Will download Whisper model '{model}' on first use.")
+            # Save preference to config
+            config["whisper_model_asked"] = True
+            config["whisper_has_existing_model"] = has_existing_model
+            save_config(config)
+            
+            if has_existing_model:
+                self.log(f"Using existing Whisper model '{model}' from cache.")
+            else:
+                self.log(f"Will download Whisper model '{model}' on first use.")
             
             self.log(f"Starting transcription of: {video_path.name}")
             lang_display = "Auto-detect" if language_code == "auto" else language_code
@@ -4425,10 +5609,13 @@ class VideoProcessingApp(QMainWindow):
         end_str = params["end_time_str"]
         adjust_timestamps = params["adjust_timestamps"]
         
-        # Get model and whisper options from config
+        # Get model from combo (saved to config automatically)
+        model = self.transcribe_model_combo.currentText()
+        
+        # Get whisper options and output format
         config = load_config()
-        model = config.get("whisper_model", "turbo")
         whisper_options = config.get("whisper_options", {})
+        output_format = self.transcribe_format_combo.currentData()
         
         # Check if this is first time using transcription
         whisper_model_asked = config.get("whisper_model_asked", False)
@@ -4447,33 +5634,46 @@ class VideoProcessingApp(QMainWindow):
             save_config(config)
             
             if has_existing_model:
-                self.log(f"Using existing Whisper model '{model}' from cache.")
+                self.transcribe_log(f"Using existing Whisper model '{model}' from cache.")
             else:
-                self.log(f"Will download Whisper model '{model}' on first use.")
+                self.transcribe_log(f"Will download Whisper model '{model}' on first use.")
         
-        self.log(f"Starting time range transcription of: {video_path.name}")
-        self.log(f"Time range: {start_str} → {end_str}")
+        self.transcribe_log(f"Starting time range transcription of: {video_path.name}")
+        self.transcribe_log(f"Time range: {start_str} → {end_str}")
         lang_display = "Auto-detect" if language_code == "auto" else language_code
-        self.log(f"Language: {lang_display}, Model: {model}")
+        self.transcribe_log(f"Language: {lang_display}, Model: {model}, Format: {output_format}")
         if adjust_timestamps:
-            self.log("Timestamps will be adjusted to match original video timing")
+            self.transcribe_log("Timestamps will be adjusted to match original video timing")
         else:
-            self.log("Timestamps will start at 00:00:00")
+            self.transcribe_log("Timestamps will start at 00:00:00")
+        
+        # Show progress bar and stop button
+        self.transcribe_progress_bar.setVisible(True)
+        self.transcribe_stop_btn.setVisible(True)
+        self.transcribe_stop_btn.setEnabled(True)
+        self.transcribe_progress_bar.setRange(0, 0)  # Indeterminate
         
         # Run time range transcription
         def transcribe_range_with_params(
             video_path, start_seconds, end_seconds, language_code, model, 
-            whisper_options, adjust_timestamps, progress_callback=None, log_callback=None
+            whisper_options, output_format, adjust_timestamps, progress_callback=None, log_callback=None
         ):
             return transcribe_video_time_range(
                 video_path, start_seconds, end_seconds, language_code, model,
-                whisper_options, adjust_timestamps, progress_callback, log_callback
+                whisper_options, output_format, adjust_timestamps, progress_callback, log_callback
             )
         
-        self.run_script(
+        # Use custom callbacks for the tab
+        def tab_log_callback(msg):
+            self.transcribe_log(msg)
+        
+        self.worker = ScriptWorker(
             transcribe_range_with_params, video_path, start_seconds, end_seconds, 
-            language_code, model, whisper_options, adjust_timestamps
+            language_code, model, whisper_options, output_format, adjust_timestamps
         )
+        self.worker.log_message.connect(tab_log_callback)
+        self.worker.finished.connect(self.on_transcribe_finished)
+        self.worker.start()
 
 
 # ============================================================================

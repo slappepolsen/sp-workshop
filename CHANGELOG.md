@@ -7,7 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-...
+## [9.2.0] - 2026-01-21
+
+### Added
+
+- Remuxing tab with tree-based file management interface.
+- Per-file track selection with checkboxes for video, audio, and subtitle tracks.
+- Track analysis using `mkvmerge` and `ffprobe` to display codec, language, channels, and resolution.
+- `MediaInfoDialog` for detailed media file information display.
+- Right-click context menu on tracks for "Show Track Info" and "Modify Track Properties".
+- Track modification dialog with language selection per track.
+- Per-file output format selection (MKV/MP4) in remuxing interface.
+- External subtitle file browser with per-file selection (defaults to subtitles directory).
+- Individual "Remux This File" button for per-file remuxing operations.
+- Batch remuxing of selected files with individual configurations.
+- Audio channel splitting functionality (`split_audio_channels()`).
+- `analyze_tracks()` function for comprehensive track detection.
+- `remux_file_with_tracks()` function for per-file remuxing with track selection.
+- Output format dropdown in Transcription tab (SRT, VTT, TXT, TSV, JSON, All Formats).
+- Whisper Model selector in Transcription tab with auto-save functionality.
+- Batch file opening in LosslessCut (multiple files to single instance).
+- File selection manager for remuxing (replaces folder-based selection).
+
+### Changed
+
+- Remuxing functionality moved from section to dedicated "Remuxing" tab.
+- Whisper Model setting moved from Settings dialog to Transcription tab.
+- `whisper_auto.sh` accepts 4th argument for `output_format` (replaces hardcoded SRT).
+- `transcribe_video()` and `transcribe_video_time_range()` now accept `output_format` parameter.
+- External subtitle file browser defaults to `VideoProcessing/subtitles` directory.
+- `open_in_lossless_cut()` now accepts list of files for batch opening.
+- Main window tab structure: "Subtitles" (renamed from "Main"), "Transcription", "Remuxing".
+
+### Fixed
+
+- CHANGELOG documentation updated to reflect Whisper Model location change.
 
 ## [9.1.3] - 2026-01-21
 
@@ -136,7 +170,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Language selection dialog (`LanguageDialog`) for transcription with 14 curated languages + auto-detect.
 - Native language names in dropdown (e.g., "French (Français)", "Japanese (日本語)").
-- Whisper model selection dropdown in Settings (tiny, base, small, medium, large, turbo).
+- Whisper model selection dropdown in Transcription tab (tiny, base, small, medium, large, turbo).
 - Whisper model description explaining turbo is best but largest (~1.5 GB).
 - API key link to Google AI Studio in Settings (clickable).
 - Environment variable support for API keys (`GEMINI_API_KEY`, `GST_API_KEY`).

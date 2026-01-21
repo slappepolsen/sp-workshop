@@ -54,7 +54,7 @@ fi
 # Select input file
 # -----------------------
 
-# Parse arguments: $1 = video path, $2 = language code, $3 = model
+# Parse arguments: $1 = video path, $2 = language code, $3 = model, $4 = output_format
 if [ -z "$1" ]; then
   echo "No input file passed, opening file picker..."
   input_video=$(osascript <<'EOF'
@@ -76,6 +76,9 @@ lang_code="${2:-en}"
 
 # Get model (default to "turbo" if not provided)
 model="${3:-turbo}"
+
+# Get output format (default to "srt" if not provided)
+output_format="${4:-srt}"
 
 # -----------------------
 # Whisper Options (from environment or defaults)
@@ -134,7 +137,7 @@ WHISPER_CMD=(
   whisper "$audio_path"
   --model "$model"
   --fp16 False
-  --output_format srt
+  --output_format "$output_format"
   --output_dir "$input_video_dir"
   --beam_size "$WHISPER_BEAM_SIZE"
   --patience "$WHISPER_PATIENCE"
