@@ -3,7 +3,6 @@
 ![Developer Banner 13](https://ishan-rest.vercel.app/svg/banner/dev13/slappepolsen)
 
 [![Release](https://img.shields.io/github/v/release/slappepolsen/sp-workshop)](../../releases)
-[![Downloads](https://img.shields.io/github/downloads/slappepolsen/sp-workshop/total)](../../releases)
 [![License](https://img.shields.io/github/license/slappepolsen/sp-workshop)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.9+-blue)](https://www.python.org)
 [![Platform](https://img.shields.io/badge/platform-macOS%20|%20Windows%20|%20Linux-lightgrey)](#installation)
