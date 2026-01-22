@@ -97,10 +97,6 @@ Globoplay does **not** use DRM encryption for browser streams, so no keys are ne
    ```
    https://egcdn-vod.video.globo.com/r360_1080/v1/.../14242569.m3u8
    ```
-   or
-   ```
-   https://egcdn-vod.video.globo.com/.../manifest.ism/.../14242569.m3u8
-   ```
 6. **Right-click the URL** → Copy → Copy URL
 7. **Repeat for each episode** you want to download
 8. **Paste all URLs** into SP Workshop (one per line, with or without quotes)
@@ -120,15 +116,7 @@ Globoplay does **not** use DRM encryption for browser streams, so no keys are ne
    ```
 4. **Click "Batch download episodes"**
 
-### Example Commands (Globoplay)
-
-```
-"https://egcdn-vod.video.globo.com/r360_1080/v1/45/ba/4b/14272492_4bcf821e00c8e77d0aa260f332de4bdf464cbbe8/14272492-gGlFB4o-manifest.ism/edge-cache-token=Expires=1769044238&KeyName=media-cdn-keyset-prod&Signature=.../14272492.m3u8"
-"https://egcdn-vod.video.globo.com/r360_1080/v1/.../episode2.m3u8"
-"https://egcdn-vod.video.globo.com/r360_1080/v1/.../episode3.m3u8"
-```
-
-**Note**: You can paste URLs with or without quotes - the downloader handles both.
+**Note**: You can paste URLs with or without quotes, the downloader handles both.
 
 ### Troubleshooting
 
