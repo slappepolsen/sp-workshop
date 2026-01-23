@@ -30,129 +30,162 @@ Designed for non-technical users (too!). If you can download software on your la
 
 ## Installation
 
-**What you need:**
-- **Python 3.9 or higher** - Download from [python.org](https://www.python.org/downloads/) if you don't have it
+**Prerequisites:** Python 3.9 or higher - Download from [python.org](https://www.python.org/downloads/) if needed. Make sure to add it to PATH (the installation wizard will ask you this).
 
-**Installation steps:**
+Go to [Releases](https://github.com/slappepolsen/sp-workshop/releases) and click on `Source code (zip)` under Assets to download SP workshop.
 
-1. **Open Terminal** (macOS/Linux) or **Command Prompt** (Windows):
-   - **macOS**: Press `Cmd(⌘)` + `Space`, type "Terminal", press Enter
-   - **Windows**: Press `Win` + `R`, type "cmd", press Enter
-   - **Linux**: Press `Ctrl` + `Alt` + `T` or find Terminal in your applications
+Choose your operating system below for complete installation instructions:
 
-2. **Navigate to the folder** where you downloaded this project:
-   
-   #### First, get the actual path to your folder:
-   - **Windows**: 
-     - Open File Explorer and find the `sp-workshop` folder
-     - Click once on the folder (select it)
-     - Press `Ctrl` + `Shift` + `C` to copy the file path
-   - **macOS**: 
-     - Open Finder and find the `sp-workshop` folder
-     - Show the path bar: Press `Cmd(⌘)` + `Option(⌥)` + `P` (or View → Show Path Bar)
-     - Click once on the folder in the path bar at the bottom
-     - Right-click and select "Copy [folder name] as Pathname"
-   - **Linux**: 
-     - Right-click the `sp-workshop` folder
-     - Look for "Copy path" or "Copy location" option (varies by file manager)
-     - Or simply drag the folder into the Terminal window
-   
-   Then, in Terminal/Command Prompt, type `cd ` (with a space) and paste the path:
+### macOS
+
+1. **Open Terminal:**
+   - Press `Cmd(⌘)` + `Space`, type "Terminal", press Enter
+
+2. **Navigate to the project folder:**
+   - Open Finder and find the `sp-workshop` folder
+   - Show the path bar: Press `Cmd(⌘)` + `Option(⌥)` + `P` (or View → Show Path Bar)
+   - Click once on the folder in the path bar at the bottom
+   - Right-click and select "Copy [folder name] as Pathname"
+   - In Terminal, type `cd ` (with a space) and paste the path:
+     ```bash
+     cd [paste your path here]
+     ```
+
+3. **Create and activate virtual environment:**
    ```bash
-   cd [paste your path here]
+   python3 -m venv .venv
+   source .venv/bin/activate
    ```
 
-3. **Install required Python packages** (this downloads the libraries the app needs):
+4. **Install Python packages:**
    ```bash
-   pip install -r requirements.txt
+   pip3 install -r requirements.txt
    ```
-   *Note: If you get an error, try `pip3` instead of `pip`, or `python -m pip install -r requirements.txt`*
+   *If you get an error, try `python3 -m pip install -r requirements.txt`*
 
-4. **Run the app**:
+5. **Install FFmpeg (Required):**
+   - If you don't have Homebrew, install it first from [brew.sh](https://brew.sh) (copy the command from the website and paste it into Terminal)
+   - Then run: `brew install ffmpeg`
+   - **Verify:** Type `ffmpeg -version` in Terminal. If you see version information, it's installed!
+
+6. **Install N_m3u8DL-RE (Optional - only needed for batch downloads):**
+   - Go to [github.com/nilaoda/N_m3u8DL-RE/releases](https://github.com/nilaoda/N_m3u8DL-RE/releases)
+   - Download `osx-x64.tar.gz` (Intel) or `osx-arm64.tar.gz` (Apple Silicon M1/M2/M3/M4/...)
+   - Extract the file to get the executable `N_m3u8DL-RE`
+   - Move it to a folder (e.g., `/Users/YourName/bin` or create a new folder)
+   - Edit your shell config: `nano ~/.zshrc`
+   - Add this line (replace `/Users/YourName/bin` with your actual folder path): `export PATH="/Users/YourName/bin:$PATH"`
+   - Save: Press `Ctrl(⌃)` + `X`, then `Y`, then `Enter`
+   - Reload: Type `source ~/.zshrc`, then `Enter`
+   - **Verify:** Type `N_m3u8DL-RE --version`. If you see version information, it's installed!
+
+7. **Set up Google Gemini API Key (Required for translation):**
+   - Go to [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)
+   - Sign in with your Google account
+   - Click "Create API Key" or "Get API Key"
+   - Copy the API key
+   - **Set it up:** Open SP Workshop → Settings → Paste in "API Key (Legacy)" field, OR set it as an environment variable (more secure)
+   - *You can skip this for now and add it later when you need translation*
+
+8. **Run the app:**
    ```bash
    python3 video_app_v8.py
    ```
-   *Note: On Windows, you might need to use `python` instead of `python3`*
+   *Note: Make sure your virtual environment is activated (you should see `(.venv)` in your terminal prompt). If not, run `source .venv/bin/activate` first.*
 
-## External Dependencies
+### Windows
 
-The app needs some additional tools to work properly. These aren't included with the app itself, so you'll need to install them separately. Don't worry, I'll guide you through each one!
+1. **Open Command Prompt:**
+   - Press `Win` + `R`, type "cmd", press Enter
 
-### FFmpeg (Required)
+2. **Navigate to the project folder:**
+   - Open File Explorer and find the `sp-workshop` folder
+   - Click once on the folder (select it)
+   - Press `Ctrl` + `Shift` + `C` to copy the file path
+   - In Command Prompt, type `cd ` (with a space) and paste the path:
+     ```bash
+     cd [paste your path here]
+     ```
 
-**How to install:**
+3. **Create and activate virtual environment:**
+   ```bash
+   python -m venv .venv
+   .venv\Scripts\activate
+   ```
 
-- **macOS:**
-  1. If you don't have Homebrew, install it first from [brew.sh](https://brew.sh) (copy the command from the website and paste it into Terminal)
-  2. Then run: `brew install ffmpeg`
-  3. **Verify it worked:** Type `ffmpeg -version` in Terminal. If you see version information, it's installed!
+4. **Install Python packages:**
+   ```bash
+   pip install -r requirements.txt
+   ```
+   *If you get an error, try `python -m pip install -r requirements.txt`*
 
-- **Windows:**
-  1. Go to [ffmpeg.org/download.html](https://ffmpeg.org/download.html)
-  2. Download the Windows build (choose the "Windows builds from gyan.dev" link)
-  3. Extract the ZIP file to a folder (e.g., `C:\ffmpeg`)
-  4. **Add to PATH:** 
+5. **Install FFmpeg (Required):**
+   - Go to [ffmpeg.org/download.html](https://ffmpeg.org/download.html)
+   - Download the Windows build (choose the "Windows builds from gyan.dev" link)
+   - Extract the ZIP file to a folder (e.g., `C:\ffmpeg`)
+   - **Add to PATH:**
      - Press `Win` + `X` and select "System"
      - Click "Advanced system settings" → "Environment Variables"
      - Under "System variables", find "Path" and click "Edit"
      - Click "New" and add the path to the `bin` folder inside your FFmpeg folder (e.g., `C:\ffmpeg\bin`)
      - Click OK on all windows
-  5. **Verify it worked:** Open Command Prompt (Win + R, type "cmd"), type `ffmpeg -version`. If you see version information, it's installed!
+   - **Verify:** Open a new Command Prompt, type `ffmpeg -version`. If you see version information, it's installed!
 
-- **Linux:**
-  1. Open Terminal
-  2. Run: `sudo apt install ffmpeg` (for Debian/Ubuntu) or `sudo dnf install ffmpeg` (for Fedora)
-  3. **Verify it worked:** Type `ffmpeg -version`. If you see version information, it's installed!
+6. **Install N_m3u8DL-RE (Optional - only needed for batch downloads):**
+   - Go to [github.com/nilaoda/N_m3u8DL-RE/releases](https://github.com/nilaoda/N_m3u8DL-RE/releases)
+   - Download `win-x64.zip` (most modern Windows), `win-arm64.zip` (Surface Pro X), or `win-NT6.0-x86.zip` (32-bit)
+   - Extract the ZIP file to get `N_m3u8DL-RE.exe`
+   - **Add to PATH:** Use the same method as FFmpeg above (add the folder containing the .exe to your PATH)
+   - **Verify:** Open a new Command Prompt, type `N_m3u8DL-RE --version`. If you see version information, it's installed!
 
-### N_m3u8DL-RE (Optional)
+7. **Set up Google Gemini API Key (Required for translation):**
+   - Go to [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)
+   - Sign in with your Google account
+   - Click "Create API Key" or "Get API Key"
+   - Copy the API key
+   - **Set it up:** Open SP Workshop → Settings → Paste in "API Key (Legacy)" field, OR set it as an environment variable (more secure)
+   - *You can skip this for now and add it later when you need translation*
 
-Only needed if you want to use the "Batch download episodes" feature. If you're just processing videos you already have, you can skip this. Instead of downloading episodes one by one, you can paste multiple download commands and let the app download them all automatically.
+8. **Run the app:**
+   ```bash
+   python video_app_v8.py
+   ```
+   *Note: Make sure your virtual environment is activated (you should see `(.venv)` in your command prompt). If not, run `.venv\Scripts\activate` first.*
 
-**How to install:**
+### Linux
 
-1. Go to [github.com/nilaoda/N_m3u8DL-RE/releases](https://github.com/nilaoda/N_m3u8DL-RE/releases)
-2. Download the file for your platform:
-   - **Windows x64** (most modern Windows): `win-x64.zip`
-   - **Windows ARM64** (Surface Pro X): `win-arm64.zip`
-   - **Windows 32-bit**: `win-NT6.0-x86.zip`
-   - **Linux x64** (Ubuntu, etc.): `linux-x64.tar.gz`
-   - **Linux ARM64** (Raspberry Pi): `linux-arm64.tar.gz`
-   - **macOS Intel**: `osx-x64.tar.gz`
-   - **macOS Apple Silicon** (M1/M2/M3/M4/...): `osx-arm64.tar.gz`
-   - *Click "Show all 13 assets" if you don't see these files*
-3. Extract the downloaded file, you'll get a single executable file (e.g., `N_m3u8DL-RE` or `N_m3u8DL-RE.exe`)
-4. **Add to PATH** (so the app can find it):
-   - **macOS/Linux:**
-     1. Move the executable to a folder (e.g., `/Users/YourName/bin` or create a new folder for it)
-     2. Open Terminal
-     3. Edit your shell config: `nano ~/.zshrc` (macOS) or `nano ~/.bashrc` (Linux)
-     4. Add this line (replace `/Users/YourName/bin` with [your actual folder path](#first-get-the-actual-path-to-your-folder)): `export PATH="/Users/YourName/bin:$PATH"`
-     5. Save: Press `Ctrl(⌃)` + `X`, then `Y`, then `Enter`
-     6. Reload: Type `source ~/.zshrc` (macOS) or `source ~/.bashrc` (Linux), then `Enter`
-   - **Windows:** Add the folder to your PATH using the same method as FFmpeg (see above)
-5. **Verify it worked:** Open Terminal/Command Prompt, type `N_m3u8DL-RE --version`. If you see version information, it's installed!
+I mean, I assume you're familiar with CLI so here's just a list of what to install. Navigate to the project folder, then:
 
-*Note: You don't need this if you're only using the app to process videos you already have or transcribe videos.*
+1. **Create and activate virtual environment:**
+   ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate
+   ```
 
-### Google Gemini API Key (Required for Translation)
+2. **Install Python packages:**
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-**What it is:** An API key is like a password that lets the app use Google's AI translation service. It's free to get and use.
+3. **Install FFmpeg (Required):**
+   ```bash
+   sudo apt install ffmpeg  # Debian/Ubuntu
+   # or
+   sudo dnf install ffmpeg  # Fedora
+   ```
 
-**Why you need it:** The app uses Google Gemini AI to translate subtitles. Without an API key, the translation feature won't work. You can still use other features like extracting subtitles or processing videos without it.
+4. **Install N_m3u8DL-RE (Optional - only needed for batch downloads):**
+   - Download from [github.com/nilaoda/N_m3u8DL-RE/releases](https://github.com/nilaoda/N_m3u8DL-RE/releases)
+   - Extract and add to PATH
 
-**How to get one:**
+5. **Set up Google Gemini API Key (Required for translation):**
+   - Get from [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)
+   - Add in Settings or as environment variable
 
-1. Go to [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)
-2. Sign in with your Google account (if you're not already signed in)
-3. Click "Create API Key" or "Get API Key"
-4. Copy the API key that appears (it looks like a long string of letters and numbers)
-5. **Set it up in the app:**
-   - Open SP Workshop
-   - Go to **Settings** (button in top right)
-   - Paste your API key in the "API Key (Legacy)" field, OR
-   - **Recommended (more secure):** Set it as an environment variable on your computer instead of saving it in the app.
-
-**Don't worry if you don't have one yet!** You can always get it later when you need to translate subtitles. The app will remind you if you try to use translation without an API key.
+6. **Run the app:**
+   ```bash
+   python3 video_app_v8.py
+   ```
 
 ## Getting Started
 
@@ -164,7 +197,7 @@ Trust me, once everything is installed, using the app is smooth and efficient.
 **Directory structure:**
 The app creates these folders (you can change them in Settings if you want):
 
-- **`~/VideoProcessing/downloads/`** - Put your raw video files (MKV/MP4) here. If you need to remux before translating (because you want to cut scenes first instead of translating full episodes), place separate SRT files here too.
+- **`~/VideoProcessing/downloads/`** - Put your raw video files (MKV/MP4) here. If you need to remux before translating (because you want to cut scenes first instead of translating full episodes), place separate SRT files here too. Transcribed SRT files go here, too.
 
 - **`~/VideoProcessing/subtitles/`** - This is where your extracted SRT subtitle files live (extracted, cleaned, and translated versions).
 
@@ -212,12 +245,7 @@ Here's basically how things flow (see [batchdownloader_guide.md](batchdownloader
 **Other features:**
 
 - **Remux:** If you already have an MKV file but the subtitles are separate, this combines them (lossless, no re-encoding, so it's fast!)
-- **Transcribe:** Creates subtitles from scratch using Whisper AI if you don't have any. Requires `whisper_auto.sh` to be in the same folder.
-
-**Quick note on resolution:**
-
-- **720p:** Great for archiving large collections (like, if you're me and archiving 2,300 scenes, that's about 38GB in 720p vs 76GB in 1080p...)
-- **1080p:** Perfect for sharing when quality is the priority. File sizes are about double, but the quality is worth it if you have the space.
+- **Transcribe:** Creates subtitles from scratch using Whisper AI if you don't have any. 
 
 ## Troubleshooting
 
@@ -245,18 +273,13 @@ Don't worry, we've all been there. Here's how to fix the common stuff:
 
 - **macOS 10.14+** (primary platform - fully tested)
 - **Windows/Linux** - The app should work, but these platforms haven't been as extensively tested. If you're on Windows or Linux and manage to get it working (or run into issues), please let me know! I'd love to hear about your experience and can help troubleshoot.
+- Some things might need tweaking on other platforms e.g., path handling (I tried my best to make this cross-platform)
+
+**And of course like I mentioned:**
 - Python 3.9 or higher
 - FFmpeg (latest version recommended)
 - N_m3u8DL-RE (for downloads, if you plan to use the batch downloader)
-- Internet connection (for API translation)
-
-**Note for Windows/Linux users:**
-
-The app was primarily built and tested on macOS, so some things might need tweaking on other platforms:
-
-- The `whisper_auto.sh` script is a bash script; Windows users might need to adapt it
-- Path handling should work cross-platform, but let me know if you run into issues
-- The app icon might look different on non-macOS systems (that's fine, it'll still work)
+- Internet connection (only for translation and downloading, the rest is local)
 
 ## Documentation
 - [batchdownloader_guide.md](batchdownloader_guide.md) - How to extract download commands from streaming sources

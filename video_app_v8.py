@@ -181,16 +181,18 @@ def load_config() -> Dict:
         "download_source": "tf1",
         "whisper_output_format": "srt",
         "whisper_options": {
-            "max_line_width": 42,
+            "max_words_per_line": 7,
             "max_line_count": 2,
             "subtitle_style_preset": "Standard",
-            "beam_size": 5,
+            "beam_size": 2,
             "patience": 1.0,
             "best_of": 5,
             "temperature": 0.0,
             "no_speech_threshold": 0.6,
             "compression_ratio_threshold": 2.4,
             "logprob_threshold": -1.0,
+            "clip_timestamps": "0",
+            "hallucination_silence_threshold": None,
             "condition_on_previous_text": True,
             "initial_prompt": "",
             "word_timestamps": True,
@@ -443,6 +445,97 @@ def format_eta(seconds: float) -> str:
         return f"{minutes}m {secs}s"
     else:
         return f"{secs}s"
+
+
+def clean_log_line(line: str) -> Optional[str]:
+    """Clean a log line by removing ANSI codes and filtering noise.
+    
+    Returns None if the line should be skipped, otherwise returns cleaned line.
+    IMPORTANT: Error messages are always preserved.
+    """
+    if not line:
+        return None
+    
+    # Remove ANSI escape codes (colors, cursor movement, etc.)
+    # Pattern matches: \033[...m, \033[F, \033[K, etc.
+    line = re.sub(r'\033\[[0-9;]*[a-zA-Z]', '', line)
+    
+    # Remove common cursor movement sequences
+    line = line.replace('\033[F', '').replace('\033[K', '')
+    
+    # Skip lines that are just cursor movement codes
+    if not line.strip():
+        return None
+    
+    # IMPORTANT: Always preserve error/warning messages - check before filtering
+    is_error = any(keyword in line.lower() for keyword in [
+        'error', 'failed', 'exception', 'warning', 'warn', 'fail', 
+        '✗', '⚠', '❌', 'critical', 'fatal', 'unable', 'cannot',
+        'not found', 'missing', 'invalid', 'denied', 'timeout'
+    ])
+    
+    # If it's an error, return it immediately (cleaned but preserved)
+    if is_error:
+        return f"    ⚠ {line.strip()}"
+    
+    # Skip repeated "Validating token size..." messages
+    if "Validating token size..." in line:
+        return None
+    
+    # Skip "Token size validated. Translating..." (redundant)
+    if "Token size validated. Translating..." in line:
+        return None
+    
+    # Skip "Starting with API Key" messages (not useful)
+    if "Starting with" in line and "API Key" in line:
+        return None
+    
+    # Handle "Starting translation of X lines..." - keep this but clean it
+    if "Starting translation of" in line and "lines..." in line:
+        match = re.search(r'Starting translation of (\d+) lines', line)
+        if match:
+            return f"    Starting translation of {match.group(1)} lines..."
+    
+    # Clean up progress lines - extract just the useful info
+    if "Translating:" in line and "|" in line:
+        # Extract progress bar, percentage, and status
+        # Format: Translating: |██████░░░░░░| 50% (10/20) model | Status
+        match = re.search(r'Translating:.*?(\d+)% \((\d+)/(\d+)\)', line)
+        if match:
+            percent = match.group(1)
+            current = match.group(2)
+            total = match.group(3)
+            
+            # Extract status if present (after the last |)
+            status_parts = line.split('|')
+            status = ""
+            if len(status_parts) > 1:
+                # Get the last part after |
+                last_part = status_parts[-1].strip()
+                # Remove model name if present
+                last_part = re.sub(r'gemini-[^\s]+', '', last_part).strip()
+                if last_part and last_part not in ['Thinking', 'Processing', 'Sending batch']:
+                    status = last_part
+                elif last_part in ['Thinking', 'Processing']:
+                    # Extract spinner character if present
+                    spinner_match = re.search(r'(Thinking|Processing)\s*([—\\|/])', line)
+                    if spinner_match:
+                        status = f"{spinner_match.group(1)}..."
+                    else:
+                        status = f"{last_part}..."
+            
+            # Build clean progress line
+            if status:
+                return f"    Progress: {percent}% ({current}/{total} lines) - {status}"
+            else:
+                return f"    Progress: {percent}% ({current}/{total} lines)"
+    
+    # Clean up success messages
+    if "✅" in line or "Translation completed successfully" in line:
+        return "    ✓ Translation completed successfully!"
+    
+    # Return cleaned line for other messages
+    return line.strip()
 
 
 def detect_episode_or_scene(video_path: Path) -> tuple[str, Optional[float]]:
@@ -1058,19 +1151,25 @@ def translate_subtitles(selected_srt_files: List[Path], api_key: Optional[str] =
                 env=env  # Pass environment with API key
             )
             
-            # Stream output line by line
+            # Stream output line by line with cleaning
             output_lines = []
+            last_progress_line = None
             while True:
                 line_output = process.stdout.readline()
                 if not line_output:
                     break
                 
-                line_output = line_output.strip()
-                if line_output:
-                    output_lines.append(line_output)
-                    # Log translation progress
-                    if log_callback:
-                        log_callback(f"    {line_output}")
+                # Clean the line
+                cleaned_line = clean_log_line(line_output)
+                
+                if cleaned_line:
+                    output_lines.append(line_output.strip())  # Keep original for error reporting
+                    
+                    # Only log if it's different from the last progress line (avoid duplicates)
+                    if cleaned_line != last_progress_line:
+                        if log_callback:
+                            log_callback(cleaned_line)
+                        last_progress_line = cleaned_line
             
             # Wait for process to complete
             returncode = process.wait()
@@ -1843,22 +1942,39 @@ def transcribe_video(video_path: Path, language_code: str, model: str, whisper_o
             log_callback(f"Starting transcription of: {video_path.name}")
             log_callback(f"Language: {language_code}, Model: {model}, Format: {output_format}")
         
-        # Prepare environment variables with whisper options
+        # Prepare environment variables - only set if explicitly provided
         env = os.environ.copy()
         if whisper_options:
-            env["WHISPER_MAX_LINE_WIDTH"] = str(whisper_options.get("max_line_width", 42))
-            env["WHISPER_MAX_LINE_COUNT"] = str(whisper_options.get("max_line_count", 2))
-            env["WHISPER_BEAM_SIZE"] = str(whisper_options.get("beam_size", 5))
-            env["WHISPER_PATIENCE"] = str(whisper_options.get("patience", 1.0))
-            env["WHISPER_BEST_OF"] = str(whisper_options.get("best_of", 5))
-            env["WHISPER_TEMPERATURE"] = str(whisper_options.get("temperature", 0.0))
-            env["WHISPER_NO_SPEECH_THRESHOLD"] = str(whisper_options.get("no_speech_threshold", 0.6))
-            env["WHISPER_COMPRESSION_RATIO"] = str(whisper_options.get("compression_ratio_threshold", 2.4))
-            env["WHISPER_LOGPROB_THRESHOLD"] = str(whisper_options.get("logprob_threshold", -1.0))
-            env["WHISPER_CONDITION_ON_PREVIOUS"] = str(whisper_options.get("condition_on_previous_text", True))
-            env["WHISPER_INITIAL_PROMPT"] = whisper_options.get("initial_prompt", "")
-            env["WHISPER_WORD_TIMESTAMPS"] = str(whisper_options.get("word_timestamps", True))
-            env["WHISPER_HIGHLIGHT_WORDS"] = str(whisper_options.get("highlight_words", False))
+            # Basic option (always has a default)
+            env["WHISPER_BEAM_SIZE"] = str(whisper_options.get("beam_size", 2))
+            
+            # Advanced options - only set if key exists and value is not None/empty
+            if "patience" in whisper_options and whisper_options["patience"] is not None:
+                env["WHISPER_PATIENCE"] = str(whisper_options["patience"])
+            if "best_of" in whisper_options and whisper_options["best_of"] is not None:
+                env["WHISPER_BEST_OF"] = str(whisper_options["best_of"])
+            if "temperature" in whisper_options and whisper_options["temperature"] is not None:
+                env["WHISPER_TEMPERATURE"] = str(whisper_options["temperature"])
+            if "word_timestamps" in whisper_options and whisper_options["word_timestamps"] is not None:
+                env["WHISPER_WORD_TIMESTAMPS"] = str(whisper_options["word_timestamps"])
+            if "max_words_per_line" in whisper_options and whisper_options["max_words_per_line"] is not None:
+                env["WHISPER_MAX_WORDS_PER_LINE"] = str(whisper_options["max_words_per_line"])
+            if "condition_on_previous_text" in whisper_options and whisper_options["condition_on_previous_text"] is not None:
+                env["WHISPER_CONDITION_ON_PREVIOUS"] = str(whisper_options["condition_on_previous_text"])
+            if "no_speech_threshold" in whisper_options and whisper_options["no_speech_threshold"] is not None:
+                env["WHISPER_NO_SPEECH_THRESHOLD"] = str(whisper_options["no_speech_threshold"])
+            if "compression_ratio_threshold" in whisper_options and whisper_options["compression_ratio_threshold"] is not None:
+                env["WHISPER_COMPRESSION_RATIO"] = str(whisper_options["compression_ratio_threshold"])
+            if "logprob_threshold" in whisper_options and whisper_options["logprob_threshold"] is not None:
+                env["WHISPER_LOGPROB_THRESHOLD"] = str(whisper_options["logprob_threshold"])
+            if "initial_prompt" in whisper_options and whisper_options.get("initial_prompt"):
+                env["WHISPER_INITIAL_PROMPT"] = whisper_options["initial_prompt"]
+            if "highlight_words" in whisper_options and whisper_options.get("highlight_words"):
+                env["WHISPER_HIGHLIGHT_WORDS"] = str(whisper_options["highlight_words"])
+            if "clip_timestamps" in whisper_options and whisper_options.get("clip_timestamps") and whisper_options["clip_timestamps"] != "0":
+                env["WHISPER_CLIP_TIMESTAMPS"] = str(whisper_options["clip_timestamps"])
+            if "hallucination_silence_threshold" in whisper_options and whisper_options["hallucination_silence_threshold"] is not None:
+                env["WHISPER_HALLUCINATION_SILENCE_THRESHOLD"] = str(whisper_options["hallucination_silence_threshold"])
         
         # Run the script with video path, language code, model, and output format as arguments
         result = subprocess.run(
@@ -2060,22 +2176,39 @@ def transcribe_video_time_range(
                 temp_audio.unlink()
             return False
         
-        # Prepare environment variables with whisper options
+        # Prepare environment variables - only set if explicitly provided
         env = os.environ.copy()
         if whisper_options:
-            env["WHISPER_MAX_LINE_WIDTH"] = str(whisper_options.get("max_line_width", 42))
-            env["WHISPER_MAX_LINE_COUNT"] = str(whisper_options.get("max_line_count", 2))
-            env["WHISPER_BEAM_SIZE"] = str(whisper_options.get("beam_size", 5))
-            env["WHISPER_PATIENCE"] = str(whisper_options.get("patience", 1.0))
-            env["WHISPER_BEST_OF"] = str(whisper_options.get("best_of", 5))
-            env["WHISPER_TEMPERATURE"] = str(whisper_options.get("temperature", 0.0))
-            env["WHISPER_NO_SPEECH_THRESHOLD"] = str(whisper_options.get("no_speech_threshold", 0.6))
-            env["WHISPER_COMPRESSION_RATIO"] = str(whisper_options.get("compression_ratio_threshold", 2.4))
-            env["WHISPER_LOGPROB_THRESHOLD"] = str(whisper_options.get("logprob_threshold", -1.0))
-            env["WHISPER_CONDITION_ON_PREVIOUS"] = str(whisper_options.get("condition_on_previous_text", True))
-            env["WHISPER_INITIAL_PROMPT"] = whisper_options.get("initial_prompt", "")
-            env["WHISPER_WORD_TIMESTAMPS"] = str(whisper_options.get("word_timestamps", True))
-            env["WHISPER_HIGHLIGHT_WORDS"] = str(whisper_options.get("highlight_words", False))
+            # Basic option (always has a default)
+            env["WHISPER_BEAM_SIZE"] = str(whisper_options.get("beam_size", 2))
+            
+            # Advanced options - only set if key exists and value is not None/empty
+            if "patience" in whisper_options and whisper_options["patience"] is not None:
+                env["WHISPER_PATIENCE"] = str(whisper_options["patience"])
+            if "best_of" in whisper_options and whisper_options["best_of"] is not None:
+                env["WHISPER_BEST_OF"] = str(whisper_options["best_of"])
+            if "temperature" in whisper_options and whisper_options["temperature"] is not None:
+                env["WHISPER_TEMPERATURE"] = str(whisper_options["temperature"])
+            if "word_timestamps" in whisper_options and whisper_options["word_timestamps"] is not None:
+                env["WHISPER_WORD_TIMESTAMPS"] = str(whisper_options["word_timestamps"])
+            if "max_words_per_line" in whisper_options and whisper_options["max_words_per_line"] is not None:
+                env["WHISPER_MAX_WORDS_PER_LINE"] = str(whisper_options["max_words_per_line"])
+            if "condition_on_previous_text" in whisper_options and whisper_options["condition_on_previous_text"] is not None:
+                env["WHISPER_CONDITION_ON_PREVIOUS"] = str(whisper_options["condition_on_previous_text"])
+            if "no_speech_threshold" in whisper_options and whisper_options["no_speech_threshold"] is not None:
+                env["WHISPER_NO_SPEECH_THRESHOLD"] = str(whisper_options["no_speech_threshold"])
+            if "compression_ratio_threshold" in whisper_options and whisper_options["compression_ratio_threshold"] is not None:
+                env["WHISPER_COMPRESSION_RATIO"] = str(whisper_options["compression_ratio_threshold"])
+            if "logprob_threshold" in whisper_options and whisper_options["logprob_threshold"] is not None:
+                env["WHISPER_LOGPROB_THRESHOLD"] = str(whisper_options["logprob_threshold"])
+            if "initial_prompt" in whisper_options and whisper_options.get("initial_prompt"):
+                env["WHISPER_INITIAL_PROMPT"] = whisper_options["initial_prompt"]
+            if "highlight_words" in whisper_options and whisper_options.get("highlight_words"):
+                env["WHISPER_HIGHLIGHT_WORDS"] = str(whisper_options["highlight_words"])
+            if "clip_timestamps" in whisper_options and whisper_options.get("clip_timestamps") and whisper_options["clip_timestamps"] != "0":
+                env["WHISPER_CLIP_TIMESTAMPS"] = str(whisper_options["clip_timestamps"])
+            if "hallucination_silence_threshold" in whisper_options and whisper_options["hallucination_silence_threshold"] is not None:
+                env["WHISPER_HALLUCINATION_SILENCE_THRESHOLD"] = str(whisper_options["hallucination_silence_threshold"])
         
         # Use whisper_auto.sh script (same as regular transcription)
         result = subprocess.run(
@@ -2889,7 +3022,7 @@ class AboutDialog(QDialog):
         <div style="padding: 24px;">
         <div class="app-name">Video Processing Studio</div>
         
-        <div class="version">Version 9.1.3</div>
+        <div class="version">Version 9.2.1</div>
         
         <div class="creator">
         <span style="color: #df4300; font-weight: 600;">Created by:</span> SLAPPEPOLSEN
@@ -3553,7 +3686,7 @@ class WhisperOptionsDialog(QDialog):
         basic_layout.addRow("", preset_info)
         
         self.subtitle_preset_combo = QComboBox()
-        self.subtitle_preset_combo.addItems(["Standard (42/2)", "Narrow (30/2)", "Wide (60/2)", "Custom"])
+        self.subtitle_preset_combo.addItems(["Standard (7/2)", "Narrow (5/2)", "Wide (10/2)", "Soap Opera (12/2)", "Custom"])
         preset = self.config.get("whisper_options", {}).get("subtitle_style_preset", "Standard")
         preset_index = self.subtitle_preset_combo.findText(preset, Qt.MatchStartsWith)
         if preset_index >= 0:
@@ -3562,11 +3695,11 @@ class WhisperOptionsDialog(QDialog):
         basic_layout.addRow("Subtitle Style:", self.subtitle_preset_combo)
         
         # Max Words Per Line
-        self.max_line_width_spin = QSpinBox()
-        self.max_line_width_spin.setRange(20, 80)
-        self.max_line_width_spin.setValue(self.config.get("whisper_options", {}).get("max_line_width", 42))
-        self.max_line_width_spin.setToolTip("Controls how many characters fit on one subtitle line")
-        basic_layout.addRow("Max Characters Per Line:", self.max_line_width_spin)
+        self.max_words_per_line_spin = QSpinBox()
+        self.max_words_per_line_spin.setRange(3, 20)
+        self.max_words_per_line_spin.setValue(self.config.get("whisper_options", {}).get("max_words_per_line", 7))
+        self.max_words_per_line_spin.setToolTip("Controls how many words fit on one subtitle line (breaks naturally at word boundaries)")
+        basic_layout.addRow("Max Words Per Line:", self.max_words_per_line_spin)
         
         # Max Lines Per Subtitle
         self.max_line_count_spin = QSpinBox()
@@ -3642,6 +3775,18 @@ class WhisperOptionsDialog(QDialog):
         self.logprob_threshold_spin.setToolTip("Minimum confidence to accept transcription")
         silence_layout.addRow("Log Prob Threshold:", self.logprob_threshold_spin)
         
+        self.hallucination_silence_threshold_spin = QDoubleSpinBox()
+        self.hallucination_silence_threshold_spin.setRange(0.0, 10.0)
+        self.hallucination_silence_threshold_spin.setSingleStep(0.1)
+        self.hallucination_silence_threshold_spin.setSpecialValueText("Disabled")
+        hall_thresh = self.config.get("whisper_options", {}).get("hallucination_silence_threshold")
+        if hall_thresh is None:
+            self.hallucination_silence_threshold_spin.setValue(0.0)
+        else:
+            self.hallucination_silence_threshold_spin.setValue(hall_thresh)
+        self.hallucination_silence_threshold_spin.setToolTip("Skip silent periods longer than this (seconds) when hallucination detected. Requires word timestamps. Set to 0 to disable.")
+        silence_layout.addRow("Hallucination Silence Threshold:", self.hallucination_silence_threshold_spin)
+        
         silence_group.setLayout(silence_layout)
         advanced_layout.addWidget(silence_group)
         
@@ -3676,6 +3821,13 @@ class WhisperOptionsDialog(QDialog):
         self.highlight_words_checkbox.setChecked(self.config.get("whisper_options", {}).get("highlight_words", False))
         self.highlight_words_checkbox.setToolTip("Add highlighting in SRT/VTT as words are spoken")
         decoding_layout.addRow("", self.highlight_words_checkbox)
+        
+        self.clip_timestamps_input = QLineEdit()
+        clip_ts = self.config.get("whisper_options", {}).get("clip_timestamps", "0")
+        self.clip_timestamps_input.setText(str(clip_ts) if clip_ts != "0" else "")
+        self.clip_timestamps_input.setPlaceholderText("e.g., 10,30,60,90 (process 10-30s and 60-90s)")
+        self.clip_timestamps_input.setToolTip("Process only specific time ranges. Format: start,end,start,end,... (comma-separated pairs in seconds). Leave empty to process entire file.")
+        decoding_layout.addRow("Clip Timestamps:", self.clip_timestamps_input)
         
         decoding_group.setLayout(decoding_layout)
         advanced_layout.addWidget(decoding_group)
@@ -3712,24 +3864,30 @@ class WhisperOptionsDialog(QDialog):
     def on_preset_changed(self, preset_text):
         """Handle preset selection changes."""
         is_custom = "Custom" in preset_text
-        self.max_line_width_spin.setEnabled(is_custom)
+        self.max_words_per_line_spin.setEnabled(is_custom)
         self.max_line_count_spin.setEnabled(is_custom)
         
         if not is_custom:
             if "Standard" in preset_text:
-                self.max_line_width_spin.setValue(42)
+                self.max_words_per_line_spin.setValue(7)
                 self.max_line_count_spin.setValue(2)
             elif "Narrow" in preset_text:
-                self.max_line_width_spin.setValue(30)
+                self.max_words_per_line_spin.setValue(5)
                 self.max_line_count_spin.setValue(2)
             elif "Wide" in preset_text:
-                self.max_line_width_spin.setValue(60)
+                self.max_words_per_line_spin.setValue(10)
                 self.max_line_count_spin.setValue(2)
+            elif "Soap Opera" in preset_text:
+                self.max_words_per_line_spin.setValue(12)
+                self.max_line_count_spin.setValue(2)
+                # Also adjust silence detection for natural dialogue
+                self.no_speech_threshold_spin.setValue(0.4)
+                self.hallucination_silence_threshold_spin.setValue(1.5)
     
     def reset_whisper_defaults(self):
         """Reset all whisper options to default values."""
-        self.subtitle_preset_combo.setCurrentText("Standard (42/2)")
-        self.max_line_width_spin.setValue(42)
+        self.subtitle_preset_combo.setCurrentText("Standard (7/2)")
+        self.max_words_per_line_spin.setValue(7)
         self.max_line_count_spin.setValue(2)
         self.beam_size_spin.setValue(5)
         self.patience_spin.setValue(1.0)
@@ -3742,6 +3900,8 @@ class WhisperOptionsDialog(QDialog):
         self.initial_prompt_input.setText("")
         self.word_timestamps_checkbox.setChecked(True)
         self.highlight_words_checkbox.setChecked(False)
+        self.clip_timestamps_input.setText("")
+        self.hallucination_silence_threshold_spin.setValue(0.0)
     
     def save_settings(self):
         """Save whisper options and close dialog."""
@@ -3754,11 +3914,13 @@ class WhisperOptionsDialog(QDialog):
             preset = "Narrow"
         elif "Wide" in preset_text:
             preset = "Wide"
+        elif "Soap Opera" in preset_text:
+            preset = "Soap Opera"
         else:
             preset = "Standard"
         
         self.config["whisper_options"] = {
-            "max_line_width": self.max_line_width_spin.value(),
+            "max_words_per_line": self.max_words_per_line_spin.value(),
             "max_line_count": self.max_line_count_spin.value(),
             "subtitle_style_preset": preset,
             "beam_size": self.beam_size_spin.value(),
@@ -3772,6 +3934,7 @@ class WhisperOptionsDialog(QDialog):
             "initial_prompt": self.initial_prompt_input.text(),
             "word_timestamps": self.word_timestamps_checkbox.isChecked(),
             "highlight_words": self.highlight_words_checkbox.isChecked(),
+            "hallucination_silence_threshold": None if self.hallucination_silence_threshold_spin.value() == 0.0 else self.hallucination_silence_threshold_spin.value(),
             "length_penalty": None
         }
         
@@ -5018,7 +5181,7 @@ class VideoProcessingApp(QMainWindow):
         header_left_layout.addWidget(app_name_label)
         
         # Version number below title
-        version_label = QLabel('version 9.1.3 "Polyglot"')
+        version_label = QLabel('version 9.2.1 "Polyglot"')
         version_label.setFont(QFont("Arial", 18))
         version_label.setStyleSheet("color: #999; font-style: italic;")
         header_left_layout.addWidget(version_label)

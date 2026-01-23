@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [9.2.1] - 2026-01-21
+
+### Changed
+
+- Installation instructions reorganized into OS-specific sections (macOS, Windows, Linux) for better clarity.
+- Linux installation section simplified for CLI-familiar users.
+- Virtual environment setup (`.venv`) added to all installation instructions as best practice.
+- Installation prerequisites updated with Python PATH requirement and download link to releases.
+
+### Fixed
+
+- Step numbering corrected in macOS installation section.
+
 ## [9.2.0] - 2026-01-21
 
 ### Added
