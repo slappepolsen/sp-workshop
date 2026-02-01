@@ -1,0 +1,7 @@
+#!/bin/sh
+# Remove Co-authored-by: Cursor from commit messages
+# Install: cp scripts/prepare-commit-msg .git/hooks/ && chmod +x .git/hooks/prepare-commit-msg
+COMMIT_MSG_FILE=$1
+[ -z "$COMMIT_MSG_FILE" ] || [ ! -f "$COMMIT_MSG_FILE" ] && exit 0
+grep -v 'Co-authored-by: Cursor' "$COMMIT_MSG_FILE" > "$COMMIT_MSG_FILE.tmp" && mv "$COMMIT_MSG_FILE.tmp" "$COMMIT_MSG_FILE"
+exit 0

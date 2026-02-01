@@ -1,0 +1,7 @@
+# SP Workshop - Cursor Rules
+
+## Git commits
+
+- Never add Co-authored-by or any attribution other than slappepolsen to commits.
+- When running git commit, use: `GIT_AUTHOR_NAME="slappepolsen" GIT_AUTHOR_EMAIL="slappepolsen@users.noreply.github.com" GIT_COMMITTER_NAME="slappepolsen" GIT_COMMITTER_EMAIL="slappepolsen@users.noreply.github.com" git commit -F /tmp/msg.txt` (or equivalent) to avoid Cursor being added as co-author.
+- Ensure `scripts/prepare-commit-msg` is installed as `.git/hooks/prepare-commit-msg` (run `./scripts/install-hooks.sh`) so Co-authored-by: Cursor is stripped from commit messages.
