@@ -77,26 +77,8 @@ lang_code="${2:-en}"
 # Get model (default to "turbo" if not provided)
 model="${3:-turbo}"
 
-# Get output format (default to "srt" if not provided)
-output_format="${4:-srt}"
-
-# -----------------------
-# Whisper Options (from environment or defaults)
-# -----------------------
-# These can be set by the calling Python script via environment variables
-WHISPER_MAX_LINE_WIDTH="${WHISPER_MAX_LINE_WIDTH:-42}"
-WHISPER_MAX_LINE_COUNT="${WHISPER_MAX_LINE_COUNT:-2}"
-WHISPER_BEAM_SIZE="${WHISPER_BEAM_SIZE:-5}"
-WHISPER_PATIENCE="${WHISPER_PATIENCE:-1.0}"
-WHISPER_BEST_OF="${WHISPER_BEST_OF:-5}"
-WHISPER_TEMPERATURE="${WHISPER_TEMPERATURE:-0.0}"
-WHISPER_NO_SPEECH_THRESHOLD="${WHISPER_NO_SPEECH_THRESHOLD:-0.6}"
-WHISPER_COMPRESSION_RATIO="${WHISPER_COMPRESSION_RATIO:-2.4}"
-WHISPER_LOGPROB_THRESHOLD="${WHISPER_LOGPROB_THRESHOLD:--1.0}"
-WHISPER_CONDITION_ON_PREVIOUS="${WHISPER_CONDITION_ON_PREVIOUS:-True}"
-WHISPER_INITIAL_PROMPT="${WHISPER_INITIAL_PROMPT:-}"
-WHISPER_WORD_TIMESTAMPS="${WHISPER_WORD_TIMESTAMPS:-True}"
-WHISPER_HIGHLIGHT_WORDS="${WHISPER_HIGHLIGHT_WORDS:-False}"
+# Get output format (default to "all" if not provided)
+output_format="${4:-all}"
 
 # Normalize paths
 input_video_dir=$(dirname "$input_video")
@@ -129,42 +111,26 @@ echo "Extracting and normalizing audio..."
 ffmpeg -i "$input_video" -ac 1 -ar 16000 -c:a pcm_s16le -af dynaudnorm "$audio_path" -loglevel warning -hide_banner 2>&1 || true
 
 echo "Transcribing with Whisper..."
-# Build whisper command with configurable options
-# Options are set via environment variables or use defaults
-
-# Build the base command
+# Build default command - simple and clean
 WHISPER_CMD=(
   whisper "$audio_path"
   --model "$model"
+  --language "$lang_code"
   --fp16 False
   --output_format "$output_format"
+  --beam_size 2
   --output_dir "$input_video_dir"
-  --beam_size "$WHISPER_BEAM_SIZE"
-  --patience "$WHISPER_PATIENCE"
-  --best_of "$WHISPER_BEST_OF"
-  --temperature "$WHISPER_TEMPERATURE"
-  --word_timestamps "$WHISPER_WORD_TIMESTAMPS"
-  --max_line_width "$WHISPER_MAX_LINE_WIDTH"
-  --max_line_count "$WHISPER_MAX_LINE_COUNT"
-  --condition_on_previous_text "$WHISPER_CONDITION_ON_PREVIOUS"
-  --no_speech_threshold "$WHISPER_NO_SPEECH_THRESHOLD"
-  --compression_ratio_threshold "$WHISPER_COMPRESSION_RATIO"
-  --logprob_threshold "$WHISPER_LOGPROB_THRESHOLD"
 )
 
-# Add language if not auto-detect
-if [ "$lang_code" != "auto" ]; then
-  WHISPER_CMD+=(--language "$lang_code")
-fi
-
-# Add initial prompt if provided
-if [ -n "$WHISPER_INITIAL_PROMPT" ]; then
-  WHISPER_CMD+=(--initial_prompt "$WHISPER_INITIAL_PROMPT")
-fi
-
-# Add highlight_words if enabled
-if [ "$WHISPER_HIGHLIGHT_WORDS" = "True" ] || [ "$WHISPER_HIGHLIGHT_WORDS" = "true" ]; then
-  WHISPER_CMD+=(--highlight_words True)
+# Append user-provided extra arguments if set
+if [ -n "${WHISPER_EXTRA_ARGS}" ]; then
+  # Split WHISPER_EXTRA_ARGS by spaces and add each as a separate argument
+  # This handles both flags (--flag) and options with values (--option value)
+  # Note: For values with spaces, users should quote them in the UI
+  IFS=' ' read -ra EXTRA_ARGS <<< "$WHISPER_EXTRA_ARGS"
+  for arg in "${EXTRA_ARGS[@]}"; do
+    WHISPER_CMD+=("$arg")
+  done
 fi
 
 # Execute the command
