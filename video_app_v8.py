@@ -7,6 +7,7 @@ A PyQt5 desktop app that provides a button-based interface for all video process
 import sys
 import os
 import json
+from urllib.parse import urlparse
 import re
 import shlex
 import subprocess
@@ -55,13 +56,8 @@ def extract_cookies_from_har(har_file: Path) -> Optional[str]:
                 # Some HAR files store cookies at page level
                 pass
         
-        # Get cookies from all entries
+        # Get cookies from all entries (generic - no domain filter)
         for entry in har_data.get('log', {}).get('entries', []):
-            url = entry.get('request', {}).get('url', '')
-            # Only process globoplay-related requests
-            if 'globoplay' not in url.lower() and 'globo.com' not in url.lower():
-                continue
-            
             # Get cookies from request headers (Cookie header)
             request = entry.get('request', {})
             for header in request.get('headers', []):
@@ -120,8 +116,11 @@ from PyQt5.QtWidgets import (
     QGraphicsDropShadowEffect, QTabWidget, QSpinBox, QDoubleSpinBox, QScrollArea, QTimeEdit, QListWidget, QListWidgetItem, QTreeWidget, QTreeWidgetItem, QHeaderView, QMenu
 )
 from PyQt5.QtCore import QThread, pyqtSignal, Qt, QProcess, QUrl, QTime, QTimer
-from PyQt5.QtGui import QFont, QIcon, QPainter, QPen
+from PyQt5.QtGui import QFont, QIcon, QPainter, QPen, QDesktopServices
 
+
+# URL for download instructions (rentry.co page - update when creating the page)
+DOWNLOAD_INSTRUCTIONS_URL = "https://rentry.co/sp-workshop"
 
 # ============================================================================
 # Custom Widgets
@@ -178,26 +177,10 @@ def load_config() -> Dict:
         "ffmpeg_preset": "medium",
         "setup_complete": False,
         "use_watermarks": True,
-        "download_source": "tf1",
         "whisper_output_format": "srt",
         "whisper_options": {
-            "max_words_per_line": 7,
-            "max_line_count": 2,
-            "subtitle_style_preset": "Standard",
-            "beam_size": 2,
-            "patience": 1.0,
-            "best_of": 5,
-            "temperature": 0.0,
-            "no_speech_threshold": 0.6,
-            "compression_ratio_threshold": 2.4,
-            "logprob_threshold": -1.0,
-            "clip_timestamps": "0",
-            "hallucination_silence_threshold": None,
-            "condition_on_previous_text": True,
-            "initial_prompt": "",
-            "word_timestamps": True,
-            "highlight_words": False,
-            "length_penalty": None
+            "extra_args": "",
+            "extra_args_parsed": ""
         }
     }
     
@@ -594,16 +577,6 @@ def open_in_lossless_cut(video_paths: List[Path], log_callback=None) -> bool:
 
 
 # ============================================================================
-# Source Settings for Batch Downloader
-# ============================================================================
-
-SOURCE_SETTINGS = {
-    "tf1": {"audio_lang": "fr", "subtitle_lang": "fr", "name": "TF1 (French)"},
-    "globoplay": {"audio_lang": "pt", "subtitle_lang": "pt", "name": "Globoplay (Portuguese)"},
-}
-
-
-# ============================================================================
 # ISO 639-2/T Language Codes for Subtitle Suffixes
 # ============================================================================
 
@@ -668,19 +641,48 @@ def parse_episode_range(range_str: str) -> List[int]:
     return episodes
 
 
+def _add_headers_for_bare_url(url_or_cmd: str) -> str:
+    """Add Referer/Origin headers for bare URLs. Many CDNs require these to avoid 403."""
+    # Derive Referer/Origin from URL domain (internal mapping, not user-facing)
+    url = url_or_cmd.strip().strip('"')
+    if not url.startswith('http'):
+        return url_or_cmd
+    url_lower = url.lower()
+    if 'globo.com' in url_lower or 'globoplay' in url_lower:
+        referer, origin = "https://globoplay.globo.com/", "https://globoplay.globo.com"
+    elif 'tf1.fr' in url_lower:
+        referer, origin = "https://www.tf1.fr/", "https://www.tf1.fr"
+    else:
+        # Generic: use URL's origin (scheme + host)
+        try:
+            p = urlparse(url)
+            base = f"{p.scheme}://{p.netloc}"
+            referer, origin = base + "/", base
+        except Exception:
+            referer, origin = "https://example.com/", "https://example.com"
+    headers = [
+        f'-H {shlex.quote("User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")}',
+        f'-H {shlex.quote(f"Referer: {referer}")}',
+        f'-H {shlex.quote("Accept: */*")}',
+        f'-H {shlex.quote("Origin: " + origin)}',
+    ]
+    # Always quote URL to handle &, =, etc. in query params
+    return f"{' '.join(headers)} \"{url}\""
+
+
 # ============================================================================
 # Script Wrappers
 # ============================================================================
 
-def download_episodes(commands_text: str, output_dir: Path, source: str = "tf1", 
-                      episode_spec: str = "1", har_file: Optional[Path] = None, 
+def download_episodes(commands_text: str, output_dir: Path, episode_spec: str = "1", 
                       progress_callback=None, log_callback=None) -> bool:
     """Download episodes using commands from text.
+    
+    User pastes full N_m3u8DL-RE commands per instructions. App adds save options only.
     
     Args:
         commands_text: Raw N_m3u8DL-RE commands, one per line
         output_dir: Directory to save downloaded files
-        source: Source service ("tf1", "globoplay") for language settings
         episode_spec: Episode specification (e.g., "1", "1-5", "1,3,5-7")
         progress_callback: Callback for progress updates
         log_callback: Callback for log messages
@@ -713,28 +715,10 @@ def download_episodes(commands_text: str, output_dir: Path, source: str = "tf1",
         last_num = episode_numbers[-1]
         episode_numbers.extend(range(last_num + 1, last_num + 1 + (len(lines) - len(episode_numbers))))
     
-    # Get language settings for this source
-    settings = SOURCE_SETTINGS.get(source, SOURCE_SETTINGS["tf1"])
-    audio_lang = settings["audio_lang"]
-    subtitle_lang = settings["subtitle_lang"]
-    
-    # Extract cookies from HAR file if provided
-    cookies = None
-    if har_file:
-        cookies = extract_cookies_from_har(har_file)
-        if cookies and log_callback:
-            cookie_count = len(cookies.split(';'))
-            # Show first few cookie names for debugging (not values for security)
-            cookie_names = [c.split('=')[0] for c in cookies.split(';')[:5]]
-            log_callback(f"Extracted {cookie_count} cookies from HAR file: {', '.join(cookie_names)}{'...' if cookie_count > 5 else ''}")
-        elif log_callback:
-            log_callback(f"Warning: No cookies found in HAR file {har_file}")
-    
     downloaded_files = []
     total = len(lines)
     if log_callback:
         log_callback(f"Starting batch download for {total} episodes...")
-        log_callback(f"Source: {settings['name']} | Audio: {audio_lang} | Subtitles: {subtitle_lang}")
         if episode_numbers:
             log_callback(f"Episode numbers: {', '.join(map(str, episode_numbers[:10]))}{' ...' if len(episode_numbers) > 10 else ''}")
     
@@ -749,68 +733,33 @@ def download_episodes(commands_text: str, output_dir: Path, source: str = "tf1",
         if base_command.lower().startswith('n_m3u8dl-re '):
             base_command = base_command[12:].strip()
         
+        # If line looks like a bare URL (no -H, no --key), add headers many CDNs require
+        if ' -H ' not in base_command and ' --key ' not in base_command and base_command.lstrip('"').startswith('http'):
+            base_command = _add_headers_for_bare_url(base_command)
+            if log_callback:
+                log_callback("  (Bare URL detected – added Referer/Origin headers)")
+        
         if progress_callback:
             progress_callback(i + 1, total, f"Episode {episode_number}")
         
-        # Build command with source-specific options
-        # For Globo: quote simple URLs to handle special characters (&, =, etc.)
-        # For TF1: use command as-is (already has proper quoting, headers, keys)
-        if source == "globoplay":
-            quoted_url = f'"{base_command}"'
-        else:
-            quoted_url = base_command
-        
-        # Build headers list for Globoplay
-        headers = []
-        if source == "globoplay":
-            # Add browser-like headers to mimic legitimate requests
-            # N_m3u8DL-RE uses -H flag (same as TF1)
-            # Headers should be placed BEFORE the URL
-            headers.extend([
-                f'-H {shlex.quote("User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")}',
-                f'-H {shlex.quote("Referer: https://globoplay.globo.com/")}',
-                f'-H {shlex.quote("Accept: */*")}',
-                f'-H {shlex.quote("Accept-Language: pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7")}',
-                f'-H {shlex.quote("Origin: https://globoplay.globo.com")}',
-                f'-H {shlex.quote("Sec-Fetch-Site: same-origin")}',
-                f'-H {shlex.quote("Sec-Fetch-Mode: no-cors")}',
-                f'-H {shlex.quote("Sec-Fetch-Dest: video")}',
-            ])
-            # Add cookies if available (cookies are critical for authentication)
-            if cookies:
-                headers.append(f'-H {shlex.quote(f"Cookie: {cookies}")}')
-        
-        # Build the command - headers go BEFORE the URL
-        header_str = ' '.join(headers) if headers else ''
+        # Use user command as-is; append only save/output options
         command = (
             f"N_m3u8DL-RE "
-            f"{header_str} "
-            f"{quoted_url} "
+            f"{base_command} "
             f"--tmp-dir {quote_path(get_temp_dir())} "
             f"--del-after-done "
             f"--check-segments-count False "
             f"--save-name {quote_path(str(episode_number))} "
             f"--save-dir {quote_path(str(output_dir))} "
             f"--select-video best "
-            f"--select-audio lang={audio_lang} "
-            f"--select-subtitle lang={subtitle_lang}"
+            f"--select-audio all "
+            f"--select-subtitle all "
+            f"-M mkv"
         )
-        
-        # Add MKV muxing for Globo downloads (TF1 commands already include -M mkv)
-        if source == "globoplay":
-            command += " -M mkv"
         
         if log_callback:
             log_callback(f"\n--- Task {i + 1}/{total}: Episode {episode_number} ---")
             log_callback(f"Running: {base_command[:80]}...")
-            # Debug: show if headers/cookies are being used
-            if source == "globoplay" and headers:
-                header_count = len([h for h in headers if 'Cookie' not in h])
-                if cookies:
-                    cookie_count = len(cookies.split(';'))
-                    log_callback(f"  Using {header_count} headers + {cookie_count} cookies from HAR file")
-                else:
-                    log_callback(f"  Using {header_count} headers (no cookies - may cause 403 errors)")
         
         # Use Popen to stream output in real-time
         try:
@@ -1121,7 +1070,7 @@ def translate_subtitles(selected_srt_files: List[Path], api_key: Optional[str] =
             
             # Build command - NEVER use -k flag, always set environment variable
             # (gst will automatically use GEMINI_API_KEY or GST_API_KEY if set)
-            base_cmd = ["translate", "-i", str(og_file), "-l", target_language, "-o", str(srt_file)]
+            base_cmd = ["translate", "-i", str(og_file), "-l", target_language, "-o", str(srt_file), "--skip-upgrade"]
             
             # Add second API key if provided
             if api_key2:
@@ -1145,6 +1094,7 @@ def translate_subtitles(selected_srt_files: List[Path], api_key: Optional[str] =
                 cmd_parts,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,  # Combine stderr into stdout
+                stdin=subprocess.DEVNULL,  # Close stdin to prevent hanging on prompts
                 text=True,
                 bufsize=1,
                 universal_newlines=True,
@@ -1942,39 +1892,12 @@ def transcribe_video(video_path: Path, language_code: str, model: str, whisper_o
             log_callback(f"Starting transcription of: {video_path.name}")
             log_callback(f"Language: {language_code}, Model: {model}, Format: {output_format}")
         
-        # Prepare environment variables - only set if explicitly provided
+        # Prepare environment variables - pass user-typed extra arguments if provided
         env = os.environ.copy()
-        if whisper_options:
-            # Basic option (always has a default)
-            env["WHISPER_BEAM_SIZE"] = str(whisper_options.get("beam_size", 2))
-            
-            # Advanced options - only set if key exists and value is not None/empty
-            if "patience" in whisper_options and whisper_options["patience"] is not None:
-                env["WHISPER_PATIENCE"] = str(whisper_options["patience"])
-            if "best_of" in whisper_options and whisper_options["best_of"] is not None:
-                env["WHISPER_BEST_OF"] = str(whisper_options["best_of"])
-            if "temperature" in whisper_options and whisper_options["temperature"] is not None:
-                env["WHISPER_TEMPERATURE"] = str(whisper_options["temperature"])
-            if "word_timestamps" in whisper_options and whisper_options["word_timestamps"] is not None:
-                env["WHISPER_WORD_TIMESTAMPS"] = str(whisper_options["word_timestamps"])
-            if "max_words_per_line" in whisper_options and whisper_options["max_words_per_line"] is not None:
-                env["WHISPER_MAX_WORDS_PER_LINE"] = str(whisper_options["max_words_per_line"])
-            if "condition_on_previous_text" in whisper_options and whisper_options["condition_on_previous_text"] is not None:
-                env["WHISPER_CONDITION_ON_PREVIOUS"] = str(whisper_options["condition_on_previous_text"])
-            if "no_speech_threshold" in whisper_options and whisper_options["no_speech_threshold"] is not None:
-                env["WHISPER_NO_SPEECH_THRESHOLD"] = str(whisper_options["no_speech_threshold"])
-            if "compression_ratio_threshold" in whisper_options and whisper_options["compression_ratio_threshold"] is not None:
-                env["WHISPER_COMPRESSION_RATIO"] = str(whisper_options["compression_ratio_threshold"])
-            if "logprob_threshold" in whisper_options and whisper_options["logprob_threshold"] is not None:
-                env["WHISPER_LOGPROB_THRESHOLD"] = str(whisper_options["logprob_threshold"])
-            if "initial_prompt" in whisper_options and whisper_options.get("initial_prompt"):
-                env["WHISPER_INITIAL_PROMPT"] = whisper_options["initial_prompt"]
-            if "highlight_words" in whisper_options and whisper_options.get("highlight_words"):
-                env["WHISPER_HIGHLIGHT_WORDS"] = str(whisper_options["highlight_words"])
-            if "clip_timestamps" in whisper_options and whisper_options.get("clip_timestamps") and whisper_options["clip_timestamps"] != "0":
-                env["WHISPER_CLIP_TIMESTAMPS"] = str(whisper_options["clip_timestamps"])
-            if "hallucination_silence_threshold" in whisper_options and whisper_options["hallucination_silence_threshold"] is not None:
-                env["WHISPER_HALLUCINATION_SILENCE_THRESHOLD"] = str(whisper_options["hallucination_silence_threshold"])
+        if whisper_options and "extra_args_parsed" in whisper_options:
+            extra_args = whisper_options.get("extra_args_parsed", "")
+            if extra_args:
+                env["WHISPER_EXTRA_ARGS"] = extra_args
         
         # Run the script with video path, language code, model, and output format as arguments
         result = subprocess.run(
@@ -2176,39 +2099,12 @@ def transcribe_video_time_range(
                 temp_audio.unlink()
             return False
         
-        # Prepare environment variables - only set if explicitly provided
+        # Prepare environment variables - pass user-typed extra arguments if provided
         env = os.environ.copy()
-        if whisper_options:
-            # Basic option (always has a default)
-            env["WHISPER_BEAM_SIZE"] = str(whisper_options.get("beam_size", 2))
-            
-            # Advanced options - only set if key exists and value is not None/empty
-            if "patience" in whisper_options and whisper_options["patience"] is not None:
-                env["WHISPER_PATIENCE"] = str(whisper_options["patience"])
-            if "best_of" in whisper_options and whisper_options["best_of"] is not None:
-                env["WHISPER_BEST_OF"] = str(whisper_options["best_of"])
-            if "temperature" in whisper_options and whisper_options["temperature"] is not None:
-                env["WHISPER_TEMPERATURE"] = str(whisper_options["temperature"])
-            if "word_timestamps" in whisper_options and whisper_options["word_timestamps"] is not None:
-                env["WHISPER_WORD_TIMESTAMPS"] = str(whisper_options["word_timestamps"])
-            if "max_words_per_line" in whisper_options and whisper_options["max_words_per_line"] is not None:
-                env["WHISPER_MAX_WORDS_PER_LINE"] = str(whisper_options["max_words_per_line"])
-            if "condition_on_previous_text" in whisper_options and whisper_options["condition_on_previous_text"] is not None:
-                env["WHISPER_CONDITION_ON_PREVIOUS"] = str(whisper_options["condition_on_previous_text"])
-            if "no_speech_threshold" in whisper_options and whisper_options["no_speech_threshold"] is not None:
-                env["WHISPER_NO_SPEECH_THRESHOLD"] = str(whisper_options["no_speech_threshold"])
-            if "compression_ratio_threshold" in whisper_options and whisper_options["compression_ratio_threshold"] is not None:
-                env["WHISPER_COMPRESSION_RATIO"] = str(whisper_options["compression_ratio_threshold"])
-            if "logprob_threshold" in whisper_options and whisper_options["logprob_threshold"] is not None:
-                env["WHISPER_LOGPROB_THRESHOLD"] = str(whisper_options["logprob_threshold"])
-            if "initial_prompt" in whisper_options and whisper_options.get("initial_prompt"):
-                env["WHISPER_INITIAL_PROMPT"] = whisper_options["initial_prompt"]
-            if "highlight_words" in whisper_options and whisper_options.get("highlight_words"):
-                env["WHISPER_HIGHLIGHT_WORDS"] = str(whisper_options["highlight_words"])
-            if "clip_timestamps" in whisper_options and whisper_options.get("clip_timestamps") and whisper_options["clip_timestamps"] != "0":
-                env["WHISPER_CLIP_TIMESTAMPS"] = str(whisper_options["clip_timestamps"])
-            if "hallucination_silence_threshold" in whisper_options and whisper_options["hallucination_silence_threshold"] is not None:
-                env["WHISPER_HALLUCINATION_SILENCE_THRESHOLD"] = str(whisper_options["hallucination_silence_threshold"])
+        if whisper_options and "extra_args_parsed" in whisper_options:
+            extra_args = whisper_options.get("extra_args_parsed", "")
+            if extra_args:
+                env["WHISPER_EXTRA_ARGS"] = extra_args
         
         # Use whisper_auto.sh script (same as regular transcription)
         result = subprocess.run(
@@ -2741,8 +2637,8 @@ class SetupWizard(QDialog):
         if not self.subtitle_edit_installed:
             html += "<p style='margin-left: 20px; color: #666;'>Download: <a href='https://github.com/SubtitleEdit/subtitleedit/releases'>GitHub Releases</a></p>"
         
-        html += "<p><b>○ OPTIONAL</b> - Widevine Proxy 2 (Browser extension)</p>"
-        html += "<p style='margin-left: 20px; color: #666;'>Install as browser extension - Needed for capturing download commands</p>"
+        html += "<p><b>○ OPTIONAL</b> - Browser extension for capturing download commands</p>"
+        html += "<p style='margin-left: 20px; color: #666;'>See 'How to get commands' in the Download section for details</p>"
         
         html += "</div>"
         return html
@@ -2844,7 +2740,7 @@ class FAQDialog(QDialog):
         <p><b>"Error: No commands provided"</b><br>
         This means you tried to download episodes but didn't paste any commands in the text box. 
         Make sure you've copied your download commands and pasted them into the "Commands" area before clicking "Batch Download Episodes".
-        See <b>batchdownloader_guide.md</b> for how to extract commands from Widevine Proxy 2.</p>
+        Click <b>How to get commands</b> in the Download section for instructions.</p>
         
         <p><b>"Error: API key not set"</b><br>
         You need to set up your Google Gemini API key to translate subtitles. Go to Settings and enter your API key in the "API Key" field. 
@@ -3022,7 +2918,7 @@ class AboutDialog(QDialog):
         <div style="padding: 24px;">
         <div class="app-name">Video Processing Studio</div>
         
-        <div class="version">Version 9.2.1</div>
+        <div class="version">Version 9.2.2</div>
         
         <div class="creator">
         <span style="color: #df4300; font-weight: 600;">Created by:</span> SLAPPEPOLSEN
@@ -3655,199 +3551,65 @@ class SettingsDialog(QDialog):
 # ============================================================================
 
 class WhisperOptionsDialog(QDialog):
-    """Standalone dialog for Whisper transcription options."""
+    """Simplified dialog for Whisper advanced options - manual parameter entry."""
     
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Whisper Advanced Options")
-        self.setMinimumWidth(700)
-        self.setMinimumHeight(600)
+        self.setMinimumWidth(1000)
+        self.setMinimumHeight(700)
         
         self.config = load_config()
         
         main_layout = QVBoxLayout()
         
-        # Create scroll area for the content
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.NoFrame)
+        # Info label
+        info_label = QLabel("Type additional Whisper parameters below. These will be appended to the default command.")
+        info_label.setStyleSheet("color: #666; margin-bottom: 10px;")
+        info_label.setWordWrap(True)
+        main_layout.addWidget(info_label)
         
-        content = QWidget()
-        layout = QVBoxLayout()
+        # Split layout: left panel (parameters reference) and right panel (user input)
+        split_layout = QHBoxLayout()
         
-        # Basic Section
-        basic_group = QGroupBox("Subtitle Formatting")
-        basic_layout = QFormLayout()
+        # Left panel: Available Parameters (read-only reference)
+        left_panel = QGroupBox("Available Parameters (Reference)")
+        left_layout = QVBoxLayout()
         
-        # Subtitle Style Preset
-        preset_info = QLabel("Choose a preset or customize subtitle formatting")
-        preset_info.setStyleSheet("color: #666;")
-        preset_info.setWordWrap(True)
-        basic_layout.addRow("", preset_info)
+        params_text = QTextEdit()
+        params_text.setReadOnly(True)
+        params_text.setFont(QFont("Courier New", 10))
+        params_text.setPlainText(self.get_parameters_reference())
+        left_layout.addWidget(params_text)
         
-        self.subtitle_preset_combo = QComboBox()
-        self.subtitle_preset_combo.addItems(["Standard (7/2)", "Narrow (5/2)", "Wide (10/2)", "Soap Opera (12/2)", "Custom"])
-        preset = self.config.get("whisper_options", {}).get("subtitle_style_preset", "Standard")
-        preset_index = self.subtitle_preset_combo.findText(preset, Qt.MatchStartsWith)
-        if preset_index >= 0:
-            self.subtitle_preset_combo.setCurrentIndex(preset_index)
-        self.subtitle_preset_combo.currentTextChanged.connect(self.on_preset_changed)
-        basic_layout.addRow("Subtitle Style:", self.subtitle_preset_combo)
+        left_panel.setLayout(left_layout)
+        split_layout.addWidget(left_panel, 1)  # 1:1 ratio
         
-        # Max Words Per Line
-        self.max_words_per_line_spin = QSpinBox()
-        self.max_words_per_line_spin.setRange(3, 20)
-        self.max_words_per_line_spin.setValue(self.config.get("whisper_options", {}).get("max_words_per_line", 7))
-        self.max_words_per_line_spin.setToolTip("Controls how many words fit on one subtitle line (breaks naturally at word boundaries)")
-        basic_layout.addRow("Max Words Per Line:", self.max_words_per_line_spin)
+        # Right panel: Additional Parameters (user input)
+        right_panel = QGroupBox("Additional Parameters")
+        right_layout = QVBoxLayout()
         
-        # Max Lines Per Subtitle
-        self.max_line_count_spin = QSpinBox()
-        self.max_line_count_spin.setRange(1, 3)
-        self.max_line_count_spin.setValue(self.config.get("whisper_options", {}).get("max_line_count", 2))
-        self.max_line_count_spin.setToolTip("How many lines each subtitle can have (standard is 2)")
-        basic_layout.addRow("Max Lines Per Subtitle:", self.max_line_count_spin)
+        help_label = QLabel("Enter one parameter per line. Format: --parameter_name value\nExample:\n--patience 1.0\n--word_timestamps True\n--max_words_per_line 7")
+        help_label.setStyleSheet("color: #666; font-size: 10px; margin-bottom: 5px;")
+        help_label.setWordWrap(True)
+        right_layout.addWidget(help_label)
         
-        basic_group.setLayout(basic_layout)
-        layout.addWidget(basic_group)
+        self.extra_args_input = QTextEdit()
+        self.extra_args_input.setFont(QFont("Courier New", 11))
+        self.extra_args_input.setPlaceholderText("--patience 1.0\n--word_timestamps True\n--max_words_per_line 7\n--max_line_count 2")
+        # Load existing extra_args from config
+        extra_args = self.config.get("whisper_options", {}).get("extra_args", "")
+        self.extra_args_input.setPlainText(extra_args)
+        right_layout.addWidget(self.extra_args_input)
         
-        # Advanced Section (collapsible)
-        self.advanced_group = QGroupBox("Advanced Options")
-        self.advanced_group.setCheckable(True)
-        self.advanced_group.setChecked(False)
-        advanced_layout = QVBoxLayout()
+        right_panel.setLayout(right_layout)
+        split_layout.addWidget(right_panel, 1)  # 1:1 ratio
         
-        # Quality & Performance Group
-        quality_group = QGroupBox("Quality & Performance")
-        quality_layout = QFormLayout()
-        
-        self.beam_size_spin = QSpinBox()
-        self.beam_size_spin.setRange(1, 10)
-        self.beam_size_spin.setValue(self.config.get("whisper_options", {}).get("beam_size", 5))
-        self.beam_size_spin.setToolTip("Search width for better accuracy (higher = slower)")
-        quality_layout.addRow("Beam Size:", self.beam_size_spin)
-        
-        self.patience_spin = QDoubleSpinBox()
-        self.patience_spin.setRange(0.5, 2.0)
-        self.patience_spin.setSingleStep(0.1)
-        self.patience_spin.setValue(self.config.get("whisper_options", {}).get("patience", 1.0))
-        self.patience_spin.setToolTip("Beam search patience")
-        quality_layout.addRow("Patience:", self.patience_spin)
-        
-        self.best_of_spin = QSpinBox()
-        self.best_of_spin.setRange(1, 10)
-        self.best_of_spin.setValue(self.config.get("whisper_options", {}).get("best_of", 5))
-        self.best_of_spin.setToolTip("Number of candidates when sampling")
-        quality_layout.addRow("Best Of:", self.best_of_spin)
-        
-        self.temperature_spin = QDoubleSpinBox()
-        self.temperature_spin.setRange(0.0, 1.0)
-        self.temperature_spin.setSingleStep(0.1)
-        self.temperature_spin.setValue(self.config.get("whisper_options", {}).get("temperature", 0.0))
-        self.temperature_spin.setToolTip("Sampling randomness (0 = deterministic)")
-        quality_layout.addRow("Temperature:", self.temperature_spin)
-        
-        quality_group.setLayout(quality_layout)
-        advanced_layout.addWidget(quality_group)
-        
-        # Silence & Music Handling Group
-        silence_group = QGroupBox("Silence & Music Handling")
-        silence_layout = QFormLayout()
-        
-        self.no_speech_threshold_spin = QDoubleSpinBox()
-        self.no_speech_threshold_spin.setRange(0.0, 1.0)
-        self.no_speech_threshold_spin.setSingleStep(0.1)
-        self.no_speech_threshold_spin.setValue(self.config.get("whisper_options", {}).get("no_speech_threshold", 0.6))
-        self.no_speech_threshold_spin.setToolTip("Threshold to skip silent segments (higher = more aggressive)")
-        silence_layout.addRow("No Speech Threshold:", self.no_speech_threshold_spin)
-        
-        self.compression_ratio_spin = QDoubleSpinBox()
-        self.compression_ratio_spin.setRange(1.5, 3.0)
-        self.compression_ratio_spin.setSingleStep(0.1)
-        self.compression_ratio_spin.setValue(self.config.get("whisper_options", {}).get("compression_ratio_threshold", 2.4))
-        self.compression_ratio_spin.setToolTip("Detect and retry overly compressed output")
-        silence_layout.addRow("Compression Ratio:", self.compression_ratio_spin)
-        
-        self.logprob_threshold_spin = QDoubleSpinBox()
-        self.logprob_threshold_spin.setRange(-2.0, 0.0)
-        self.logprob_threshold_spin.setSingleStep(0.1)
-        self.logprob_threshold_spin.setValue(self.config.get("whisper_options", {}).get("logprob_threshold", -1.0))
-        self.logprob_threshold_spin.setToolTip("Minimum confidence to accept transcription")
-        silence_layout.addRow("Log Prob Threshold:", self.logprob_threshold_spin)
-        
-        self.hallucination_silence_threshold_spin = QDoubleSpinBox()
-        self.hallucination_silence_threshold_spin.setRange(0.0, 10.0)
-        self.hallucination_silence_threshold_spin.setSingleStep(0.1)
-        self.hallucination_silence_threshold_spin.setSpecialValueText("Disabled")
-        hall_thresh = self.config.get("whisper_options", {}).get("hallucination_silence_threshold")
-        if hall_thresh is None:
-            self.hallucination_silence_threshold_spin.setValue(0.0)
-        else:
-            self.hallucination_silence_threshold_spin.setValue(hall_thresh)
-        self.hallucination_silence_threshold_spin.setToolTip("Skip silent periods longer than this (seconds) when hallucination detected. Requires word timestamps. Set to 0 to disable.")
-        silence_layout.addRow("Hallucination Silence Threshold:", self.hallucination_silence_threshold_spin)
-        
-        silence_group.setLayout(silence_layout)
-        advanced_layout.addWidget(silence_group)
-        
-        # Context & Prompting Group
-        context_group = QGroupBox("Context & Prompting")
-        context_layout = QFormLayout()
-        
-        self.condition_on_previous_checkbox = QCheckBox("Use previous text as context")
-        self.condition_on_previous_checkbox.setChecked(self.config.get("whisper_options", {}).get("condition_on_previous_text", True))
-        self.condition_on_previous_checkbox.setToolTip("Helps continuity across long audio")
-        context_layout.addRow("", self.condition_on_previous_checkbox)
-        
-        self.initial_prompt_input = QLineEdit()
-        self.initial_prompt_input.setText(self.config.get("whisper_options", {}).get("initial_prompt", ""))
-        self.initial_prompt_input.setPlaceholderText("e.g., 'Um, like, you know...' for filler words")
-        self.initial_prompt_input.setToolTip("Starting prompt to bias vocabulary/style")
-        context_layout.addRow("Initial Prompt:", self.initial_prompt_input)
-        
-        context_group.setLayout(context_layout)
-        advanced_layout.addWidget(context_group)
-        
-        # Advanced Decoding Group
-        decoding_group = QGroupBox("Advanced Decoding")
-        decoding_layout = QFormLayout()
-        
-        self.word_timestamps_checkbox = QCheckBox("Enable word-level timestamps")
-        self.word_timestamps_checkbox.setChecked(self.config.get("whisper_options", {}).get("word_timestamps", True))
-        self.word_timestamps_checkbox.setToolTip("Refines timestamps for more accurate subtitle timing")
-        decoding_layout.addRow("", self.word_timestamps_checkbox)
-        
-        self.highlight_words_checkbox = QCheckBox("Highlight words as spoken")
-        self.highlight_words_checkbox.setChecked(self.config.get("whisper_options", {}).get("highlight_words", False))
-        self.highlight_words_checkbox.setToolTip("Add highlighting in SRT/VTT as words are spoken")
-        decoding_layout.addRow("", self.highlight_words_checkbox)
-        
-        self.clip_timestamps_input = QLineEdit()
-        clip_ts = self.config.get("whisper_options", {}).get("clip_timestamps", "0")
-        self.clip_timestamps_input.setText(str(clip_ts) if clip_ts != "0" else "")
-        self.clip_timestamps_input.setPlaceholderText("e.g., 10,30,60,90 (process 10-30s and 60-90s)")
-        self.clip_timestamps_input.setToolTip("Process only specific time ranges. Format: start,end,start,end,... (comma-separated pairs in seconds). Leave empty to process entire file.")
-        decoding_layout.addRow("Clip Timestamps:", self.clip_timestamps_input)
-        
-        decoding_group.setLayout(decoding_layout)
-        advanced_layout.addWidget(decoding_group)
-        
-        # Reset to defaults button
-        reset_btn = QPushButton("Reset to Defaults")
-        reset_btn.clicked.connect(self.reset_whisper_defaults)
-        advanced_layout.addWidget(reset_btn)
-        
-        self.advanced_group.setLayout(advanced_layout)
-        layout.addWidget(self.advanced_group)
-        
-        layout.addStretch()
-        content.setLayout(layout)
-        scroll.setWidget(content)
-        
-        main_layout.addWidget(scroll)
+        main_layout.addLayout(split_layout)
         
         # Buttons at bottom
         button_layout = QHBoxLayout()
+        button_layout.addStretch()
         save_btn = QPushButton("Save")
         save_btn.clicked.connect(self.save_settings)
         cancel_btn = QPushButton("Cancel")
@@ -3857,86 +3619,87 @@ class WhisperOptionsDialog(QDialog):
         main_layout.addLayout(button_layout)
         
         self.setLayout(main_layout)
-        
-        # Set initial enabled state for custom fields
-        self.on_preset_changed(self.subtitle_preset_combo.currentText())
     
-    def on_preset_changed(self, preset_text):
-        """Handle preset selection changes."""
-        is_custom = "Custom" in preset_text
-        self.max_words_per_line_spin.setEnabled(is_custom)
-        self.max_line_count_spin.setEnabled(is_custom)
-        
-        if not is_custom:
-            if "Standard" in preset_text:
-                self.max_words_per_line_spin.setValue(7)
-                self.max_line_count_spin.setValue(2)
-            elif "Narrow" in preset_text:
-                self.max_words_per_line_spin.setValue(5)
-                self.max_line_count_spin.setValue(2)
-            elif "Wide" in preset_text:
-                self.max_words_per_line_spin.setValue(10)
-                self.max_line_count_spin.setValue(2)
-            elif "Soap Opera" in preset_text:
-                self.max_words_per_line_spin.setValue(12)
-                self.max_line_count_spin.setValue(2)
-                # Also adjust silence detection for natural dialogue
-                self.no_speech_threshold_spin.setValue(0.4)
-                self.hallucination_silence_threshold_spin.setValue(1.5)
-    
-    def reset_whisper_defaults(self):
-        """Reset all whisper options to default values."""
-        self.subtitle_preset_combo.setCurrentText("Standard (7/2)")
-        self.max_words_per_line_spin.setValue(7)
-        self.max_line_count_spin.setValue(2)
-        self.beam_size_spin.setValue(5)
-        self.patience_spin.setValue(1.0)
-        self.best_of_spin.setValue(5)
-        self.temperature_spin.setValue(0.0)
-        self.no_speech_threshold_spin.setValue(0.6)
-        self.compression_ratio_spin.setValue(2.4)
-        self.logprob_threshold_spin.setValue(-1.0)
-        self.condition_on_previous_checkbox.setChecked(True)
-        self.initial_prompt_input.setText("")
-        self.word_timestamps_checkbox.setChecked(True)
-        self.highlight_words_checkbox.setChecked(False)
-        self.clip_timestamps_input.setText("")
-        self.hallucination_silence_threshold_spin.setValue(0.0)
+    def get_parameters_reference(self) -> str:
+        """Generate reference text listing all available Whisper parameters."""
+        params = """--model : name of the Whisper model to use (default: turbo), selects model size; larger = more accurate but slower, smaller = faster but less accurate
+
+--model_dir : path to save model files (default: ~/.cache/whisper), folder where downloaded models are stored
+
+--device : device for PyTorch inference (default: cpu), hardware used for processing; GPU is much faster than CPU if available
+
+--output_dir, -o OUTPUT_DIR : directory to save outputs (default: .), where transcription files are written
+
+--output_format {txt,vtt,srt,tsv,json,all}, -f {txt,vtt,srt,tsv,json,all} : format of output file (default: all)
+
+--verbose : print progress/debug messages (default: True)
+
+--temperature : temperature for sampling (default: 0), randomness of decoding; low = stable/accurate, high = more varied but riskier
+
+--best_of : number of candidates when sampling (default: 5), more candidates can improve accuracy but slow things down
+
+--beam_size : beams in beam search (default: 5), higher explores more alternatives; improves accuracy at the cost of speed
+
+--patience : beam search patience (default: None)
+
+--length_penalty : token length penalty coefficient (default: None)
+
+--suppress_tokens : comma-separated token ids to suppress (default: -1)
+
+--initial_prompt : text prompt for first window (default: None), primes the model with exoected wording or context
+
+--carry_initial_prompt : prepend initial_prompt to every decode() (default: False), keeps the same prompt across all segments
+
+--condition_on_previous_text : use previous output as prompt (default: True), improves continuity but can repeat earlier mistakes
+
+--fp16 : perform inference in fp16 (default: True), faster and lower memory usage on supported hardware
+
+--temperature_increment_on_fallback : temperature increase on fallback (default: 0.2), loosens decoding if the model gets stuck
+
+--compression_ratio_threshold : gzip compression ratio threshold (default: 2.4), detects repetitive or hallucinated output; lower is stricter
+
+--logprob_threshold : average log probability threshold (default: -1.0), filters low-confidence transcriptions; higher is stricter
+
+--no_speech_threshold : probability of <|nospeech|> token (default: 0.6), higher skips more silent segments
+
+--word_timestamps : extract word-level timestamps (default: False), enables per-word timing for subtitles (idk how tho)
+
+--prepend_punctuations : merge with next word (default: "'"¿([{-), keeps opening punctuation attached to the following word
+
+--append_punctuations : merge with previous word (default: "'.。,，!！?？:：")]}), keeps closing punctuation attached to the previous word
+
+--highlight_words : underline words in srt/vtt (requires word_timestamps) (default: False), visually emphasizes spoken words (idk how tho)
+
+--max_line_width : max chars before line break (requires word_timestamps) (default: None), lower values create shorter subtitle lines
+
+--max_line_count : max lines in segment (requires word_timestamps) (default: None), limits subtitle height on screen (max. two lines is standard practice)
+
+--max_words_per_line : max words in segment (REQUIRES word_timestamps, no effect with max_line_width) (default: None), caps words per subtitle LINE
+
+--threads : threads for CPU inference (default: 0), higher can speed up CPU processing at the cost of all other processes running simultaneously
+
+--clip_timestamps : comma-separated start,end,start,end,... timestamps in seconds (default: 0), transcribes only selected audio ranges
+
+--hallucination_silence_threshold : skip silent periods when hallucination detected (requires word_timestamps) (default: None), avoids fake text (the so-called "hallucination") during silences
+
+Note: --language and --task translate are handled by the main tab and should not be included here."""
+        return params
     
     def save_settings(self):
         """Save whisper options and close dialog."""
-        preset_text = self.subtitle_preset_combo.currentText()
-        if "Custom" in preset_text:
-            preset = "Custom"
-        elif "Standard" in preset_text:
-            preset = "Standard"
-        elif "Narrow" in preset_text:
-            preset = "Narrow"
-        elif "Wide" in preset_text:
-            preset = "Wide"
-        elif "Soap Opera" in preset_text:
-            preset = "Soap Opera"
-        else:
-            preset = "Standard"
+        # Get user-typed parameters (one per line)
+        extra_args_text = self.extra_args_input.toPlainText().strip()
         
-        self.config["whisper_options"] = {
-            "max_words_per_line": self.max_words_per_line_spin.value(),
-            "max_line_count": self.max_line_count_spin.value(),
-            "subtitle_style_preset": preset,
-            "beam_size": self.beam_size_spin.value(),
-            "patience": self.patience_spin.value(),
-            "best_of": self.best_of_spin.value(),
-            "temperature": self.temperature_spin.value(),
-            "no_speech_threshold": self.no_speech_threshold_spin.value(),
-            "compression_ratio_threshold": self.compression_ratio_spin.value(),
-            "logprob_threshold": self.logprob_threshold_spin.value(),
-            "condition_on_previous_text": self.condition_on_previous_checkbox.isChecked(),
-            "initial_prompt": self.initial_prompt_input.text(),
-            "word_timestamps": self.word_timestamps_checkbox.isChecked(),
-            "highlight_words": self.highlight_words_checkbox.isChecked(),
-            "hallucination_silence_threshold": None if self.hallucination_silence_threshold_spin.value() == 0.0 else self.hallucination_silence_threshold_spin.value(),
-            "length_penalty": None
-        }
+        # Convert newlines to spaces for WHISPER_EXTRA_ARGS
+        # This allows users to type one parameter per line for readability
+        extra_args = " ".join(line.strip() for line in extra_args_text.split("\n") if line.strip())
+        
+        # Save to config
+        if "whisper_options" not in self.config:
+            self.config["whisper_options"] = {}
+        
+        self.config["whisper_options"]["extra_args"] = extra_args_text  # Save as multiline for display
+        self.config["whisper_options"]["extra_args_parsed"] = extra_args  # Save as space-separated for script
         
         save_config(self.config)
         self.accept()
@@ -4339,6 +4102,12 @@ class VideoProcessingApp(QMainWindow):
         # Get whisper options from config
         config = load_config()
         whisper_options = config.get("whisper_options", {})
+        
+        # Process extra_args: convert multiline to space-separated if needed
+        if "extra_args" in whisper_options and "extra_args_parsed" not in whisper_options:
+            extra_args_text = whisper_options.get("extra_args", "")
+            extra_args = " ".join(line.strip() for line in extra_args_text.split("\n") if line.strip())
+            whisper_options["extra_args_parsed"] = extra_args
         
         # Check if this is first time using transcription
         whisper_model_asked = config.get("whisper_model_asked", False)
@@ -5181,7 +4950,7 @@ class VideoProcessingApp(QMainWindow):
         header_left_layout.addWidget(app_name_label)
         
         # Version number below title
-        version_label = QLabel('version 9.2.1 "Polyglot"')
+        version_label = QLabel('version 9.2.2 "Polyglot"')
         version_label.setFont(QFont("Arial", 18))
         version_label.setStyleSheet("color: #999; font-style: italic;")
         header_left_layout.addWidget(version_label)
@@ -5220,19 +4989,8 @@ class VideoProcessingApp(QMainWindow):
         download_group.setStyleSheet("QGroupBox { font-weight: bold; }")
         download_layout = QVBoxLayout()
         
-        # Source selector and starting episode row
-        source_row = QHBoxLayout()
-        source_label = QLabel("Source:")
-        self.source_combo = QComboBox()
-        self.source_combo.addItem("TF1 (French)", "tf1")
-        self.source_combo.addItem("Globoplay (Portuguese)", "globoplay")
-        # Set from config
-        saved_source = self.config.get("download_source", "tf1")
-        source_index = self.source_combo.findData(saved_source)
-        if source_index >= 0:
-            self.source_combo.setCurrentIndex(source_index)
-        self.source_combo.currentIndexChanged.connect(self.on_source_changed)
-        
+        # Episodes row and Instructions link
+        episodes_row = QHBoxLayout()
         starting_ep_label = QLabel("Episodes:")
         self.starting_episode_input = QLineEdit()
         self.starting_episode_input.setText("1")
@@ -5240,19 +4998,28 @@ class VideoProcessingApp(QMainWindow):
         self.starting_episode_input.setPlaceholderText("1 or 1-5 or 1,3,5-7")
         self.starting_episode_input.setToolTip("Episode numbers:\n• Single: 1\n• Range: 1-5\n• Mixed: 1,3,5-7,10")
         
-        source_row.addWidget(source_label)
-        source_row.addWidget(self.source_combo)
-        source_row.addSpacing(20)
-        source_row.addWidget(starting_ep_label)
-        source_row.addWidget(self.starting_episode_input)
-        source_row.addStretch()
-        download_layout.addLayout(source_row)
+        instructions_btn = QPushButton("How to get commands")
+        instructions_btn.setFlat(True)
+        instructions_btn.setStyleSheet("color: #0066cc; text-decoration: underline;")
+        instructions_btn.setCursor(Qt.PointingHandCursor)
+        instructions_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(DOWNLOAD_INSTRUCTIONS_URL)))
+        instructions_btn.setToolTip("Opens instructions in your browser")
         
-        download_label = QLabel("Commands (one per line, just paste the URL or full command):")
+        episodes_row.addWidget(starting_ep_label)
+        episodes_row.addWidget(self.starting_episode_input)
+        episodes_row.addStretch()
+        episodes_row.addWidget(instructions_btn)
+        download_layout.addLayout(episodes_row)
+        
+        download_label = QLabel("Commands (one per line, paste full command per instructions):")
         download_layout.addWidget(download_label)
         
         self.commands_text = QTextEdit()
-        self.update_commands_placeholder()  # Set placeholder based on source
+        self.commands_text.setPlaceholderText(
+            '"https://..." -H "..." --key KID:KEY\n'
+            '"https://..." -H "..." --key KID:KEY\n'
+            '(see How to get commands for format)'
+        )
         self.commands_text.setMaximumHeight(120)
         self.commands_text.setMinimumHeight(80)
         download_layout.addWidget(self.commands_text)
@@ -5467,6 +5234,7 @@ class VideoProcessingApp(QMainWindow):
         func_name = script_func.__name__
         operation_names = {
             "download_episodes": "Downloading episodes",
+            "download_with_detection": "Downloading episodes",
             "extract_subtitles": "Extracting subtitles",
             "clean_subtitles": "Cleaning subtitles",
             "translate_subtitles": "Translating subtitles",
@@ -5618,30 +5386,6 @@ class VideoProcessingApp(QMainWindow):
         # Reset button text
         self.stop_btn.setText("Stop")
     
-    def on_source_changed(self):
-        """Handle source selection change."""
-        source = self.source_combo.currentData()
-        self.config["download_source"] = source
-        save_config(self.config)
-        self.update_commands_placeholder()
-    
-    def update_commands_placeholder(self):
-        """Update the commands placeholder text based on selected source."""
-        source = self.source_combo.currentData()
-        if source == "globoplay":
-            placeholder = (
-                '"https://egcdn-vod.video.globo.com/.../episode1.m3u8"\n'
-                '"https://egcdn-vod.video.globo.com/.../episode2.m3u8"\n'
-                '"https://egcdn-vod.video.globo.com/.../episode3.m3u8"'
-            )
-        else:  # tf1
-            placeholder = (
-                '"https://..." -H "..." --key KID:KEY --use-shaka-packager\n'
-                '"https://..." -H "..." --key KID:KEY --use-shaka-packager\n'
-                '"https://..." -H "..." --key KID:KEY --use-shaka-packager'
-            )
-        self.commands_text.setPlaceholderText(placeholder)
-    
     def download_episodes(self):
         """Download episodes."""
         commands_text = self.commands_text.toPlainText()
@@ -5649,29 +5393,16 @@ class VideoProcessingApp(QMainWindow):
             QMessageBox.warning(self, "Error", "Please paste commands in the text area.")
             return
         
-        # Get source and episode specification from UI
-        source = self.source_combo.currentData()
+        # Get episode specification from UI
         episode_spec = self.starting_episode_input.text().strip() or "1"
         
         output_dir = get_downloads_dir()
         self.log(f"Starting download to: {output_dir}")
-        self.log(f"Source: {SOURCE_SETTINGS[source]['name']} | Episodes: {episode_spec}")
+        self.log(f"Episodes: {episode_spec}")
         
         # Create a wrapper that adds detection after download
-        def download_with_detection(commands_text, output_dir, source, episode_spec, progress_callback=None, log_callback=None):
-            # Try to find HAR file path in commands or check common locations
-            har_file = None
-            # Check if there's a HAR file path mentioned (user might paste it)
-            har_pattern = r'@([^\s]+\.har)'
-            har_match = re.search(har_pattern, commands_text)
-            if har_match:
-                har_path = Path(har_match.group(1))
-                if har_path.exists():
-                    har_file = har_path
-                    if log_callback:
-                        log_callback(f"Found HAR file: {har_file}")
-            
-            result = download_episodes(commands_text, output_dir, source, episode_spec, har_file, progress_callback, log_callback)
+        def download_with_detection(commands_text, output_dir, episode_spec, progress_callback=None, log_callback=None):
+            result = download_episodes(commands_text, output_dir, episode_spec, progress_callback, log_callback)
             if result:
                 # Detect episode/scene for downloaded files
                 mkv_files = list(output_dir.glob("*.mkv"))
@@ -5683,7 +5414,7 @@ class VideoProcessingApp(QMainWindow):
                             log_callback(f"  {mkv_file.name}: {type_label} ({duration:.1f} min)")
             return result
         
-        self.run_script(download_with_detection, commands_text, output_dir, source, episode_spec)
+        self.run_script(download_with_detection, commands_text, output_dir, episode_spec)
     
     def add_videos(self):
         """Add videos manually."""
@@ -5862,6 +5593,12 @@ class VideoProcessingApp(QMainWindow):
         config = load_config()
         whisper_options = config.get("whisper_options", {})
         
+        # Process extra_args: convert multiline to space-separated if needed
+        if "extra_args" in whisper_options and "extra_args_parsed" not in whisper_options:
+            extra_args_text = whisper_options.get("extra_args", "")
+            extra_args = " ".join(line.strip() for line in extra_args_text.split("\n") if line.strip())
+            whisper_options["extra_args_parsed"] = extra_args
+        
         # Check if this is first time using transcription
         whisper_model_asked = config.get("whisper_model_asked", False)
         
@@ -5889,7 +5626,7 @@ class VideoProcessingApp(QMainWindow):
             
             # Run transcription with language, model, and whisper options
             def transcribe_with_params(video_path, language_code, model, whisper_options, progress_callback=None, log_callback=None):
-                return transcribe_video(video_path, language_code, model, whisper_options, progress_callback, log_callback)
+                return transcribe_video(video_path, language_code, model, whisper_options, progress_callback=progress_callback, log_callback=log_callback)
             
             self.run_script(transcribe_with_params, video_path, language_code, model, whisper_options)
     
@@ -5916,6 +5653,13 @@ class VideoProcessingApp(QMainWindow):
         # Get whisper options and output format
         config = load_config()
         whisper_options = config.get("whisper_options", {})
+        
+        # Process extra_args: convert multiline to space-separated if needed
+        if "extra_args" in whisper_options and "extra_args_parsed" not in whisper_options:
+            extra_args_text = whisper_options.get("extra_args", "")
+            extra_args = " ".join(line.strip() for line in extra_args_text.split("\n") if line.strip())
+            whisper_options["extra_args_parsed"] = extra_args
+        
         output_format = self.transcribe_format_combo.currentData()
         
         # Check if this is first time using transcription

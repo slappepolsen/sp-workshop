@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [9.2.2] - 2026-01-23
+
+### Added
+
+- "How to get commands" link in Download section opening external instructions.
+- Bare URL support: when pasting just a URL (no headers or keys), app auto-adds Referer/Origin headers for CDN compatibility.
+- `rentry_download_instructions.md` – draft content for external download instructions page.
+
+### Changed
+
+- Simplified Download section: unified command processing (one full command per line).
+- Batch downloader now uses `--select-audio all` and `--select-subtitle all` for generic track selection.
+- `batchdownloader_guide.md` streamlined to point to external instructions.
+- Setup wizard and FAQ updated to reference "How to get commands" for download instructions.
+
+### Fixed
+
+- Subtitle translation no longer freezes on "new version available" prompt (`--skip-upgrade` and `stdin=subprocess.DEVNULL`).
+
 ## [9.2.1] - 2026-01-21
 
 ### Changed

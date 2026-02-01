@@ -229,12 +229,12 @@ There are three main ways to use the app, depending on where your content comes 
 
 | | **Workflow 1: Remux** | **Workflow 2: Batch Downloader** | **Workflow 3: Transcribe** |
 |---|---|---|---|
-| **Starting Material** | Video file (MKV/MP4) + separate SRT file | Download commands from streaming source | Video/audio file with no subtitles |
+| **Starting Material** | Video file (MKV/MP4) + separate SRT file | Download commands (see app instructions) | Video/audio file with no subtitles |
 | **What You Need** | FFmpeg | FFmpeg + N_m3u8DL-RE | FFmpeg + `whisper_auto.sh` script |
 | **Best For** | Already have video files and separate subtitle tracks | Downloading full episodes/series with embedded subtitles | No subtitles exist yet, need to create them from audio |
 
 **Typical workflow (Workflow 2 - using the Batch Downloader):**
-Here's basically how things flow (see [batchdownloader_guide.md](batchdownloader_guide.md) for how to get download commands):
+Here's basically how things flow (click "How to get commands" in the Download section for instructions):
 
 1. Paste your download commands in the text area, click "**Batch Download Episodes**". Hell yeah, automation!
 2. Click "**Extract Subtitles**" to pull those embedded subtitle tracks from your MKV files.
@@ -282,7 +282,7 @@ Don't worry, we've all been there. Here's how to fix the common stuff:
 - Internet connection (only for translation and downloading, the rest is local)
 
 ## Documentation
-- [batchdownloader_guide.md](batchdownloader_guide.md) - How to extract download commands from streaming sources
+- [batchdownloader_guide.md](batchdownloader_guide.md) - Batch downloader quick reference
 - [CHANGELOG.md](CHANGELOG.md) - Version history
 
 ## Support
