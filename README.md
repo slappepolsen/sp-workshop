@@ -21,6 +21,14 @@ Designed for non-technical users (too!). If you can download software on your la
 
 ## Features
 
+Fucntion | Features
+------ | ------
+Download   | Batch download episodes with N_m3u8DL-RE or add local videos, open in LosslessCut to cut relevant parts
+Subtitles   | Extract, clean, and translate subs
+Process video | Burn subtitles + optional watermarks at 720 or 1080p
+Transcription | For if you don't have subs available: Highly customizable transcription using Whisper
+Remuxing | Tree-based file/track list, per-file output, external SRT browser, remux se
+
 - Batch download episodes from streaming services
 - Extract and clean subtitles from video files
 - Translate subtitles using Google Gemini
