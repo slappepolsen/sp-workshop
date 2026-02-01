@@ -13,7 +13,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - "How to get commands" link in Download section opening external instructions.
 - Bare URL support: when pasting just a URL (no headers or keys), app auto-adds Referer/Origin headers for CDN compatibility.
-- `rentry_download_instructions.md` – draft content for external download instructions page.
 
 ### Changed
 
