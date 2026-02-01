@@ -4015,7 +4015,7 @@ class VideoProcessingApp(QMainWindow):
                 background-color: #f5f5f5;
                 border: 1px solid #ddd;
                 border-radius: 3px;
-                font-family: 'Courier New', monospace;
+                font-family: 'Courier New', 'Menlo',monospace;
                 font-size: 11px;
             }
         """)
