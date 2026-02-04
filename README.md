@@ -171,9 +171,9 @@ SP Workshop supports three main workflows depending on your starting material.
 
 | Workflow | Best For |
 |--------|----------|
-| **Remux** | Video files with separate subtitle tracks |
-| **Batch Download** | Downloading full episodes or series |
-| **Transcribe** | Creating subtitles when none exist |
+| **[1] Remux** | Video files with separate subtitle tracks |
+| **[2] Batch Download** | Downloading full episodes or series |
+| **[3] Transcribe** | Creating subtitles when none exist |
 
 
 ## Troubleshooting
