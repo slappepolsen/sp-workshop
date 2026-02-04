@@ -20,13 +20,6 @@ SP Workshop is built for:
 - Archivists and fandom preservation projects
 - Anyone who wants subtitles in the language they actually want
 
-No command-line knowledge is required.
-
-#### Skill level
-Beginner-friendly.
-
-If you can install software on your laptop, you can use SP Workshop.
-
 ## Features
 
 | Function | Description |
