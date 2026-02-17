@@ -205,5 +205,4 @@ Made with ❤️ by [@slappepolsen](https://x.com/slappepolsen)
 
 [![Follow](https://img.shields.io/twitter/follow/slappepolsen?style=social)](https://x.com/slappepolsen)
 
-[![Views](https://dynamic-repo-badges.vercel.app/svg/count/9/Repository%20Views/sp-workshop)](https://github.com/slappepolsen/sp-workshop)
 
