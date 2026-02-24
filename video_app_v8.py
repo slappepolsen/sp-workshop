@@ -117,7 +117,9 @@ from PyQt5.QtWidgets import (
     QPushButton, QLabel, QTextEdit, QFileDialog, QDialog,
     QLineEdit, QFormLayout, QMessageBox, QProgressBar, QGroupBox, QStyleFactory, QCheckBox, QStackedWidget, QTextBrowser, QComboBox,
     QGraphicsDropShadowEffect, QTabWidget, QSpinBox, QDoubleSpinBox, QScrollArea, QListWidget, QListWidgetItem, QTreeWidget, QTreeWidgetItem, QHeaderView, QMenu
+    QGraphicsDropShadowEffect, QTabWidget, QSpinBox, QDoubleSpinBox, QScrollArea, QListWidget, QListWidgetItem, QTreeWidget, QTreeWidgetItem, QHeaderView, QMenu
 )
+from PyQt5.QtCore import QThread, pyqtSignal, Qt, QProcess, QUrl, QTimer
 from PyQt5.QtCore import QThread, pyqtSignal, Qt, QProcess, QUrl, QTimer
 from PyQt5.QtGui import QFont, QIcon, QPainter, QPen, QDesktopServices
 
@@ -178,6 +180,7 @@ def load_config() -> Dict:
         "api_key": os.getenv("GST_API_KEY", ""),
         "download_resolution": "1080",
         "ffmpeg_preset": "medium",
+        "ffmpeg_path": "",
         "ffmpeg_path": "",
         "setup_complete": False,
         "use_watermarks": True,
@@ -296,6 +299,28 @@ def get_remuxed_dir() -> Path:
     remuxed_dir = get_base_dir() / "remuxed"
     remuxed_dir.mkdir(parents=True, exist_ok=True)
     return remuxed_dir
+
+
+def get_matching_subtitle_for_remux(video_path: Path) -> Optional[Path]:
+    """Find an SRT or VTT file with the same stem as the video (for remux auto-match).
+    Looks in the video's directory first, then in the app subtitles directory.
+    Prefers .srt over .vtt, same directory over subtitles dir.
+    """
+    if not video_path.exists():
+        return None
+    stem = video_path.stem
+    # 1) Same directory as video
+    for ext in (".srt", ".vtt"):
+        candidate = video_path.parent / f"{stem}{ext}"
+        if candidate.exists():
+            return candidate
+    # 2) App subtitles directory
+    sub_dir = get_subtitles_dir()
+    for ext in (".srt", ".vtt"):
+        candidate = sub_dir / f"{stem}{ext}"
+        if candidate.exists():
+            return candidate
+    return None
 
 
 def get_matching_subtitle_for_remux(video_path: Path) -> Optional[Path]:
@@ -708,6 +733,40 @@ def _url_first_args(args: List[str]) -> List[str]:
     return urls + rest
 
 
+def _drop_n_m3u8_output_options(args: List[str]) -> List[str]:
+    """Remove output/save options from user args so app's --save-name/--save-dir/-M apply."""
+    drop_flags = {
+        "--save-name", "--save-dir", "--tmp-dir",
+        "-m", "-M", "--mux-after-done", "--del-after-done",
+        "--check-segments-count", "--select-video", "--select-audio", "--select-subtitle",
+    }
+    result = []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        a_lower = a.lower()
+        if a_lower in drop_flags:
+            # Skip this flag and its value if it takes one
+            if a_lower in ("-m", "-M", "--save-name", "--save-dir", "--tmp-dir", "--check-segments-count",
+                          "--select-video", "--select-audio", "--select-subtitle"):
+                i += 2  # skip value (avoid bounds: don't skip past end)
+                if i > len(args):
+                    i = len(args)
+            else:
+                i += 1
+            continue
+        result.append(args[i])
+        i += 1
+    return result
+
+
+def _url_first_args(args: List[str]) -> List[str]:
+    """Put URL(s) first; N_m3u8DL-RE requires <URL> before options or it prints help."""
+    urls = [a for a in args if a.startswith("http://") or a.startswith("https://")]
+    rest = [a for a in args if a not in urls]
+    return urls + rest
+
+
 # ============================================================================
 # Script Wrappers
 # ============================================================================
@@ -804,14 +863,41 @@ def download_episodes(commands_text: str, output_dir: Path, episode_spec: str = 
             "-M", "mkv",
         ]
         cmd = ["N_m3u8DL-RE"] + user_args + app_args
+        # Parse user command with shlex so quoted URL and -H "..." are preserved (avoids shell mangling)
+        try:
+            user_args = shlex.split(base_command)
+        except ValueError as e:
+            if log_callback:
+                log_callback(f"  ✗ Invalid quoting in command: {e}")
+            continue
+        # Drop user's output options so our --save-name/--save-dir/-M take effect
+        user_args = _drop_n_m3u8_output_options(user_args)
+        # N_m3u8DL-RE requires URL as first positional or it prints help and exits
+        user_args = _url_first_args(user_args)
+        
+        app_args = [
+            "--tmp-dir", get_temp_dir(),
+            "--del-after-done",
+            "--check-segments-count", "False",
+            "--save-name", str(episode_number),
+            "--save-dir", str(output_dir),
+            "--select-video", "best",
+            "--select-audio", "all",
+            "--select-subtitle", "all",
+            "-M", "mkv",
+        ]
+        cmd = ["N_m3u8DL-RE"] + user_args + app_args
         
         if log_callback:
             log_callback(f"\n--- Task {i + 1}/{total}: Episode {episode_number} ---")
             log_callback(f"Running: {base_command[:80]}...")
         
         # Use Popen with list (shell=False) so arguments are passed correctly to N_m3u8DL-RE
+        # Use Popen with list (shell=False) so arguments are passed correctly to N_m3u8DL-RE
         try:
             process = subprocess.Popen(
+                cmd,
+                shell=False,
                 cmd,
                 shell=False,
                 stdout=subprocess.PIPE,
@@ -1028,8 +1114,12 @@ def clean_subtitles(subtitles_dir: Path, progress_callback=None, log_callback=No
             # Remove color tags like <c.yellow>, <c.red>, <c.bg_black>, etc.
             cleaned = re.sub(r'<c\.[a-zA-Z0-9_]+>', '', content)
             cleaned = re.sub(r'</c\.[a-zA-Z0-9_]+>', '', cleaned)
+            # Remove color tags like <c.yellow>, <c.red>, <c.bg_black>, etc.
+            cleaned = re.sub(r'<c\.[a-zA-Z0-9_]+>', '', content)
+            cleaned = re.sub(r'</c\.[a-zA-Z0-9_]+>', '', cleaned)
             
             if cleaned != content:
+                tags_removed = len(re.findall(r'<c\.[a-zA-Z0-9_]+>|</c\.[a-zA-Z0-9_]+>', content))
                 tags_removed = len(re.findall(r'<c\.[a-zA-Z0-9_]+>|</c\.[a-zA-Z0-9_]+>', content))
                 with open(srt_file, 'w', encoding='utf-8') as f:
                     f.write(cleaned)
@@ -1051,6 +1141,7 @@ def clean_subtitles(subtitles_dir: Path, progress_callback=None, log_callback=No
 
 
 def translate_subtitles(selected_srt_files: List[Path], api_key: Optional[str] = None, 
+                       target_language: str = "English",
                        target_language: str = "English",
                        api_key2: Optional[str] = None,
                        progress_callback=None, log_callback=None) -> bool:
@@ -1091,6 +1182,7 @@ def translate_subtitles(selected_srt_files: List[Path], api_key: Optional[str] =
         
         try:
             # Rename original (in same directory as the SRT file)
+            og_file = srt_file.parent / f"{srt_file.stem}_OG.srt"
             og_file = srt_file.parent / f"{srt_file.stem}_OG.srt"
             
             if not og_file.exists():
@@ -1193,6 +1285,7 @@ def translate_subtitles(selected_srt_files: List[Path], api_key: Optional[str] =
                 success_count += 1
                 if log_callback:
                     log_callback(f"  ✓ Translated: {srt_file.name}")
+                    log_callback(f"  ✓ Translated: {srt_file.name}")
             else:
                 if log_callback:
                     log_callback(f"  ✗ Failed: {srt_file.name}")
@@ -1214,6 +1307,8 @@ def translate_subtitles(selected_srt_files: List[Path], api_key: Optional[str] =
 
 def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_dir: Path,
                  watermark_path: str, resolution: str, use_watermarks: bool = True,
+                 ffmpeg_path: str = "", progress_callback=None, log_callback=None) -> bool:
+    """Process selected video files: burn subtitles, add watermark (if enabled), resize."""
                  ffmpeg_path: str = "", progress_callback=None, log_callback=None) -> bool:
     """Process selected video files: burn subtitles, add watermark (if enabled), resize."""
     if not selected_video_files:
@@ -1246,6 +1341,7 @@ def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_
         srt_file = None
         srt_location = None
         
+        filenames_to_try = [f"{base}.srt"]
         filenames_to_try = [f"{base}.srt"]
         
         # Check each location for each filename pattern
@@ -1321,9 +1417,19 @@ def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_
             return s
         srt_path = escape_subtitle_path_for_filter(srt_file)
         ffmpeg_exe = (ffmpeg_path.strip() or "ffmpeg")
+        # Build FFmpeg filter. FFmpeg 7.x rejects subtitles with quoted path in filter_complex;
+        # pass path unquoted (escape only \ and : for filter graph). Path with spaces: use script.
+        def escape_subtitle_path_for_filter(p):
+            s = str(p).replace("\\", "\\\\")
+            # Colon in path (e.g. Windows C:) must be escaped in filter
+            s = s.replace(":", "\\:")
+            return s
+        srt_path = escape_subtitle_path_for_filter(srt_file)
+        ffmpeg_exe = (ffmpeg_path.strip() or "ffmpeg")
         if use_watermarks:
             if resolution == "720":
                 filter_complex = (
+                    f"[0:v]subtitles={srt_path},"
                     f"[0:v]subtitles={srt_path},"
                     f"scale=-2:{height}[scaled];"
                     f"[1:v]format=rgba,colorchannelmixer=aa=0.8[wm];"
@@ -1332,11 +1438,13 @@ def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_
             else:  # 1080p
                 filter_complex = (
                     f"[0:v]subtitles={srt_path},"
+                    f"[0:v]subtitles={srt_path},"
                     f"scale=-1:{height}[vsub];"
                     f"[1:v]format=rgba,colorchannelmixer=aa=0.8[wm];"
                     f"[vsub][wm]overlay=0:0[outv]"
                 )
             cmd = [
+                ffmpeg_exe, "-y",
                 ffmpeg_exe, "-y",
                 "-err_detect", "ignore_err",  # Ignore non-critical decoder errors
                 "-fflags", "+discardcorrupt+genpts",  # Discard corrupt packets and generate PTS
@@ -1354,9 +1462,11 @@ def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_
             # No watermark - just subtitles and resize
             filter_complex = (
                 f"[0:v]subtitles={srt_path},"
+                f"[0:v]subtitles={srt_path},"
                 f"scale=-2:{height}" if resolution == "720" else f"scale=-1:{height}"
             )
             cmd = [
+                ffmpeg_exe, "-y",
                 ffmpeg_exe, "-y",
                 "-err_detect", "ignore_err",  # Ignore non-critical decoder errors
                 "-fflags", "+discardcorrupt+genpts",  # Discard corrupt packets and generate PTS
@@ -1958,6 +2068,184 @@ def transcribe_video(video_path: Path, language_code: str, model: str, whisper_o
         if log_callback:
             log_callback(f"Error during transcription: {e}")
         return False
+
+
+def transcribe_video_vad(
+    video_path: Path,
+    language_code: str,
+    model: str,
+    progress_callback=None,
+    log_callback=None,
+) -> bool:
+    """Transcribe a long video using Silero VAD + Whisper per segment to reduce hallucination.
+    Best for files over ~5 minutes. Writes SRT next to the input file.
+    Requires: torch, pysrt, openai-whisper (pip install torch pysrt openai-whisper).
+    """
+    from decimal import Decimal
+
+    try:
+        import torch
+        import pysrt
+    except ImportError as e:
+        if log_callback:
+            log_callback(f"Missing dependency: {e}. Install with: pip install torch pysrt openai-whisper")
+        return False
+
+    if not video_path.exists():
+        if log_callback:
+            log_callback(f"Error: Video file not found: {video_path}")
+        return False
+
+    SAMPLE_RATE = 16000
+    MIN_SILENCE_GAP = 0.5
+    MIN_SEGMENT_LEN = 1.0
+    PADDING = 0.2
+    MAX_SEGMENT_LEN = 30.0
+    MAX_LINE_WIDTH = 42
+    MAX_LINE_COUNT = 2
+
+    workdir = video_path.parent / f".vad_work_{video_path.stem}"
+    workdir.mkdir(exist_ok=True)
+    audio_path = workdir / "audio.wav"
+
+    try:
+        if log_callback:
+            log_callback("Extracting audio...")
+        subprocess.run(
+            [
+                "ffmpeg", "-y",
+                "-i", str(video_path),
+                "-ac", "1",
+                "-ar", str(SAMPLE_RATE),
+                "-vn",
+                str(audio_path),
+            ],
+            check=True,
+            capture_output=True,
+        )
+
+        if log_callback:
+            log_callback("Loading Silero VAD...")
+        vad_model, utils = torch.hub.load(
+            repo_or_dir="snakers4/silero-vad",
+            model="silero_vad",
+            trust_repo=True,
+        )
+        get_speech_timestamps, _, read_audio_fn, _, _ = utils
+        wav = read_audio_fn(str(audio_path), sampling_rate=SAMPLE_RATE)
+        speech_timestamps = get_speech_timestamps(wav, vad_model, sampling_rate=SAMPLE_RATE)
+
+        if not speech_timestamps:
+            if log_callback:
+                log_callback("No speech segments detected.")
+            return False
+
+        segments_raw = [
+            (ts["start"] / SAMPLE_RATE, ts["end"] / SAMPLE_RATE)
+            for ts in speech_timestamps
+        ]
+
+        merged = []
+        for start, end in segments_raw:
+            if not merged:
+                merged.append([start, end])
+                continue
+            prev_start, prev_end = merged[-1]
+            if start - prev_end <= MIN_SILENCE_GAP and (end - prev_start) <= MAX_SEGMENT_LEN:
+                merged[-1][1] = end
+            else:
+                merged.append([start, end])
+
+        segments = []
+        for start, end in merged:
+            start = max(0, start - PADDING)
+            end += PADDING
+            if end - start >= MIN_SEGMENT_LEN:
+                segments.append((start, end))
+
+        total = len(segments)
+        if log_callback:
+            log_callback(f"Detected {total} speech segments. Transcribing...")
+
+        all_subs = pysrt.SubRipFile()
+
+        for i, (start, end) in enumerate(segments):
+            if progress_callback:
+                progress_callback(i + 1, total, f"seg_{i + 1}")
+            if log_callback:
+                log_callback(f"Transcribing segment {i + 1}/{total}...")
+
+            seg_wav = workdir / f"seg_{i:04d}.wav"
+            seg_srt = workdir / f"seg_{i:04d}.srt"
+            duration = end - start
+
+            subprocess.run(
+                [
+                    "ffmpeg", "-y",
+                    "-ss", str(start),
+                    "-t", str(duration),
+                    "-i", str(audio_path),
+                    "-ac", "1", "-ar", str(SAMPLE_RATE),
+                    str(seg_wav),
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=True,
+            )
+
+            whisper_cmd = [
+                "whisper",
+                str(seg_wav),
+                "--model", model,
+                "--output_format", "srt",
+                "--output_dir", str(workdir),
+                "--fp16", "False",
+                "--word_timestamps", "True",
+                "--max_line_width", str(MAX_LINE_WIDTH),
+                "--max_line_count", str(MAX_LINE_COUNT),
+            ]
+            if language_code != "auto":
+                whisper_cmd += ["--language", language_code]
+
+            result = subprocess.run(whisper_cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                if log_callback:
+                    log_callback(f"Whisper error for segment {i + 1}: {result.stderr or result.stdout}")
+                continue
+
+            if not seg_srt.exists():
+                continue
+
+            subs = pysrt.open(seg_srt)
+            offset = Decimal(str(start))
+            for sub in subs:
+                sub.start.seconds = float(Decimal(sub.start.seconds) + offset)
+                sub.end.seconds = float(Decimal(sub.end.seconds) + offset)
+                all_subs.append(sub)
+
+        all_subs.clean_indexes()
+        output_srt = video_path.with_suffix(".srt")
+        all_subs.save(output_srt, encoding="utf-8")
+
+        if log_callback:
+            log_callback(f"Done → {output_srt.name}")
+        return True
+
+    except subprocess.CalledProcessError as e:
+        if log_callback:
+            log_callback(f"FFmpeg/Whisper error: {e}")
+        return False
+    except Exception as e:
+        if log_callback:
+            log_callback(f"Error during VAD transcription: {e}")
+            log_callback(traceback.format_exc())
+        return False
+    finally:
+        if workdir.exists():
+            try:
+                shutil.rmtree(workdir)
+            except OSError:
+                pass
 
 
 def transcribe_video_vad(
@@ -2940,7 +3228,15 @@ class AboutDialog(QDialog):
         """Generate About content as HTML."""
         version = __version__
         return f"""
+        version = __version__
+        return f"""
         <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; font-size: 13pt; line-height: 1.6; }}
+        .app-name {{ font-size: 18pt; font-weight: 600; color: #b42075; margin-bottom: 4px; }}
+        .version {{ font-size: 13pt; color: #666; margin-bottom: 16px; }}
+        .creator {{ font-size: 13pt; color: #333; margin-bottom: 20px; }}
+        .description {{ font-size: 13pt; color: #333; margin-bottom: 24px; line-height: 1.7; }}
+        .footer {{ font-size: 12pt; color: #666; font-style: italic; margin-top: 24px; }}
         body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; font-size: 13pt; line-height: 1.6; }}
         .app-name {{ font-size: 18pt; font-weight: 600; color: #b42075; margin-bottom: 4px; }}
         .version {{ font-size: 13pt; color: #666; margin-bottom: 16px; }}
@@ -2950,6 +3246,9 @@ class AboutDialog(QDialog):
         </style>
         <div style="padding: 24px;">
         <div class="app-name">Video Processing Studio</div>
+
+        <div class="version">Version {version}</div>
+
 
         <div class="version">Version {version}</div>
 
@@ -3243,6 +3542,18 @@ class SettingsDialog(QDialog):
         api_group = QGroupBox("API Keys")
         api_group.setStyleSheet("QGroupBox { font-weight: bold; }")
         api_form = QFormLayout()
+        main_layout = QVBoxLayout()
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        content = QWidget()
+        content_layout = QVBoxLayout()
+        content_layout.setSpacing(16)
+        
+        # --- API Keys ---
+        api_group = QGroupBox("API Keys")
+        api_group.setStyleSheet("QGroupBox { font-weight: bold; }")
+        api_form = QFormLayout()
         api_key_info = QLabel(
             'You can set up your API key safely by setting the GEMINI_API_KEY environment variable. '
             '<a href="https://aistudio.google.com/app/apikey">Get your API key here</a> and follow the instructions '
@@ -3252,10 +3563,12 @@ class SettingsDialog(QDialog):
         api_key_info.setWordWrap(True)
         api_key_info.setStyleSheet("color: #666;")
         api_form.addRow("", api_key_info)
+        api_form.addRow("", api_key_info)
         self.api_key_input = QLineEdit()
         self.api_key_input.setText(self.config.get("api_key", ""))
         self.api_key_input.setEchoMode(QLineEdit.Password)
         self.api_key_input.setPlaceholderText("Optional: Legacy API key input")
+        api_form.addRow("API Key (Legacy):", self.api_key_input)
         api_form.addRow("API Key (Legacy):", self.api_key_input)
         self.api_key2_input = QLineEdit()
         self.api_key2_input.setText(self.config.get("api_key2", ""))
@@ -3287,9 +3600,36 @@ class SettingsDialog(QDialog):
         watermark_group = QGroupBox("Watermarks")
         watermark_group.setStyleSheet("QGroupBox { font-weight: bold; }")
         wm_form = QFormLayout()
+        api_form.addRow("API Key 2 (Optional):", self.api_key2_input)
+        api_group.setLayout(api_form)
+        content_layout.addWidget(api_group)
+        
+        # --- FFmpeg (optional path for older version) ---
+        ffmpeg_group = QGroupBox("FFmpeg")
+        ffmpeg_group.setStyleSheet("QGroupBox { font-weight: bold; }")
+        ffmpeg_form = QFormLayout()
+        ffmpeg_help = QLabel(
+            "Leave empty to use FFmpeg from PATH. Set a path (e.g. /opt/homebrew/opt/ffmpeg@6/bin/ffmpeg) "
+            "to use a specific version if FFmpeg 7.x gives filter errors with burn-in subtitles."
+        )
+        ffmpeg_help.setWordWrap(True)
+        ffmpeg_help.setStyleSheet("color: #666; font-size: 10px;")
+        ffmpeg_form.addRow("", ffmpeg_help)
+        self.ffmpeg_path_input = QLineEdit()
+        self.ffmpeg_path_input.setText(self.config.get("ffmpeg_path", ""))
+        self.ffmpeg_path_input.setPlaceholderText("e.g. /opt/homebrew/opt/ffmpeg@6/bin/ffmpeg")
+        ffmpeg_form.addRow("FFmpeg path (optional):", self.ffmpeg_path_input)
+        ffmpeg_group.setLayout(ffmpeg_form)
+        content_layout.addWidget(ffmpeg_group)
+
+        # --- Watermarks ---
+        watermark_group = QGroupBox("Watermarks")
+        watermark_group.setStyleSheet("QGroupBox { font-weight: bold; }")
+        wm_form = QFormLayout()
         self.use_watermarks_checkbox = QCheckBox("Use watermarks")
         self.use_watermarks_checkbox.setChecked(self.config.get("use_watermarks", True))
         self.use_watermarks_checkbox.stateChanged.connect(self.toggle_watermark_fields)
+        wm_form.addRow("", self.use_watermarks_checkbox)
         wm_form.addRow("", self.use_watermarks_checkbox)
         self.watermark_720p_input = QLineEdit()
         self.watermark_720p_input.setText(self.config.get("watermark_720p", ""))
@@ -3298,6 +3638,7 @@ class SettingsDialog(QDialog):
         wm720_layout = QHBoxLayout()
         wm720_layout.addWidget(self.watermark_720p_input)
         wm720_layout.addWidget(self.wm720_browse)
+        wm_form.addRow("Watermark 720p:", wm720_layout)
         wm_form.addRow("Watermark 720p:", wm720_layout)
         self.watermark_1080p_input = QLineEdit()
         self.watermark_1080p_input.setText(self.config.get("watermark_1080p", ""))
@@ -3309,7 +3650,14 @@ class SettingsDialog(QDialog):
         wm_form.addRow("Watermark 1080p:", wm1080_layout)
         watermark_group.setLayout(wm_form)
         content_layout.addWidget(watermark_group)
+        wm_form.addRow("Watermark 1080p:", wm1080_layout)
+        watermark_group.setLayout(wm_form)
+        content_layout.addWidget(watermark_group)
         
+        # --- Subtitle Translation ---
+        translation_group = QGroupBox("Subtitle Translation")
+        translation_group.setStyleSheet("QGroupBox { font-weight: bold; }")
+        trans_form = QFormLayout()
         # --- Subtitle Translation ---
         translation_group = QGroupBox("Subtitle Translation")
         translation_group.setStyleSheet("QGroupBox { font-weight: bold; }")
@@ -3320,6 +3668,7 @@ class SettingsDialog(QDialog):
         )
         translation_info.setWordWrap(True)
         translation_info.setStyleSheet("color: #666;")
+        trans_form.addRow("", translation_info)
         trans_form.addRow("", translation_info)
         self.translation_target_combo = QComboBox()
         for lang in ["English", "French", "Spanish", "Catalan", "German", "Italian", "Portuguese", "Dutch"]:
@@ -3339,10 +3688,28 @@ class SettingsDialog(QDialog):
         self.lesbian_flag_checkbox = QCheckBox("Lesbian flag theme (always on)")
         self.lesbian_flag_checkbox.setChecked(False)
         self.lesbian_flag_checkbox.setToolTip("The app uses lesbian flag colors. Try checking this for a surprise.")
+        trans_form.addRow("Translation Target:", self.translation_target_combo)
+        translation_group.setLayout(trans_form)
+        content_layout.addWidget(translation_group)
+        
+        # --- Appearance ---
+        appearance_group = QGroupBox("Appearance")
+        appearance_group.setStyleSheet("QGroupBox { font-weight: bold; }")
+        app_form = QFormLayout()
+        self.lesbian_flag_checkbox = QCheckBox("Lesbian flag theme (always on)")
+        self.lesbian_flag_checkbox.setChecked(False)
+        self.lesbian_flag_checkbox.setToolTip("The app uses lesbian flag colors. Try checking this for a surprise.")
         self.lesbian_flag_checkbox.stateChanged.connect(self.toggle_lesbian_flag_theme)
         app_form.addRow("", self.lesbian_flag_checkbox)
         appearance_group.setLayout(app_form)
         content_layout.addWidget(appearance_group)
+        app_form.addRow("", self.lesbian_flag_checkbox)
+        appearance_group.setLayout(app_form)
+        content_layout.addWidget(appearance_group)
+        
+        content.setLayout(content_layout)
+        scroll.setWidget(content)
+        main_layout.addWidget(scroll)
         
         content.setLayout(content_layout)
         scroll.setWidget(content)
@@ -3358,7 +3725,9 @@ class SettingsDialog(QDialog):
         button_layout.addWidget(save_btn)
         button_layout.addWidget(cancel_btn)
         main_layout.addLayout(button_layout)
+        main_layout.addLayout(button_layout)
         
+        self.setLayout(main_layout)
         self.setLayout(main_layout)
     
     def toggle_watermark_fields(self):
@@ -3395,6 +3764,7 @@ class SettingsDialog(QDialog):
         """Save settings and close dialog."""
         self.config["api_key"] = self.api_key_input.text()
         self.config["api_key2"] = self.api_key2_input.text()
+        self.config["ffmpeg_path"] = self.ffmpeg_path_input.text().strip()
         self.config["ffmpeg_path"] = self.ffmpeg_path_input.text().strip()
         self.config["watermark_720p"] = self.watermark_720p_input.text()
         self.config["watermark_1080p"] = self.watermark_1080p_input.text()
@@ -3810,6 +4180,7 @@ class VideoProcessingApp(QMainWindow):
         self.transcribe_model_combo.currentTextChanged.connect(self.save_whisper_model)
         model_info = QLabel("(Turbo recommended for best accuracy/speed, ~1.5 GB)")
         model_info.setStyleSheet("color: #666; font-size: 12px;")
+        model_info.setStyleSheet("color: #666; font-size: 12px;")
         model_row.addWidget(model_label, 0)
         model_row.addWidget(self.transcribe_model_combo, 1)
         model_row.addWidget(model_info, 1)
@@ -3872,14 +4243,47 @@ class VideoProcessingApp(QMainWindow):
             }
         """)
         transcribe_long_btn.clicked.connect(self.transcribe_long_from_tab)
+        transcribe_long_btn = QPushButton("Transcribe longer video")
+        transcribe_long_btn.setToolTip(
+            "Use this for files over ~5 minutes. Splits audio into short segments via voice detection "
+            "(Silero VAD), then transcribes each with Whisper. Prevents hallucination caused by long "
+            "silences or extended audio. Takes roughly 1–2× the file duration on CPU."
+        )
+        transcribe_long_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #c46ea1;
+                color: white;
+                border: none;
+                border-radius: 5px;
+                padding: 4px 12px;
+                font-weight: bold;
+                min-height: 18px;
+            }
+            QPushButton:hover {
+                background-color: #b85d90;
+            }
+            QPushButton:pressed {
+                background-color: #a04d80;
+            }
+        """)
+        transcribe_long_btn.clicked.connect(self.transcribe_long_from_tab)
         
         advanced_btn = QPushButton("Advanced Options...")
         advanced_btn.clicked.connect(self.open_whisper_options)
         
         buttons_layout.addWidget(self.transcribe_main_btn, 2)
         buttons_layout.addWidget(transcribe_long_btn, 2)
+        buttons_layout.addWidget(transcribe_long_btn, 2)
         buttons_layout.addWidget(advanced_btn, 1)
         layout.addLayout(buttons_layout)
+        
+        transcribe_hint = QLabel(
+            "Use \"Transcribe\" for short clipsn. "
+            "Use \"Transcribe longer video\" for files over ~5 min (VAD-assisted, prevents hallucination (~1-2x real-time on CPU)."
+        )
+        transcribe_hint.setStyleSheet("color: #666; font-size: 12px;")
+        transcribe_hint.setWordWrap(True)
+        layout.addWidget(transcribe_hint)
         
         transcribe_hint = QLabel(
             "Use \"Transcribe\" for short clipsn. "
@@ -4106,6 +4510,52 @@ class VideoProcessingApp(QMainWindow):
         self.worker.finished.connect(self.on_transcribe_finished)
         self.worker.start()
 
+
+    def transcribe_long_from_tab(self):
+        """Transcribe long video using VAD + Whisper (for files over ~5 min)."""
+        file_path = self.transcribe_file_input.text()
+        if not file_path or file_path == "No file selected":
+            QMessageBox.warning(self, "No File", "Please select a video or audio file to transcribe.")
+            return
+        video_path = Path(file_path)
+        if not video_path.exists():
+            QMessageBox.warning(self, "File Not Found", f"The selected file does not exist:\n{file_path}")
+            return
+        try:
+            import torch  # noqa: F401
+            import pysrt  # noqa: F401
+        except ImportError as e:
+            QMessageBox.warning(
+                self,
+                "Missing Dependencies",
+                f"Transcribe (anti-hallucination) requires torch and pysrt.\n\nError: {e}\n\nInstall with:\npip install torch pysrt openai-whisper"
+            )
+            return
+        language_code = self.transcribe_language_combo.currentData()
+        model = self.transcribe_model_combo.currentText()
+        config = load_config()
+        whisper_model_asked = config.get("whisper_model_asked", False)
+        if not whisper_model_asked:
+            model_dialog = WhisperModelDialog(self, model)
+            if model_dialog.exec_() != QDialog.Accepted:
+                return
+            config["whisper_model_asked"] = True
+            config["whisper_has_existing_model"] = model_dialog.get_result()
+            save_config(config)
+        self.transcribe_log(f"Starting VAD-assisted transcription of: {video_path.name}")
+        lang_display = "Auto-detect" if language_code == "auto" else language_code
+        self.transcribe_log(f"Language: {lang_display}, Model: {model}")
+        self.transcribe_progress_bar.setVisible(True)
+        self.transcribe_stop_btn.setVisible(True)
+        self.transcribe_stop_btn.setEnabled(True)
+        self.transcribe_progress_bar.setRange(0, 0)
+        def tab_log_callback(msg):
+            self.transcribe_log(msg)
+        self.worker = ScriptWorker(transcribe_video_vad, video_path, language_code, model)
+        self.worker.log_message.connect(tab_log_callback)
+        self.worker.finished.connect(self.on_transcribe_finished)
+        self.worker.start()
+
     def create_remuxing_tab(self):
         """Create the dedicated remuxing tab."""
         tab = QWidget()
@@ -4140,6 +4590,9 @@ class VideoProcessingApp(QMainWindow):
         auto_match_btn = QPushButton("Auto-match subtitles")
         auto_match_btn.setToolTip("Find SRT/VTT with same name as each video (same folder or Subtitles folder) and attach.")
         auto_match_btn.clicked.connect(self.auto_match_remux_subtitles)
+        auto_match_btn = QPushButton("Auto-match subtitles")
+        auto_match_btn.setToolTip("Find SRT/VTT with same name as each video (same folder or Subtitles folder) and attach.")
+        auto_match_btn.clicked.connect(self.auto_match_remux_subtitles)
         remove_files_btn = QPushButton("Remove Selected")
         remove_files_btn.clicked.connect(self.remove_remux_files)
         clear_files_btn = QPushButton("Clear All")
@@ -4147,6 +4600,7 @@ class VideoProcessingApp(QMainWindow):
         media_info_btn = QPushButton("Media Info")
         media_info_btn.clicked.connect(self.show_media_info)
         buttons_row.addWidget(add_files_btn)
+        buttons_row.addWidget(auto_match_btn)
         buttons_row.addWidget(auto_match_btn)
         buttons_row.addWidget(remove_files_btn)
         buttons_row.addWidget(clear_files_btn)
@@ -4229,6 +4683,7 @@ class VideoProcessingApp(QMainWindow):
         self.remux_log_output = QLineEdit()
         self.remux_log_output.setReadOnly(True)
         self.remux_log_output.setPlaceholderText("Remuxing operations will show status here (success and errors)")
+        self.remux_log_output.setPlaceholderText("Remuxing operations will show status here (success and errors)")
         self.remux_log_output.setStyleSheet("""
             QLineEdit {
                 background-color: #f5f5f5;
@@ -4272,8 +4727,39 @@ class VideoProcessingApp(QMainWindow):
                 self.add_file_to_tree(video_path)
                 # Auto-match subtitle if same-name SRT/VTT exists (same dir or Subtitles dir)
                 self._attach_matching_subtitle_for_file(video_path)
+                # Auto-match subtitle if same-name SRT/VTT exists (same dir or Subtitles dir)
+                self._attach_matching_subtitle_for_file(video_path)
         
         self.update_remux_file_count()
+    
+    def _attach_matching_subtitle_for_file(self, video_path: Path) -> bool:
+        """If a same-name SRT/VTT exists, attach it to this file's config and update tree. Returns True if attached."""
+        sub_path = get_matching_subtitle_for_remux(video_path)
+        if not sub_path or video_path not in self.remux_file_configs:
+            return False
+        self.remux_file_configs[video_path]['subtitle_file'] = sub_path
+        root = self.remux_files_tree.invisibleRootItem()
+        for i in range(root.childCount()):
+            file_item = root.child(i)
+            if file_item.data(0, 256) == str(video_path):
+                for j in range(file_item.childCount()):
+                    child = file_item.child(j)
+                    if child.data(0, 256) == "external_subtitle":
+                        child.setText(2, sub_path.name)
+                        break
+                return True
+        return False
+    
+    def auto_match_remux_subtitles(self):
+        """For each video in the list, find a same-name SRT/VTT (same folder or Subtitles folder) and attach it."""
+        matched = 0
+        for video_path in self.remux_selected_files:
+            if self._attach_matching_subtitle_for_file(video_path):
+                matched += 1
+        if matched > 0:
+            self.remux_log_output.setText(f"Auto-matched {matched} subtitle(s) (same name as video).")
+        else:
+            self.remux_log_output.setText("No matching subtitle files found (look for .srt/.vtt with same name in video folder or Subtitles folder).")
     
     def _attach_matching_subtitle_for_file(self, video_path: Path) -> bool:
         """If a same-name SRT/VTT exists, attach it to this file's config and update tree. Returns True if attached."""
@@ -4531,6 +5017,9 @@ class VideoProcessingApp(QMainWindow):
         )
         
         if success:
+            base = video_path.stem
+            out_path = video_path.parent / f"{base}_remuxed.{output_format}"
+            self.remux_log_output.setText(f"✓ Saved: {out_path}")
             base = video_path.stem
             out_path = video_path.parent / f"{base}_remuxed.{output_format}"
             self.remux_log_output.setText(f"✓ Saved: {out_path}")
@@ -4889,6 +5378,7 @@ class VideoProcessingApp(QMainWindow):
     def init_ui(self):
         """Initialize the UI."""
         self.setWindowTitle(f"SP Workshop (WLW video processing, translation & subtitling hub) v{__version__}")
+        self.setWindowTitle(f"SP Workshop (WLW video processing, translation & subtitling hub) v{__version__}")
         self.setMinimumSize(900, 700)
         
         # Get screen geometry and maximize height
@@ -4919,6 +5409,7 @@ class VideoProcessingApp(QMainWindow):
         header_left_layout.addWidget(app_name_label)
         
         # Version number below title
+        version_label = QLabel(f'version {__version__} "{VERSION_CODENAME}"')
         version_label = QLabel(f'version {__version__} "{VERSION_CODENAME}"')
         version_label.setFont(QFont("Arial", 18))
         version_label.setStyleSheet("color: #999; font-style: italic;")
@@ -5211,6 +5702,8 @@ class VideoProcessingApp(QMainWindow):
             "remux_mkv_with_srt_batch": "Remuxing videos",
             "transcribe_video": "Transcribing video",
             "transcribe_video_vad": "Transcribing video (long)",
+            "transcribe_video": "Transcribing video",
+            "transcribe_video_vad": "Transcribing video (long)",
         }
         self.current_operation = operation_names.get(func_name, "Processing")
         
@@ -5466,8 +5959,10 @@ class VideoProcessingApp(QMainWindow):
         
         self.log(f"Starting subtitle translation for {len(file_paths)} file(s)...")
         self.log(f"Target language: {target_language}")
+        self.log(f"Target language: {target_language}")
         if api_key2:
             self.log("Using second API key for translation")
+        self.run_script(translate_subtitles, file_paths, api_key, target_language, api_key2)
         self.run_script(translate_subtitles, file_paths, api_key, target_language, api_key2)
     
     def process_video(self, resolution: str):
@@ -5499,8 +5994,10 @@ class VideoProcessingApp(QMainWindow):
         
         self.log(f"Starting video processing ({resolution}p) for {len(file_paths)} file(s)...")
         ffmpeg_path = self.config.get("ffmpeg_path", "").strip()
+        ffmpeg_path = self.config.get("ffmpeg_path", "").strip()
         self.run_script(
             process_video, file_paths, subtitles_dir, output_dir,
+            watermark_path, resolution, use_watermarks, ffmpeg_path
             watermark_path, resolution, use_watermarks, ffmpeg_path
         )
     
@@ -5593,6 +6090,7 @@ class VideoProcessingApp(QMainWindow):
                 return transcribe_video(video_path, language_code, model, whisper_options, progress_callback=progress_callback, log_callback=log_callback)
             
             self.run_script(transcribe_with_params, video_path, language_code, model, whisper_options)
+    
     
 # ============================================================================
 # Main Entry Point
