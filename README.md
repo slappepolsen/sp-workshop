@@ -70,7 +70,7 @@ Select **Source code (zip)** under Assets.
    - Add the executable to your PATH
 7. Run the app
    ```bash
-   python3 video_app_v8.py
+   python3 app.py
    ```
 
 ---
@@ -95,7 +95,7 @@ Select **Source code (zip)** under Assets.
 6. Install N_m3u8DL-RE (optional, for downloads)
 7. Run the app
    ```bash
-   python video_app_v8.py
+   python app.py
    ```
 
 ---
@@ -118,7 +118,7 @@ Select **Source code (zip)** under Assets.
 4. Install N_m3u8DL-RE (optional)
 5. Run the app
    ```bash
-   python3 video_app_v8.py
+   python3 app.py
    ```
 
 ---

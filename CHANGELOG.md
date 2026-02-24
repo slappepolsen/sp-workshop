@@ -175,7 +175,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - First-time user dialog asking if user already has a Whisper model installed.
 - Auto-detection of existing Whisper models in default cache location (~/.cache/whisper/).
 - User preference storage to avoid redundant model downloads.
-- All documentation files now included in release packages (README.md, SETUP.md, CHANGELOG.md, batchdownloader_guide.md, LICENSE, requirements.txt, video_app_v8.py, flowcharts.png).
+- All documentation files now included in release packages (README.md, SETUP.md, CHANGELOG.md, batchdownloader_guide.md, LICENSE, requirements.txt, app.py, flowcharts.png).
 
 ## [8.1.1] - 2026-01-19
 

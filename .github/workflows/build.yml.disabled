@@ -28,7 +28,7 @@ jobs:
       
       - name: Build macOS app with PyInstaller
         run: |
-          pyinstaller --onefile --windowed --name "SP_Workshop" --icon=icon.icns video_app_v8.py
+          pyinstaller --onefile --windowed --name "SP_Workshop" --icon=icon.icns app.py
       
       - name: Create macOS DMG-like structure
         run: |
@@ -36,7 +36,7 @@ jobs:
           mv dist/SP_Workshop.app dist/SP_Workshop_macOS/ 2>/dev/null || mv dist/SP_Workshop dist/SP_Workshop_macOS/
           cp whisper_auto.sh dist/SP_Workshop_macOS/
           cp icon.icns dist/SP_Workshop_macOS/
-          cp README.md SETUP.md CHANGELOG.md batchdownloader_guide.md LICENSE requirements.txt video_app_v8.py dist/SP_Workshop_macOS/
+          cp README.md SETUP.md CHANGELOG.md batchdownloader_guide.md LICENSE requirements.txt app.py dist/SP_Workshop_macOS/
           cp flowcharts.png icon.png dist/SP_Workshop_macOS/
       
       - name: Upload macOS artifact
@@ -68,7 +68,7 @@ jobs:
       
       - name: Build Windows executable
         run: |
-          pyinstaller --onefile --windowed --name "SP_Workshop" --icon=icon.ico video_app_v8.py
+          pyinstaller --onefile --windowed --name "SP_Workshop" --icon=icon.ico app.py
       
       - name: Create Windows distribution
         run: |
@@ -82,7 +82,7 @@ jobs:
           copy batchdownloader_guide.md dist\SP_Workshop_Windows\
           copy LICENSE dist\SP_Workshop_Windows\
           copy requirements.txt dist\SP_Workshop_Windows\
-          copy video_app_v8.py dist\SP_Workshop_Windows\
+          copy app.py dist\SP_Workshop_Windows\
           copy flowcharts.png dist\SP_Workshop_Windows\
           copy icon.png dist\SP_Workshop_Windows\
         shell: cmd
@@ -116,7 +116,7 @@ jobs:
       
       - name: Build Linux executable
         run: |
-          pyinstaller --onefile --name "SP_Workshop" video_app_v8.py
+          pyinstaller --onefile --name "SP_Workshop" app.py
       
       - name: Create Linux distribution
         run: |
@@ -126,7 +126,7 @@ jobs:
           chmod +x dist/SP_Workshop_Linux/SP_Workshop
           chmod +x dist/SP_Workshop_Linux/whisper_auto.sh
           cp icon.png dist/SP_Workshop_Linux/
-          cp README.md SETUP.md CHANGELOG.md batchdownloader_guide.md LICENSE requirements.txt video_app_v8.py dist/SP_Workshop_Linux/
+          cp README.md SETUP.md CHANGELOG.md batchdownloader_guide.md LICENSE requirements.txt app.py dist/SP_Workshop_Linux/
           cp flowcharts.png dist/SP_Workshop_Linux/
       
       - name: Upload Linux artifact
