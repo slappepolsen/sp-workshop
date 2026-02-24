@@ -42,8 +42,8 @@ build_venv/
 *.manifest
 *.spec
 
-# Local config
-config.json
+# Local config (app uses ~/VideoProcessing/config/settings.json)
+settings.json
 
 # Logs
 *.log

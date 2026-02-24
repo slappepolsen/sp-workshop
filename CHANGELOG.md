@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [10.0.0] - 2026-02-23
+
+### Added
+
+- **Transcribe (anti-hallucination)**: VAD-assisted transcription for files over ~5 minutes. Uses Silero VAD to split audio into short speech segments, then transcribes each with Whisper — prevents hallucination from long silences or extended audio.
+- Subtitle cleaner now removes `<c.bg_black>` and similar tags with underscores/digits.
+
+### Removed
+
+- Transcrie time range removed in favor of the new anti-hallucination transcription.
+- ISO 639 subtitle suffixes removed from translation and video processing.
+
 ## [9.2.2] - 2026-01-23
 
 ### Added
@@ -92,7 +104,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Whisper options stored in `config.json` under `whisper_options` dictionary.
+- Whisper options stored in `settings.json` under `whisper_options` dictionary.
 - `whisper_auto.sh` accepts Whisper parameters via environment variables.
 - `transcribe_video()` passes whisper options from config to bash script.
 - Transcription functionality moved from section to dedicated tab.

@@ -4,6 +4,9 @@ Video Processing GUI Application
 A PyQt5 desktop app that provides a button-based interface for all video processing scripts.
 """
 
+__version__ = "10.0.0"
+VERSION_CODENAME = "Hallucination"
+
 import sys
 import os
 import json
@@ -113,9 +116,9 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QTextEdit, QFileDialog, QDialog,
     QLineEdit, QFormLayout, QMessageBox, QProgressBar, QGroupBox, QStyleFactory, QCheckBox, QStackedWidget, QTextBrowser, QComboBox,
-    QGraphicsDropShadowEffect, QTabWidget, QSpinBox, QDoubleSpinBox, QScrollArea, QTimeEdit, QListWidget, QListWidgetItem, QTreeWidget, QTreeWidgetItem, QHeaderView, QMenu
+    QGraphicsDropShadowEffect, QTabWidget, QSpinBox, QDoubleSpinBox, QScrollArea, QListWidget, QListWidgetItem, QTreeWidget, QTreeWidgetItem, QHeaderView, QMenu
 )
-from PyQt5.QtCore import QThread, pyqtSignal, Qt, QProcess, QUrl, QTime, QTimer
+from PyQt5.QtCore import QThread, pyqtSignal, Qt, QProcess, QUrl, QTimer
 from PyQt5.QtGui import QFont, QIcon, QPainter, QPen, QDesktopServices
 
 
@@ -175,6 +178,7 @@ def load_config() -> Dict:
         "api_key": os.getenv("GST_API_KEY", ""),
         "download_resolution": "1080",
         "ffmpeg_preset": "medium",
+        "ffmpeg_path": "",
         "setup_complete": False,
         "use_watermarks": True,
         "whisper_output_format": "srt",
@@ -292,6 +296,28 @@ def get_remuxed_dir() -> Path:
     remuxed_dir = get_base_dir() / "remuxed"
     remuxed_dir.mkdir(parents=True, exist_ok=True)
     return remuxed_dir
+
+
+def get_matching_subtitle_for_remux(video_path: Path) -> Optional[Path]:
+    """Find an SRT or VTT file with the same stem as the video (for remux auto-match).
+    Looks in the video's directory first, then in the app subtitles directory.
+    Prefers .srt over .vtt, same directory over subtitles dir.
+    """
+    if not video_path.exists():
+        return None
+    stem = video_path.stem
+    # 1) Same directory as video
+    for ext in (".srt", ".vtt"):
+        candidate = video_path.parent / f"{stem}{ext}"
+        if candidate.exists():
+            return candidate
+    # 2) App subtitles directory
+    sub_dir = get_subtitles_dir()
+    for ext in (".srt", ".vtt"):
+        candidate = sub_dir / f"{stem}{ext}"
+        if candidate.exists():
+            return candidate
+    return None
 
 
 def check_whisper_model_exists(model_name: str) -> bool:
@@ -577,28 +603,6 @@ def open_in_lossless_cut(video_paths: List[Path], log_callback=None) -> bool:
 
 
 # ============================================================================
-# ISO 639-2/T Language Codes for Subtitle Suffixes
-# ============================================================================
-
-ISO_639_CODES = {
-    "English": "eng",
-    "French": "fra",
-    "Spanish": "spa",
-    "Catalan": "cat",
-    "German": "deu",
-    "Italian": "ita",
-    "Portuguese": "por",
-    "Dutch": "nld",
-    "Chinese": "zho",
-    "Japanese": "jpn",
-    "Korean": "kor",
-    "Arabic": "ara",
-    "Thai": "tha",
-    "Greek": "ell",
-}
-
-
-# ============================================================================
 # Episode Range Parser
 # ============================================================================
 
@@ -668,6 +672,40 @@ def _add_headers_for_bare_url(url_or_cmd: str) -> str:
     ]
     # Always quote URL to handle &, =, etc. in query params
     return f"{' '.join(headers)} \"{url}\""
+
+
+def _drop_n_m3u8_output_options(args: List[str]) -> List[str]:
+    """Remove output/save options from user args so app's --save-name/--save-dir/-M apply."""
+    drop_flags = {
+        "--save-name", "--save-dir", "--tmp-dir",
+        "-m", "-M", "--mux-after-done", "--del-after-done",
+        "--check-segments-count", "--select-video", "--select-audio", "--select-subtitle",
+    }
+    result = []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        a_lower = a.lower()
+        if a_lower in drop_flags:
+            # Skip this flag and its value if it takes one
+            if a_lower in ("-m", "-M", "--save-name", "--save-dir", "--tmp-dir", "--check-segments-count",
+                          "--select-video", "--select-audio", "--select-subtitle"):
+                i += 2  # skip value (avoid bounds: don't skip past end)
+                if i > len(args):
+                    i = len(args)
+            else:
+                i += 1
+            continue
+        result.append(args[i])
+        i += 1
+    return result
+
+
+def _url_first_args(args: List[str]) -> List[str]:
+    """Put URL(s) first; N_m3u8DL-RE requires <URL> before options or it prints help."""
+    urls = [a for a in args if a.startswith("http://") or a.startswith("https://")]
+    rest = [a for a in args if a not in urls]
+    return urls + rest
 
 
 # ============================================================================
@@ -742,30 +780,40 @@ def download_episodes(commands_text: str, output_dir: Path, episode_spec: str = 
         if progress_callback:
             progress_callback(i + 1, total, f"Episode {episode_number}")
         
-        # Use user command as-is; append only save/output options
-        command = (
-            f"N_m3u8DL-RE "
-            f"{base_command} "
-            f"--tmp-dir {quote_path(get_temp_dir())} "
-            f"--del-after-done "
-            f"--check-segments-count False "
-            f"--save-name {quote_path(str(episode_number))} "
-            f"--save-dir {quote_path(str(output_dir))} "
-            f"--select-video best "
-            f"--select-audio all "
-            f"--select-subtitle all "
-            f"-M mkv"
-        )
+        # Parse user command with shlex so quoted URL and -H "..." are preserved (avoids shell mangling)
+        try:
+            user_args = shlex.split(base_command)
+        except ValueError as e:
+            if log_callback:
+                log_callback(f"  ✗ Invalid quoting in command: {e}")
+            continue
+        # Drop user's output options so our --save-name/--save-dir/-M take effect
+        user_args = _drop_n_m3u8_output_options(user_args)
+        # N_m3u8DL-RE requires URL as first positional or it prints help and exits
+        user_args = _url_first_args(user_args)
+        
+        app_args = [
+            "--tmp-dir", get_temp_dir(),
+            "--del-after-done",
+            "--check-segments-count", "False",
+            "--save-name", str(episode_number),
+            "--save-dir", str(output_dir),
+            "--select-video", "best",
+            "--select-audio", "all",
+            "--select-subtitle", "all",
+            "-M", "mkv",
+        ]
+        cmd = ["N_m3u8DL-RE"] + user_args + app_args
         
         if log_callback:
             log_callback(f"\n--- Task {i + 1}/{total}: Episode {episode_number} ---")
             log_callback(f"Running: {base_command[:80]}...")
         
-        # Use Popen to stream output in real-time
+        # Use Popen with list (shell=False) so arguments are passed correctly to N_m3u8DL-RE
         try:
             process = subprocess.Popen(
-                command,
-                shell=True,
+                cmd,
+                shell=False,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,  # Combine stderr into stdout
                 text=True,
@@ -977,12 +1025,12 @@ def clean_subtitles(subtitles_dir: Path, progress_callback=None, log_callback=No
             
             original_length = len(content)
             
-            # Remove color tags like <c.yellow>, <c.red>, etc.
-            cleaned = re.sub(r'<c\.[a-zA-Z]+>', '', content)
-            cleaned = re.sub(r'</c\.[a-zA-Z]+>', '', cleaned)
+            # Remove color tags like <c.yellow>, <c.red>, <c.bg_black>, etc.
+            cleaned = re.sub(r'<c\.[a-zA-Z0-9_]+>', '', content)
+            cleaned = re.sub(r'</c\.[a-zA-Z0-9_]+>', '', cleaned)
             
             if cleaned != content:
-                tags_removed = len(re.findall(r'<c\.[a-zA-Z]+>|</c\.[a-zA-Z]+>', content))
+                tags_removed = len(re.findall(r'<c\.[a-zA-Z0-9_]+>|</c\.[a-zA-Z0-9_]+>', content))
                 with open(srt_file, 'w', encoding='utf-8') as f:
                     f.write(cleaned)
                 cleaned_count += 1
@@ -1003,7 +1051,7 @@ def clean_subtitles(subtitles_dir: Path, progress_callback=None, log_callback=No
 
 
 def translate_subtitles(selected_srt_files: List[Path], api_key: Optional[str] = None, 
-                       target_language: str = "English", use_iso639: bool = False,
+                       target_language: str = "English",
                        api_key2: Optional[str] = None,
                        progress_callback=None, log_callback=None) -> bool:
     """Translate selected subtitle files using gemini-srt-translator.
@@ -1012,7 +1060,6 @@ def translate_subtitles(selected_srt_files: List[Path], api_key: Optional[str] =
         selected_srt_files: List of SRT files to translate
         api_key: Optional API key (uses env var if available)
         target_language: Target language for translation (default: English)
-        use_iso639: Whether to add ISO 639 language suffix to output filename
         api_key2: Optional second API key for translation
         progress_callback: Callback for progress updates
         log_callback: Callback for log messages
@@ -1044,15 +1091,7 @@ def translate_subtitles(selected_srt_files: List[Path], api_key: Optional[str] =
         
         try:
             # Rename original (in same directory as the SRT file)
-            # Check if the file has an ISO 639 language suffix (e.g., .spa in subtitle.spa.srt)
-            iso_match = re.match(r'(.+)\.([a-z]{3})$', srt_file.stem)
-            if iso_match:
-                # File has ISO suffix: subtitle.spa.srt → subtitle_OG.srt
-                base_name = iso_match.group(1)
-                og_file = srt_file.parent / f"{base_name}_OG.srt"
-            else:
-                # No ISO suffix: subtitle.srt → subtitle_OG.srt
-                og_file = srt_file.parent / f"{srt_file.stem}_OG.srt"
+            og_file = srt_file.parent / f"{srt_file.stem}_OG.srt"
             
             if not og_file.exists():
                 srt_file.rename(og_file)
@@ -1151,31 +1190,9 @@ def translate_subtitles(selected_srt_files: List[Path], api_key: Optional[str] =
                     pass
             
             if translation_success:
-                # Add ISO 639 language suffix if enabled
-                final_srt_file = srt_file
-                if use_iso639:
-                    target_code = ISO_639_CODES.get(target_language, "eng")
-                    
-                    # Check if source filename has existing language suffix to replace
-                    source_match = re.match(r'(.+)\.([a-z]{3})$', srt_file.stem)
-                    if source_match:
-                        # Replace existing suffix: video.spa → video.eng
-                        base_name = source_match.group(1)
-                    else:
-                        # No existing suffix: video → video
-                        base_name = srt_file.stem
-                    
-                    final_srt_file = srt_file.parent / f"{base_name}.{target_code}.srt"
-                    
-                    # Rename the translated file to include language suffix
-                    if srt_file != final_srt_file:
-                        srt_file.rename(final_srt_file)
-                        if log_callback:
-                            log_callback(f"    Renamed to: {final_srt_file.name}")
-                
                 success_count += 1
                 if log_callback:
-                    log_callback(f"  ✓ Translated: {final_srt_file.name}")
+                    log_callback(f"  ✓ Translated: {srt_file.name}")
             else:
                 if log_callback:
                     log_callback(f"  ✗ Failed: {srt_file.name}")
@@ -1197,14 +1214,8 @@ def translate_subtitles(selected_srt_files: List[Path], api_key: Optional[str] =
 
 def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_dir: Path,
                  watermark_path: str, resolution: str, use_watermarks: bool = True,
-                 use_iso639: bool = False, target_language: str = "English",
-                 progress_callback=None, log_callback=None) -> bool:
-    """Process selected video files: burn subtitles, add watermark (if enabled), resize.
-    
-    Args:
-        use_iso639: Whether to look for ISO 639 suffixed subtitle files
-        target_language: Target language for ISO 639 suffix matching
-    """
+                 ffmpeg_path: str = "", progress_callback=None, log_callback=None) -> bool:
+    """Process selected video files: burn subtitles, add watermark (if enabled), resize."""
     if not selected_video_files:
         if log_callback:
             log_callback("No video files selected.")
@@ -1232,17 +1243,10 @@ def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_
         base = video_file.stem
         
         # Check for subtitle file in multiple locations
-        # Try different filename patterns based on ISO 639 settings
         srt_file = None
         srt_location = None
         
-        # Build list of filenames to try (in priority order)
-        filenames_to_try = [f"{base}.srt"]  # Always try exact match first
-        
-        if use_iso639:
-            # Also try with ISO 639 suffix for target language
-            target_code = ISO_639_CODES.get(target_language, "eng")
-            filenames_to_try.append(f"{base}.{target_code}.srt")
+        filenames_to_try = [f"{base}.srt"]
         
         # Check each location for each filename pattern
         for filename in filenames_to_try:
@@ -1308,24 +1312,32 @@ def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_
                 # 3 channels: mix to stereo
                 audio_filter = "pan=stereo|c0=0.5*c0+0.5*c2|c1=0.5*c1+0.5*c2"
         
-        # Build FFmpeg filter
+        # Build FFmpeg filter. FFmpeg 7.x rejects subtitles with quoted path in filter_complex;
+        # pass path unquoted (escape only \ and : for filter graph). Path with spaces: use script.
+        def escape_subtitle_path_for_filter(p):
+            s = str(p).replace("\\", "\\\\")
+            # Colon in path (e.g. Windows C:) must be escaped in filter
+            s = s.replace(":", "\\:")
+            return s
+        srt_path = escape_subtitle_path_for_filter(srt_file)
+        ffmpeg_exe = (ffmpeg_path.strip() or "ffmpeg")
         if use_watermarks:
             if resolution == "720":
                 filter_complex = (
-                    f"[0:v]subtitles='{srt_file}':force_style='FontName=Arial,Bold=1',"
+                    f"[0:v]subtitles={srt_path},"
                     f"scale=-2:{height}[scaled];"
                     f"[1:v]format=rgba,colorchannelmixer=aa=0.8[wm];"
                     f"[scaled][wm]overlay=W-w-10:H-h-10"
                 )
             else:  # 1080p
                 filter_complex = (
-                    f"[0:v]subtitles='{srt_file}':force_style='FontName=Arial,Bold=1',"
+                    f"[0:v]subtitles={srt_path},"
                     f"scale=-1:{height}[vsub];"
                     f"[1:v]format=rgba,colorchannelmixer=aa=0.8[wm];"
                     f"[vsub][wm]overlay=0:0[outv]"
                 )
             cmd = [
-                "ffmpeg", "-y",
+                ffmpeg_exe, "-y",
                 "-err_detect", "ignore_err",  # Ignore non-critical decoder errors
                 "-fflags", "+discardcorrupt+genpts",  # Discard corrupt packets and generate PTS
                 "-max_error_rate", "1.0",  # Allow up to 100% error rate (essentially ignore all errors)
@@ -1341,11 +1353,11 @@ def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_
         else:
             # No watermark - just subtitles and resize
             filter_complex = (
-                f"[0:v]subtitles='{srt_file}':force_style='FontName=Arial,Bold=1',"
+                f"[0:v]subtitles={srt_path},"
                 f"scale=-2:{height}" if resolution == "720" else f"scale=-1:{height}"
             )
             cmd = [
-                "ffmpeg", "-y",
+                ffmpeg_exe, "-y",
                 "-err_detect", "ignore_err",  # Ignore non-critical decoder errors
                 "-fflags", "+discardcorrupt+genpts",  # Discard corrupt packets and generate PTS
                 "-max_error_rate", "1.0",  # Allow up to 100% error rate (essentially ignore all errors)
@@ -1948,6 +1960,184 @@ def transcribe_video(video_path: Path, language_code: str, model: str, whisper_o
         return False
 
 
+def transcribe_video_vad(
+    video_path: Path,
+    language_code: str,
+    model: str,
+    progress_callback=None,
+    log_callback=None,
+) -> bool:
+    """Transcribe a long video using Silero VAD + Whisper per segment to reduce hallucination.
+    Best for files over ~5 minutes. Writes SRT next to the input file.
+    Requires: torch, pysrt, openai-whisper (pip install torch pysrt openai-whisper).
+    """
+    from decimal import Decimal
+
+    try:
+        import torch
+        import pysrt
+    except ImportError as e:
+        if log_callback:
+            log_callback(f"Missing dependency: {e}. Install with: pip install torch pysrt openai-whisper")
+        return False
+
+    if not video_path.exists():
+        if log_callback:
+            log_callback(f"Error: Video file not found: {video_path}")
+        return False
+
+    SAMPLE_RATE = 16000
+    MIN_SILENCE_GAP = 0.5
+    MIN_SEGMENT_LEN = 1.0
+    PADDING = 0.2
+    MAX_SEGMENT_LEN = 30.0
+    MAX_LINE_WIDTH = 42
+    MAX_LINE_COUNT = 2
+
+    workdir = video_path.parent / f".vad_work_{video_path.stem}"
+    workdir.mkdir(exist_ok=True)
+    audio_path = workdir / "audio.wav"
+
+    try:
+        if log_callback:
+            log_callback("Extracting audio...")
+        subprocess.run(
+            [
+                "ffmpeg", "-y",
+                "-i", str(video_path),
+                "-ac", "1",
+                "-ar", str(SAMPLE_RATE),
+                "-vn",
+                str(audio_path),
+            ],
+            check=True,
+            capture_output=True,
+        )
+
+        if log_callback:
+            log_callback("Loading Silero VAD...")
+        vad_model, utils = torch.hub.load(
+            repo_or_dir="snakers4/silero-vad",
+            model="silero_vad",
+            trust_repo=True,
+        )
+        get_speech_timestamps, _, read_audio_fn, _, _ = utils
+        wav = read_audio_fn(str(audio_path), sampling_rate=SAMPLE_RATE)
+        speech_timestamps = get_speech_timestamps(wav, vad_model, sampling_rate=SAMPLE_RATE)
+
+        if not speech_timestamps:
+            if log_callback:
+                log_callback("No speech segments detected.")
+            return False
+
+        segments_raw = [
+            (ts["start"] / SAMPLE_RATE, ts["end"] / SAMPLE_RATE)
+            for ts in speech_timestamps
+        ]
+
+        merged = []
+        for start, end in segments_raw:
+            if not merged:
+                merged.append([start, end])
+                continue
+            prev_start, prev_end = merged[-1]
+            if start - prev_end <= MIN_SILENCE_GAP and (end - prev_start) <= MAX_SEGMENT_LEN:
+                merged[-1][1] = end
+            else:
+                merged.append([start, end])
+
+        segments = []
+        for start, end in merged:
+            start = max(0, start - PADDING)
+            end += PADDING
+            if end - start >= MIN_SEGMENT_LEN:
+                segments.append((start, end))
+
+        total = len(segments)
+        if log_callback:
+            log_callback(f"Detected {total} speech segments. Transcribing...")
+
+        all_subs = pysrt.SubRipFile()
+
+        for i, (start, end) in enumerate(segments):
+            if progress_callback:
+                progress_callback(i + 1, total, f"seg_{i + 1}")
+            if log_callback:
+                log_callback(f"Transcribing segment {i + 1}/{total}...")
+
+            seg_wav = workdir / f"seg_{i:04d}.wav"
+            seg_srt = workdir / f"seg_{i:04d}.srt"
+            duration = end - start
+
+            subprocess.run(
+                [
+                    "ffmpeg", "-y",
+                    "-ss", str(start),
+                    "-t", str(duration),
+                    "-i", str(audio_path),
+                    "-ac", "1", "-ar", str(SAMPLE_RATE),
+                    str(seg_wav),
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=True,
+            )
+
+            whisper_cmd = [
+                "whisper",
+                str(seg_wav),
+                "--model", model,
+                "--output_format", "srt",
+                "--output_dir", str(workdir),
+                "--fp16", "False",
+                "--word_timestamps", "True",
+                "--max_line_width", str(MAX_LINE_WIDTH),
+                "--max_line_count", str(MAX_LINE_COUNT),
+            ]
+            if language_code != "auto":
+                whisper_cmd += ["--language", language_code]
+
+            result = subprocess.run(whisper_cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                if log_callback:
+                    log_callback(f"Whisper error for segment {i + 1}: {result.stderr or result.stdout}")
+                continue
+
+            if not seg_srt.exists():
+                continue
+
+            subs = pysrt.open(seg_srt)
+            offset = Decimal(str(start))
+            for sub in subs:
+                sub.start.seconds = float(Decimal(sub.start.seconds) + offset)
+                sub.end.seconds = float(Decimal(sub.end.seconds) + offset)
+                all_subs.append(sub)
+
+        all_subs.clean_indexes()
+        output_srt = video_path.with_suffix(".srt")
+        all_subs.save(output_srt, encoding="utf-8")
+
+        if log_callback:
+            log_callback(f"Done → {output_srt.name}")
+        return True
+
+    except subprocess.CalledProcessError as e:
+        if log_callback:
+            log_callback(f"FFmpeg/Whisper error: {e}")
+        return False
+    except Exception as e:
+        if log_callback:
+            log_callback(f"Error during VAD transcription: {e}")
+            log_callback(traceback.format_exc())
+        return False
+    finally:
+        if workdir.exists():
+            try:
+                shutil.rmtree(workdir)
+            except OSError:
+                pass
+
+
 def adjust_srt_timestamps(srt_path: Path, offset_seconds: int) -> bool:
     """Adjust all timestamps in an SRT file by adding an offset.
     
@@ -2004,164 +2194,6 @@ def adjust_srt_timestamps(srt_path: Path, offset_seconds: int) -> bool:
         return True
     except Exception as e:
         print(f"Error adjusting SRT timestamps: {e}")
-        return False
-
-
-def transcribe_video_time_range(
-    video_path: Path, 
-    start_seconds: int, 
-    end_seconds: int,
-    language_code: str,
-    model: str,
-    whisper_options: Dict = None,
-    output_format: str = "srt",
-    adjust_timestamps: bool = True,
-    progress_callback=None, 
-    log_callback=None
-) -> bool:
-    """Transcribe a specific time range of a video using FFmpeg + Whisper.
-    
-    Args:
-        video_path: Path to the video file
-        start_seconds: Start time in seconds
-        end_seconds: End time in seconds
-        language_code: Language code for transcription
-        model: Whisper model to use
-        whisper_options: Dictionary of whisper options
-        output_format: Whisper output format (srt, vtt, txt, tsv, json, all)
-        adjust_timestamps: If True, adjust SRT timestamps to match original video
-        progress_callback: Callback for progress updates
-        log_callback: Callback for logging
-    
-    Returns:
-        True if successful, False otherwise
-    """
-    if not video_path.exists():
-        if log_callback:
-            log_callback(f"Error: Video file not found: {video_path}")
-        return False
-    
-    try:
-        duration = end_seconds - start_seconds
-        
-        if log_callback:
-            log_callback(f"Extracting time range: {start_seconds}s to {end_seconds}s ({duration}s duration)")
-        
-        # Create temporary audio file for the time range
-        video_dir = video_path.parent
-        temp_audio = video_dir / f"{video_path.stem}_temp_range.wav"
-        
-        # Convert seconds to HH:MM:SS format for FFmpeg
-        def seconds_to_hhmmss(seconds):
-            hours = seconds // 3600
-            minutes = (seconds % 3600) // 60
-            secs = seconds % 60
-            return f"{hours:02d}:{minutes:02d}:{secs:02d}"
-        
-        start_str = seconds_to_hhmmss(start_seconds)
-        end_str = seconds_to_hhmmss(end_seconds)
-        
-        # Extract audio segment with FFmpeg
-        if log_callback:
-            log_callback("Extracting audio segment...")
-        
-        ffmpeg_cmd = [
-            "ffmpeg", "-ss", start_str, "-to", end_str, "-i", str(video_path),
-            "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le",
-            "-af", "dynaudnorm", str(temp_audio),
-            "-loglevel", "warning", "-hide_banner", "-y"
-        ]
-        
-        result = subprocess.run(ffmpeg_cmd, capture_output=True, text=True)
-        
-        if result.returncode != 0:
-            if log_callback:
-                log_callback(f"FFmpeg error: {result.stderr}")
-            return False
-        
-        if not temp_audio.exists():
-            if log_callback:
-                log_callback("Error: Temporary audio file was not created")
-            return False
-        
-        # Transcribe the audio segment using whisper
-        if log_callback:
-            log_callback("Transcribing audio segment with Whisper...")
-        
-        # Get the whisper_auto.sh script path
-        script_path = Path(__file__).parent / "whisper_auto.sh"
-        
-        if not script_path.exists():
-            if log_callback:
-                log_callback(f"Error: whisper_auto.sh not found at {script_path}")
-            # Clean up temp file
-            if temp_audio.exists():
-                temp_audio.unlink()
-            return False
-        
-        # Prepare environment variables - pass user-typed extra arguments if provided
-        env = os.environ.copy()
-        if whisper_options and "extra_args_parsed" in whisper_options:
-            extra_args = whisper_options.get("extra_args_parsed", "")
-            if extra_args:
-                env["WHISPER_EXTRA_ARGS"] = extra_args
-        
-        # Use whisper_auto.sh script (same as regular transcription)
-        result = subprocess.run(
-            ["bash", str(script_path), str(temp_audio), language_code, model, output_format],
-            capture_output=True,
-            text=True,
-            env=env
-        )
-        
-        if log_callback and result.stdout:
-            log_callback(result.stdout)
-        if log_callback and result.stderr:
-            log_callback(result.stderr)
-        
-        # Find the generated SRT file
-        temp_srt = video_dir / f"{temp_audio.stem}.srt"
-        final_srt = video_dir / f"{video_path.stem}_range_{start_seconds}_{end_seconds}.srt"
-        
-        if temp_srt.exists():
-            # Adjust timestamps if requested
-            if adjust_timestamps:
-                if log_callback:
-                    log_callback(f"Adjusting timestamps by +{start_seconds}s...")
-                adjust_srt_timestamps(temp_srt, start_seconds)
-            
-            # Rename to final name
-            if final_srt.exists():
-                # Add number suffix if file exists
-                n = 1
-                while True:
-                    numbered_srt = video_dir / f"{video_path.stem}_range_{start_seconds}_{end_seconds}_{n}.srt"
-                    if not numbered_srt.exists():
-                        final_srt = numbered_srt
-                        break
-                    n += 1
-            
-            temp_srt.rename(final_srt)
-            
-            # Clean up temporary audio file
-            if temp_audio.exists():
-                temp_audio.unlink()
-            
-            if log_callback:
-                log_callback(f"✓ Time range transcription complete: {final_srt.name}")
-            return True
-        else:
-            if log_callback:
-                log_callback("Error: SRT file was not generated")
-            # Clean up temporary audio file
-            if temp_audio.exists():
-                temp_audio.unlink()
-            return False
-        
-    except Exception as e:
-        if log_callback:
-            log_callback(f"Error during time range transcription: {e}")
-            log_callback(f"Traceback: {traceback.format_exc()}")
         return False
 
 
@@ -2906,20 +2938,21 @@ class AboutDialog(QDialog):
     
     def get_about_content(self) -> str:
         """Generate About content as HTML."""
-        return """
+        version = __version__
+        return f"""
         <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; font-size: 13pt; line-height: 1.6; }
-        .app-name { font-size: 18pt; font-weight: 600; color: #b42075; margin-bottom: 4px; }
-        .version { font-size: 13pt; color: #666; margin-bottom: 16px; }
-        .creator { font-size: 13pt; color: #333; margin-bottom: 20px; }
-        .description { font-size: 13pt; color: #333; margin-bottom: 24px; line-height: 1.7; }
-        .footer { font-size: 12pt; color: #666; font-style: italic; margin-top: 24px; }
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; font-size: 13pt; line-height: 1.6; }}
+        .app-name {{ font-size: 18pt; font-weight: 600; color: #b42075; margin-bottom: 4px; }}
+        .version {{ font-size: 13pt; color: #666; margin-bottom: 16px; }}
+        .creator {{ font-size: 13pt; color: #333; margin-bottom: 20px; }}
+        .description {{ font-size: 13pt; color: #333; margin-bottom: 24px; line-height: 1.7; }}
+        .footer {{ font-size: 12pt; color: #666; font-style: italic; margin-top: 24px; }}
         </style>
         <div style="padding: 24px;">
         <div class="app-name">Video Processing Studio</div>
-        
-        <div class="version">Version 9.2.2</div>
-        
+
+        <div class="version">Version {version}</div>
+
         <div class="creator">
         <span style="color: #df4300; font-weight: 600;">Created by:</span> SLAPPEPOLSEN
         </div>
@@ -3185,199 +3218,6 @@ class WhisperModelDialog(QDialog):
 
 
 # ============================================================================
-# Time Range Transcription Dialog
-# ============================================================================
-
-class TimeRangeTranscriptionDialog(QDialog):
-    """Dialog for transcribing a specific time range of a video."""
-    
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Transcribe Time Range")
-        self.setMinimumWidth(600)
-        
-        self.video_path = None
-        
-        layout = QVBoxLayout()
-        form_layout = QFormLayout()
-        
-        # Info label
-        info_label = QLabel(
-            "Transcribe only a specific portion of a video/audio file. "
-            "This is useful for correcting missing sections or processing specific segments."
-        )
-        info_label.setWordWrap(True)
-        info_label.setStyleSheet("color: #666; margin-bottom: 10px;")
-        layout.addWidget(info_label)
-        
-        # File selection
-        file_layout = QHBoxLayout()
-        self.file_input = QLineEdit()
-        self.file_input.setReadOnly(True)
-        self.file_input.setPlaceholderText("No file selected")
-        browse_btn = QPushButton("Browse...")
-        browse_btn.clicked.connect(self.browse_file)
-        file_layout.addWidget(self.file_input)
-        file_layout.addWidget(browse_btn)
-        form_layout.addRow("Video/Audio File:", file_layout)
-        
-        # Language selection
-        self.language_combo = QComboBox()
-        languages = [
-            ("Auto-detect", "auto"),
-            ("English (English)", "en"),
-            ("French (Français)", "fr"),
-            ("Spanish (Español)", "es"),
-            ("Catalan (Català)", "ca"),
-            ("German (Deutsch)", "de"),
-            ("Italian (Italiano)", "it"),
-            ("Portuguese (Português)", "pt"),
-            ("Dutch (Nederlands)", "nl"),
-        ]
-        for name, code in languages:
-            self.language_combo.addItem(name, code)
-        default_index = self.language_combo.findData("en")
-        if default_index >= 0:
-            self.language_combo.setCurrentIndex(default_index)
-        form_layout.addRow("Language:", self.language_combo)
-        
-        # Start time
-        self.start_time = QTimeEdit()
-        self.start_time.setDisplayFormat("HH:mm:ss")
-        self.start_time.setTime(QTime(0, 0, 0))
-        self.start_time.timeChanged.connect(self.update_preview)
-        form_layout.addRow("Start Time (HH:MM:SS):", self.start_time)
-        
-        # End time
-        self.end_time = QTimeEdit()
-        self.end_time.setDisplayFormat("HH:mm:ss")
-        self.end_time.setTime(QTime(0, 1, 0))  # Default 1 minute
-        self.end_time.timeChanged.connect(self.update_preview)
-        form_layout.addRow("End Time (HH:MM:SS):", self.end_time)
-        
-        # Preview label
-        self.preview_label = QLabel("")
-        self.preview_label.setStyleSheet("color: #0066cc; font-weight: bold;")
-        form_layout.addRow("", self.preview_label)
-        
-        # Adjust timestamps checkbox
-        self.adjust_timestamps_checkbox = QCheckBox(
-            "Adjust timestamps to match original video timing"
-        )
-        self.adjust_timestamps_checkbox.setChecked(True)
-        self.adjust_timestamps_checkbox.setToolTip(
-            "When enabled, the SRT timestamps will be offset to match the original video. "
-            "For example, if you transcribe from 00:01:30 onwards, the first subtitle will "
-            "start at 00:01:30 instead of 00:00:00."
-        )
-        help_label = QLabel(
-            "When enabled, subtitle timestamps will align with the original video position. "
-            "Disable this if you want timestamps to start at 00:00:00."
-        )
-        help_label.setWordWrap(True)
-        help_label.setStyleSheet("color: #666; font-size: 10px;")
-        checkbox_layout = QVBoxLayout()
-        checkbox_layout.addWidget(self.adjust_timestamps_checkbox)
-        checkbox_layout.addWidget(help_label)
-        form_layout.addRow("", checkbox_layout)
-        
-        layout.addLayout(form_layout)
-        
-        # Buttons
-        button_layout = QHBoxLayout()
-        button_layout.addStretch()
-        self.ok_btn = QPushButton("Start Transcription")
-        self.ok_btn.clicked.connect(self.validate_and_accept)
-        self.ok_btn.setEnabled(False)  # Disabled until file is selected
-        cancel_btn = QPushButton("Cancel")
-        cancel_btn.clicked.connect(self.reject)
-        button_layout.addWidget(self.ok_btn)
-        button_layout.addWidget(cancel_btn)
-        layout.addLayout(button_layout)
-        
-        self.setLayout(layout)
-        self.update_preview()
-    
-    def browse_file(self):
-        """Browse for video/audio file."""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "Select Video or Audio File",
-            str(get_downloads_dir()),
-            "Media Files (*.mkv *.mp4 *.mov *.avi *.mp3 *.wav *.m4a);;All Files (*)"
-        )
-        if file_path:
-            self.video_path = Path(file_path)
-            self.file_input.setText(str(self.video_path))
-            self.ok_btn.setEnabled(True)
-            self.update_preview()
-    
-    def update_preview(self):
-        """Update the preview label showing duration."""
-        start_seconds = self.time_to_seconds(self.start_time.time())
-        end_seconds = self.time_to_seconds(self.end_time.time())
-        
-        if end_seconds > start_seconds:
-            duration_seconds = end_seconds - start_seconds
-            duration_str = self.seconds_to_time_str(duration_seconds)
-            start_str = self.start_time.time().toString("HH:mm:ss")
-            end_str = self.end_time.time().toString("HH:mm:ss")
-            self.preview_label.setText(
-                f"Will transcribe {duration_str} of audio ({start_str} → {end_str})"
-            )
-            self.preview_label.setStyleSheet("color: #0066cc; font-weight: bold;")
-        else:
-            self.preview_label.setText("⚠ End time must be after start time")
-            self.preview_label.setStyleSheet("color: #cc0000; font-weight: bold;")
-    
-    def time_to_seconds(self, qtime: QTime) -> int:
-        """Convert QTime to total seconds."""
-        return qtime.hour() * 3600 + qtime.minute() * 60 + qtime.second()
-    
-    def seconds_to_time_str(self, seconds: int) -> str:
-        """Convert seconds to readable time string."""
-        hours = seconds // 3600
-        minutes = (seconds % 3600) // 60
-        secs = seconds % 60
-        if hours > 0:
-            return f"{hours:02d}:{minutes:02d}:{secs:02d}"
-        else:
-            return f"{minutes:02d}:{secs:02d}"
-    
-    def validate_and_accept(self):
-        """Validate inputs before accepting."""
-        if not self.video_path:
-            QMessageBox.warning(self, "No File", "Please select a video or audio file.")
-            return
-        
-        start_seconds = self.time_to_seconds(self.start_time.time())
-        end_seconds = self.time_to_seconds(self.end_time.time())
-        
-        if end_seconds <= start_seconds:
-            QMessageBox.warning(
-                self, "Invalid Time Range",
-                "End time must be after start time."
-            )
-            return
-        
-        self.accept()
-    
-    def get_parameters(self) -> Dict:
-        """Get the transcription parameters."""
-        start_seconds = self.time_to_seconds(self.start_time.time())
-        end_seconds = self.time_to_seconds(self.end_time.time())
-        
-        return {
-            "video_path": self.video_path,
-            "language_code": self.language_combo.currentData(),
-            "start_time": start_seconds,
-            "end_time": end_seconds,
-            "start_time_str": self.start_time.time().toString("HH:mm:ss"),
-            "end_time_str": self.end_time.time().toString("HH:mm:ss"),
-            "adjust_timestamps": self.adjust_timestamps_checkbox.isChecked()
-        }
-
-
-# ============================================================================
 # Settings Dialog
 # ============================================================================
 
@@ -3391,9 +3231,18 @@ class SettingsDialog(QDialog):
         
         self.config = load_config()
         
-        layout = QFormLayout()
+        main_layout = QVBoxLayout()
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        content = QWidget()
+        content_layout = QVBoxLayout()
+        content_layout.setSpacing(16)
         
-        # API Key Section
+        # --- API Keys ---
+        api_group = QGroupBox("API Keys")
+        api_group.setStyleSheet("QGroupBox { font-weight: bold; }")
+        api_form = QFormLayout()
         api_key_info = QLabel(
             'You can set up your API key safely by setting the GEMINI_API_KEY environment variable. '
             '<a href="https://aistudio.google.com/app/apikey">Get your API key here</a> and follow the instructions '
@@ -3402,31 +3251,46 @@ class SettingsDialog(QDialog):
         api_key_info.setOpenExternalLinks(True)
         api_key_info.setWordWrap(True)
         api_key_info.setStyleSheet("color: #666;")
-        layout.addRow("", api_key_info)
-        
-        # Legacy API key input (optional, for backward compatibility)
+        api_form.addRow("", api_key_info)
         self.api_key_input = QLineEdit()
         self.api_key_input.setText(self.config.get("api_key", ""))
         self.api_key_input.setEchoMode(QLineEdit.Password)
         self.api_key_input.setPlaceholderText("Optional: Legacy API key input")
-        legacy_label = QLabel("API Key (Legacy):")
-        layout.addRow(legacy_label, self.api_key_input)
-        
-        # Second API key input (optional, for multi-key translation)
+        api_form.addRow("API Key (Legacy):", self.api_key_input)
         self.api_key2_input = QLineEdit()
         self.api_key2_input.setText(self.config.get("api_key2", ""))
         self.api_key2_input.setEchoMode(QLineEdit.Password)
         self.api_key2_input.setPlaceholderText("Optional: Second API key for translation")
-        api_key2_label = QLabel("API Key 2 (Optional):")
-        layout.addRow(api_key2_label, self.api_key2_input)
+        api_form.addRow("API Key 2 (Optional):", self.api_key2_input)
+        api_group.setLayout(api_form)
+        content_layout.addWidget(api_group)
         
-        # Use watermarks checkbox
+        # --- FFmpeg (optional path for older version) ---
+        ffmpeg_group = QGroupBox("FFmpeg")
+        ffmpeg_group.setStyleSheet("QGroupBox { font-weight: bold; }")
+        ffmpeg_form = QFormLayout()
+        ffmpeg_help = QLabel(
+            "Leave empty to use FFmpeg from PATH. Set a path (e.g. /opt/homebrew/opt/ffmpeg@6/bin/ffmpeg) "
+            "to use a specific version if FFmpeg 7.x gives filter errors with burn-in subtitles."
+        )
+        ffmpeg_help.setWordWrap(True)
+        ffmpeg_help.setStyleSheet("color: #666; font-size: 10px;")
+        ffmpeg_form.addRow("", ffmpeg_help)
+        self.ffmpeg_path_input = QLineEdit()
+        self.ffmpeg_path_input.setText(self.config.get("ffmpeg_path", ""))
+        self.ffmpeg_path_input.setPlaceholderText("e.g. /opt/homebrew/opt/ffmpeg@6/bin/ffmpeg")
+        ffmpeg_form.addRow("FFmpeg path (optional):", self.ffmpeg_path_input)
+        ffmpeg_group.setLayout(ffmpeg_form)
+        content_layout.addWidget(ffmpeg_group)
+
+        # --- Watermarks ---
+        watermark_group = QGroupBox("Watermarks")
+        watermark_group.setStyleSheet("QGroupBox { font-weight: bold; }")
+        wm_form = QFormLayout()
         self.use_watermarks_checkbox = QCheckBox("Use watermarks")
         self.use_watermarks_checkbox.setChecked(self.config.get("use_watermarks", True))
         self.use_watermarks_checkbox.stateChanged.connect(self.toggle_watermark_fields)
-        layout.addRow("", self.use_watermarks_checkbox)
-        
-        # Watermark 720p
+        wm_form.addRow("", self.use_watermarks_checkbox)
         self.watermark_720p_input = QLineEdit()
         self.watermark_720p_input.setText(self.config.get("watermark_720p", ""))
         self.wm720_browse = QPushButton("Browse...")
@@ -3434,9 +3298,7 @@ class SettingsDialog(QDialog):
         wm720_layout = QHBoxLayout()
         wm720_layout.addWidget(self.watermark_720p_input)
         wm720_layout.addWidget(self.wm720_browse)
-        layout.addRow("Watermark 720p:", wm720_layout)
-        
-        # Watermark 1080p
+        wm_form.addRow("Watermark 720p:", wm720_layout)
         self.watermark_1080p_input = QLineEdit()
         self.watermark_1080p_input.setText(self.config.get("watermark_1080p", ""))
         self.wm1080_browse = QPushButton("Browse...")
@@ -3444,21 +3306,21 @@ class SettingsDialog(QDialog):
         wm1080_layout = QHBoxLayout()
         wm1080_layout.addWidget(self.watermark_1080p_input)
         wm1080_layout.addWidget(self.wm1080_browse)
-        layout.addRow("Watermark 1080p:", wm1080_layout)
+        wm_form.addRow("Watermark 1080p:", wm1080_layout)
+        watermark_group.setLayout(wm_form)
+        content_layout.addWidget(watermark_group)
         
-        # Translation Settings
-        translation_section = QLabel("<b>Subtitle Translation Settings</b>")
-        layout.addRow("", translation_section)
-        
-        # Target language for translation
+        # --- Subtitle Translation ---
+        translation_group = QGroupBox("Subtitle Translation")
+        translation_group.setStyleSheet("QGroupBox { font-weight: bold; }")
+        trans_form = QFormLayout()
         translation_info = QLabel(
             "Select the target language for subtitle translation. "
             "Subtitles will be translated from their original language to your selected target."
         )
         translation_info.setWordWrap(True)
         translation_info.setStyleSheet("color: #666;")
-        layout.addRow("", translation_info)
-        
+        trans_form.addRow("", translation_info)
         self.translation_target_combo = QComboBox()
         for lang in ["English", "French", "Spanish", "Catalan", "German", "Italian", "Portuguese", "Dutch"]:
             self.translation_target_combo.addItem(lang)
@@ -3466,32 +3328,28 @@ class SettingsDialog(QDialog):
         target_index = self.translation_target_combo.findText(current_target)
         if target_index >= 0:
             self.translation_target_combo.setCurrentIndex(target_index)
-        layout.addRow("Translation Target:", self.translation_target_combo)
+        trans_form.addRow("Translation Target:", self.translation_target_combo)
+        translation_group.setLayout(trans_form)
+        content_layout.addWidget(translation_group)
         
-        # ISO 639 suffix checkbox
-        self.iso639_checkbox = QCheckBox("Use ISO 639 language suffixes (.eng.srt, .fra.srt)")
-        self.iso639_checkbox.setChecked(self.config.get("use_iso639_suffixes", False))
-        iso639_help = QLabel(
-            "When enabled, translated subtitles will include language codes in filenames. "
-            "This allows VLC and Jellyfin to automatically detect and select subtitles."
-        )
-        iso639_help.setWordWrap(True)
-        iso639_help.setStyleSheet("color: #666; font-size: 10px;")
-        iso639_layout = QVBoxLayout()
-        iso639_layout.addWidget(self.iso639_checkbox)
-        iso639_layout.addWidget(iso639_help)
-        layout.addRow("", iso639_layout)
-        
-        # Lesbian Flag theme toggle (joke feature - doesn't actually turn off)
-        self.lesbian_flag_checkbox = QCheckBox("Toggle Lesbian Flag theme OFF")
-        self.lesbian_flag_checkbox.setChecked(False)  # Always unchecked (meaning theme is ON)
+        # --- Appearance ---
+        appearance_group = QGroupBox("Appearance")
+        appearance_group.setStyleSheet("QGroupBox { font-weight: bold; }")
+        app_form = QFormLayout()
+        self.lesbian_flag_checkbox = QCheckBox("Lesbian flag theme (always on)")
+        self.lesbian_flag_checkbox.setChecked(False)
+        self.lesbian_flag_checkbox.setToolTip("The app uses lesbian flag colors. Try checking this for a surprise.")
         self.lesbian_flag_checkbox.stateChanged.connect(self.toggle_lesbian_flag_theme)
-        layout.addRow("", self.lesbian_flag_checkbox)
+        app_form.addRow("", self.lesbian_flag_checkbox)
+        appearance_group.setLayout(app_form)
+        content_layout.addWidget(appearance_group)
         
-        # Set initial state
+        content.setLayout(content_layout)
+        scroll.setWidget(content)
+        main_layout.addWidget(scroll)
+        
         self.toggle_watermark_fields()
         
-        # Buttons
         button_layout = QHBoxLayout()
         save_btn = QPushButton("Save")
         save_btn.clicked.connect(self.save_settings)
@@ -3499,9 +3357,9 @@ class SettingsDialog(QDialog):
         cancel_btn.clicked.connect(self.reject)
         button_layout.addWidget(save_btn)
         button_layout.addWidget(cancel_btn)
-        layout.addRow(button_layout)
+        main_layout.addLayout(button_layout)
         
-        self.setLayout(layout)
+        self.setLayout(main_layout)
     
     def toggle_watermark_fields(self):
         """Enable/disable watermark input fields based on checkbox."""
@@ -3537,11 +3395,11 @@ class SettingsDialog(QDialog):
         """Save settings and close dialog."""
         self.config["api_key"] = self.api_key_input.text()
         self.config["api_key2"] = self.api_key2_input.text()
+        self.config["ffmpeg_path"] = self.ffmpeg_path_input.text().strip()
         self.config["watermark_720p"] = self.watermark_720p_input.text()
         self.config["watermark_1080p"] = self.watermark_1080p_input.text()
         self.config["use_watermarks"] = self.use_watermarks_checkbox.isChecked()
         self.config["translation_target_language"] = self.translation_target_combo.currentText()
-        self.config["use_iso639_suffixes"] = self.iso639_checkbox.isChecked()
         save_config(self.config)
         self.accept()
 
@@ -3951,13 +3809,12 @@ class VideoProcessingApp(QMainWindow):
         # Save model when changed
         self.transcribe_model_combo.currentTextChanged.connect(self.save_whisper_model)
         model_info = QLabel("(Turbo recommended for best accuracy/speed, ~1.5 GB)")
-        model_info.setStyleSheet("color: #666; font-size: 10px;")
+        model_info.setStyleSheet("color: #666; font-size: 12px;")
         model_row.addWidget(model_label, 0)
         model_row.addWidget(self.transcribe_model_combo, 1)
         model_row.addWidget(model_info, 1)
         model_row.addStretch()
         file_layout.addLayout(model_row)
-        
         file_group.setLayout(file_layout)
         layout.addWidget(file_group)
         
@@ -3991,16 +3848,46 @@ class VideoProcessingApp(QMainWindow):
         """)
         self.transcribe_main_btn.clicked.connect(self.transcribe_from_tab)
         
-        time_range_btn = QPushButton("Transcribe Time Range")
-        time_range_btn.clicked.connect(self.transcribe_time_range)
+        transcribe_long_btn = QPushButton("Transcribe longer video")
+        transcribe_long_btn.setToolTip(
+            "Use this for files over ~5 minutes. Splits audio into short segments via voice detection "
+            "(Silero VAD), then transcribes each with Whisper. Prevents hallucination caused by long "
+            "silences or extended audio. Takes roughly 1–2× the file duration on CPU."
+        )
+        transcribe_long_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #c46ea1;
+                color: white;
+                border: none;
+                border-radius: 5px;
+                padding: 4px 12px;
+                font-weight: bold;
+                min-height: 18px;
+            }
+            QPushButton:hover {
+                background-color: #b85d90;
+            }
+            QPushButton:pressed {
+                background-color: #a04d80;
+            }
+        """)
+        transcribe_long_btn.clicked.connect(self.transcribe_long_from_tab)
         
         advanced_btn = QPushButton("Advanced Options...")
         advanced_btn.clicked.connect(self.open_whisper_options)
         
         buttons_layout.addWidget(self.transcribe_main_btn, 2)
-        buttons_layout.addWidget(time_range_btn, 1)
+        buttons_layout.addWidget(transcribe_long_btn, 2)
         buttons_layout.addWidget(advanced_btn, 1)
         layout.addLayout(buttons_layout)
+        
+        transcribe_hint = QLabel(
+            "Use \"Transcribe\" for short clipsn. "
+            "Use \"Transcribe longer video\" for files over ~5 min (VAD-assisted, prevents hallucination (~1-2x real-time on CPU)."
+        )
+        transcribe_hint.setStyleSheet("color: #666; font-size: 12px;")
+        transcribe_hint.setWordWrap(True)
+        layout.addWidget(transcribe_hint)
         
         # Processing logs
         logs_label = QLabel("Processing Logs:")
@@ -4173,7 +4060,52 @@ class VideoProcessingApp(QMainWindow):
         else:
             self.transcribe_log("✗ Transcription failed. Check log for details.")
         self.worker = None
-    
+
+    def transcribe_long_from_tab(self):
+        """Transcribe long video using VAD + Whisper (for files over ~5 min)."""
+        file_path = self.transcribe_file_input.text()
+        if not file_path or file_path == "No file selected":
+            QMessageBox.warning(self, "No File", "Please select a video or audio file to transcribe.")
+            return
+        video_path = Path(file_path)
+        if not video_path.exists():
+            QMessageBox.warning(self, "File Not Found", f"The selected file does not exist:\n{file_path}")
+            return
+        try:
+            import torch  # noqa: F401
+            import pysrt  # noqa: F401
+        except ImportError as e:
+            QMessageBox.warning(
+                self,
+                "Missing Dependencies",
+                f"Transcribe (anti-hallucination) requires torch and pysrt.\n\nError: {e}\n\nInstall with:\npip install torch pysrt openai-whisper"
+            )
+            return
+        language_code = self.transcribe_language_combo.currentData()
+        model = self.transcribe_model_combo.currentText()
+        config = load_config()
+        whisper_model_asked = config.get("whisper_model_asked", False)
+        if not whisper_model_asked:
+            model_dialog = WhisperModelDialog(self, model)
+            if model_dialog.exec_() != QDialog.Accepted:
+                return
+            config["whisper_model_asked"] = True
+            config["whisper_has_existing_model"] = model_dialog.get_result()
+            save_config(config)
+        self.transcribe_log(f"Starting VAD-assisted transcription of: {video_path.name}")
+        lang_display = "Auto-detect" if language_code == "auto" else language_code
+        self.transcribe_log(f"Language: {lang_display}, Model: {model}")
+        self.transcribe_progress_bar.setVisible(True)
+        self.transcribe_stop_btn.setVisible(True)
+        self.transcribe_stop_btn.setEnabled(True)
+        self.transcribe_progress_bar.setRange(0, 0)
+        def tab_log_callback(msg):
+            self.transcribe_log(msg)
+        self.worker = ScriptWorker(transcribe_video_vad, video_path, language_code, model)
+        self.worker.log_message.connect(tab_log_callback)
+        self.worker.finished.connect(self.on_transcribe_finished)
+        self.worker.start()
+
     def create_remuxing_tab(self):
         """Create the dedicated remuxing tab."""
         tab = QWidget()
@@ -4205,6 +4137,9 @@ class VideoProcessingApp(QMainWindow):
         buttons_row = QHBoxLayout()
         add_files_btn = QPushButton("Add Files...")
         add_files_btn.clicked.connect(self.add_remux_files)
+        auto_match_btn = QPushButton("Auto-match subtitles")
+        auto_match_btn.setToolTip("Find SRT/VTT with same name as each video (same folder or Subtitles folder) and attach.")
+        auto_match_btn.clicked.connect(self.auto_match_remux_subtitles)
         remove_files_btn = QPushButton("Remove Selected")
         remove_files_btn.clicked.connect(self.remove_remux_files)
         clear_files_btn = QPushButton("Clear All")
@@ -4212,6 +4147,7 @@ class VideoProcessingApp(QMainWindow):
         media_info_btn = QPushButton("Media Info")
         media_info_btn.clicked.connect(self.show_media_info)
         buttons_row.addWidget(add_files_btn)
+        buttons_row.addWidget(auto_match_btn)
         buttons_row.addWidget(remove_files_btn)
         buttons_row.addWidget(clear_files_btn)
         buttons_row.addWidget(media_info_btn)
@@ -4292,7 +4228,7 @@ class VideoProcessingApp(QMainWindow):
         
         self.remux_log_output = QLineEdit()
         self.remux_log_output.setReadOnly(True)
-        self.remux_log_output.setPlaceholderText("Remuxing operations will show status here (errors only)")
+        self.remux_log_output.setPlaceholderText("Remuxing operations will show status here (success and errors)")
         self.remux_log_output.setStyleSheet("""
             QLineEdit {
                 background-color: #f5f5f5;
@@ -4334,8 +4270,39 @@ class VideoProcessingApp(QMainWindow):
                 }
                 # Add to tree widget
                 self.add_file_to_tree(video_path)
+                # Auto-match subtitle if same-name SRT/VTT exists (same dir or Subtitles dir)
+                self._attach_matching_subtitle_for_file(video_path)
         
         self.update_remux_file_count()
+    
+    def _attach_matching_subtitle_for_file(self, video_path: Path) -> bool:
+        """If a same-name SRT/VTT exists, attach it to this file's config and update tree. Returns True if attached."""
+        sub_path = get_matching_subtitle_for_remux(video_path)
+        if not sub_path or video_path not in self.remux_file_configs:
+            return False
+        self.remux_file_configs[video_path]['subtitle_file'] = sub_path
+        root = self.remux_files_tree.invisibleRootItem()
+        for i in range(root.childCount()):
+            file_item = root.child(i)
+            if file_item.data(0, 256) == str(video_path):
+                for j in range(file_item.childCount()):
+                    child = file_item.child(j)
+                    if child.data(0, 256) == "external_subtitle":
+                        child.setText(2, sub_path.name)
+                        break
+                return True
+        return False
+    
+    def auto_match_remux_subtitles(self):
+        """For each video in the list, find a same-name SRT/VTT (same folder or Subtitles folder) and attach it."""
+        matched = 0
+        for video_path in self.remux_selected_files:
+            if self._attach_matching_subtitle_for_file(video_path):
+                matched += 1
+        if matched > 0:
+            self.remux_log_output.setText(f"Auto-matched {matched} subtitle(s) (same name as video).")
+        else:
+            self.remux_log_output.setText("No matching subtitle files found (look for .srt/.vtt with same name in video folder or Subtitles folder).")
     
     def add_file_to_tree(self, video_path: Path):
         """Add a file to the tree widget with its tracks."""
@@ -4564,7 +4531,9 @@ class VideoProcessingApp(QMainWindow):
         )
         
         if success:
-            self.remux_log_output.setText(f"✓ Remuxed {video_path.name}")
+            base = video_path.stem
+            out_path = video_path.parent / f"{base}_remuxed.{output_format}"
+            self.remux_log_output.setText(f"✓ Saved: {out_path}")
         else:
             self.remux_log_output.setText(f"✗ Failed to remux {video_path.name}")
     
@@ -4919,7 +4888,7 @@ class VideoProcessingApp(QMainWindow):
     
     def init_ui(self):
         """Initialize the UI."""
-        self.setWindowTitle("SP workshop (WLW video processing, translation & subtitling hub)")
+        self.setWindowTitle(f"SP Workshop (WLW video processing, translation & subtitling hub) v{__version__}")
         self.setMinimumSize(900, 700)
         
         # Get screen geometry and maximize height
@@ -4950,7 +4919,7 @@ class VideoProcessingApp(QMainWindow):
         header_left_layout.addWidget(app_name_label)
         
         # Version number below title
-        version_label = QLabel('version 9.2.2 "Polyglot"')
+        version_label = QLabel(f'version {__version__} "{VERSION_CODENAME}"')
         version_label.setFont(QFont("Arial", 18))
         version_label.setStyleSheet("color: #999; font-style: italic;")
         header_left_layout.addWidget(version_label)
@@ -5240,7 +5209,8 @@ class VideoProcessingApp(QMainWindow):
             "translate_subtitles": "Translating subtitles",
             "process_video": "Processing videos",
             "remux_mkv_with_srt_batch": "Remuxing videos",
-            "transcribe_video": "Transcribing video"
+            "transcribe_video": "Transcribing video",
+            "transcribe_video_vad": "Transcribing video (long)",
         }
         self.current_operation = operation_names.get(func_name, "Processing")
         
@@ -5492,14 +5462,13 @@ class VideoProcessingApp(QMainWindow):
         
         # Get translation settings from config
         target_language = self.config.get("translation_target_language", "English")
-        use_iso639 = self.config.get("use_iso639_suffixes", False)
         api_key2 = self.config.get("api_key2", "")
         
         self.log(f"Starting subtitle translation for {len(file_paths)} file(s)...")
-        self.log(f"Target language: {target_language}, ISO 639 suffixes: {'enabled' if use_iso639 else 'disabled'}")
+        self.log(f"Target language: {target_language}")
         if api_key2:
             self.log("Using second API key for translation")
-        self.run_script(translate_subtitles, file_paths, api_key, target_language, use_iso639, api_key2)
+        self.run_script(translate_subtitles, file_paths, api_key, target_language, api_key2)
     
     def process_video(self, resolution: str):
         """Process video."""
@@ -5528,16 +5497,11 @@ class VideoProcessingApp(QMainWindow):
                 )
                 return
         
-        # Get ISO 639 settings from config
-        use_iso639 = self.config.get("use_iso639_suffixes", False)
-        target_language = self.config.get("translation_target_language", "English")
-        
         self.log(f"Starting video processing ({resolution}p) for {len(file_paths)} file(s)...")
-        if use_iso639:
-            self.log(f"ISO 639 mode enabled - looking for .{ISO_639_CODES.get(target_language, 'eng')}.srt files")
+        ffmpeg_path = self.config.get("ffmpeg_path", "").strip()
         self.run_script(
             process_video, file_paths, subtitles_dir, output_dir,
-            watermark_path, resolution, use_watermarks, use_iso639, target_language
+            watermark_path, resolution, use_watermarks, ffmpeg_path
         )
     
     def open_lossless_cut(self):
@@ -5630,97 +5594,6 @@ class VideoProcessingApp(QMainWindow):
             
             self.run_script(transcribe_with_params, video_path, language_code, model, whisper_options)
     
-    def transcribe_time_range(self):
-        """Transcribe a specific time range of a video."""
-        # Show time range transcription dialog
-        dialog = TimeRangeTranscriptionDialog(self)
-        if dialog.exec_() != QDialog.Accepted:
-            return  # User cancelled
-        
-        # Get parameters from dialog
-        params = dialog.get_parameters()
-        video_path = params["video_path"]
-        language_code = params["language_code"]
-        start_seconds = params["start_time"]
-        end_seconds = params["end_time"]
-        start_str = params["start_time_str"]
-        end_str = params["end_time_str"]
-        adjust_timestamps = params["adjust_timestamps"]
-        
-        # Get model from combo (saved to config automatically)
-        model = self.transcribe_model_combo.currentText()
-        
-        # Get whisper options and output format
-        config = load_config()
-        whisper_options = config.get("whisper_options", {})
-        
-        # Process extra_args: convert multiline to space-separated if needed
-        if "extra_args" in whisper_options and "extra_args_parsed" not in whisper_options:
-            extra_args_text = whisper_options.get("extra_args", "")
-            extra_args = " ".join(line.strip() for line in extra_args_text.split("\n") if line.strip())
-            whisper_options["extra_args_parsed"] = extra_args
-        
-        output_format = self.transcribe_format_combo.currentData()
-        
-        # Check if this is first time using transcription
-        whisper_model_asked = config.get("whisper_model_asked", False)
-        
-        if not whisper_model_asked:
-            # Ask user if they already have a model
-            model_dialog = WhisperModelDialog(self, model)
-            if model_dialog.exec_() != QDialog.Accepted:
-                return  # User cancelled
-            
-            has_existing_model = model_dialog.get_result()
-            
-            # Save preference to config
-            config["whisper_model_asked"] = True
-            config["whisper_has_existing_model"] = has_existing_model
-            save_config(config)
-            
-            if has_existing_model:
-                self.transcribe_log(f"Using existing Whisper model '{model}' from cache.")
-            else:
-                self.transcribe_log(f"Will download Whisper model '{model}' on first use.")
-        
-        self.transcribe_log(f"Starting time range transcription of: {video_path.name}")
-        self.transcribe_log(f"Time range: {start_str} → {end_str}")
-        lang_display = "Auto-detect" if language_code == "auto" else language_code
-        self.transcribe_log(f"Language: {lang_display}, Model: {model}, Format: {output_format}")
-        if adjust_timestamps:
-            self.transcribe_log("Timestamps will be adjusted to match original video timing")
-        else:
-            self.transcribe_log("Timestamps will start at 00:00:00")
-        
-        # Show progress bar and stop button
-        self.transcribe_progress_bar.setVisible(True)
-        self.transcribe_stop_btn.setVisible(True)
-        self.transcribe_stop_btn.setEnabled(True)
-        self.transcribe_progress_bar.setRange(0, 0)  # Indeterminate
-        
-        # Run time range transcription
-        def transcribe_range_with_params(
-            video_path, start_seconds, end_seconds, language_code, model, 
-            whisper_options, output_format, adjust_timestamps, progress_callback=None, log_callback=None
-        ):
-            return transcribe_video_time_range(
-                video_path, start_seconds, end_seconds, language_code, model,
-                whisper_options, output_format, adjust_timestamps, progress_callback, log_callback
-            )
-        
-        # Use custom callbacks for the tab
-        def tab_log_callback(msg):
-            self.transcribe_log(msg)
-        
-        self.worker = ScriptWorker(
-            transcribe_range_with_params, video_path, start_seconds, end_seconds, 
-            language_code, model, whisper_options, output_format, adjust_timestamps
-        )
-        self.worker.log_message.connect(tab_log_callback)
-        self.worker.finished.connect(self.on_transcribe_finished)
-        self.worker.start()
-
-
 # ============================================================================
 # Main Entry Point
 # ============================================================================
