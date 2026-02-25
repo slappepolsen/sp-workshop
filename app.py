@@ -4,7 +4,7 @@ Video Processing GUI Application
 A PyQt5 desktop app that provides a button-based interface for all video processing scripts.
 """
 
-__version__ = "10.0.1"
+__version__ = "10.1.0"
 VERSION_CODENAME = "Hallucination"
 
 import sys
@@ -668,6 +668,64 @@ def parse_episode_range(range_str: str) -> List[int]:
     return episodes
 
 
+def _sanitize_filename(name: str) -> str:
+    """Sanitize string for use as filename stem. Disallow / \\ : * ? " < > |"""
+    if not name:
+        return ""
+    invalid = r'/\:*?"<>|'
+    result = "".join(c if c not in invalid else "_" for c in name.strip())
+    return " ".join(result.split())  # collapse multiple spaces
+
+
+def build_save_names(
+    mode: str,
+    name: str,
+    use_s01e: bool,
+    season: int,
+    spec: str,
+    count: int,
+) -> List[str]:
+    """Build list of save-name stems for batch download.
+
+    Args:
+        mode: "episodes" or "movie"
+        name: Optional prefix (show/movie name), sanitized
+        use_s01e: For episodes, use S01E02 format
+        season: Season number when use_s01e
+        spec: Episode range (1, 1-5, 1,3,5-7) for episodes; ignored for movie
+        count: Number of commands (items)
+
+    Returns:
+        List of save-name stems, one per command
+    """
+    safe_name = _sanitize_filename(name)
+    prefix = f"{safe_name} " if safe_name else ""
+
+    if mode == "movie":
+        if count == 1:
+            return [safe_name or "1"]
+        return [f"{prefix}{i + 1}" if safe_name else str(i + 1) for i in range(count)]
+
+    # Episode(s) mode
+    if use_s01e:
+        episodes = parse_episode_range(spec)
+        if not episodes:
+            episodes = list(range(1, count + 1))
+        if len(episodes) < count:
+            last = episodes[-1]
+            episodes.extend(range(last + 1, last + 1 + (count - len(episodes))))
+        return [f"{prefix}S{season:02d}E{e:02d}" for e in episodes[:count]]
+
+    # Episode(s) + numbers
+    nums = parse_episode_range(spec)
+    if not nums:
+        nums = list(range(1, count + 1))
+    if len(nums) < count:
+        last = nums[-1]
+        nums.extend(range(last + 1, last + 1 + (count - len(nums))))
+    return [f"{prefix}{n}" if safe_name else str(n) for n in nums[:count]]
+
+
 def _add_headers_for_bare_url(url_or_cmd: str) -> str:
     """Add Referer/Origin headers for bare URLs. Many CDNs require these to avoid 403."""
     # Derive Referer/Origin from URL domain (internal mapping, not user-facing)
@@ -735,16 +793,29 @@ def _url_first_args(args: List[str]) -> List[str]:
 # Script Wrappers
 # ============================================================================
 
-def download_episodes(commands_text: str, output_dir: Path, episode_spec: str = "1", 
-                      progress_callback=None, log_callback=None) -> bool:
-    """Download episodes using commands from text.
-    
+def download_episodes(
+    commands_text: str,
+    output_dir: Path,
+    mode: str = "episodes",
+    name: str = "",
+    use_s01e: bool = False,
+    season: int = 1,
+    ep_spec: str = "1",
+    progress_callback=None,
+    log_callback=None,
+) -> bool:
+    """Download episodes or movies using commands from text.
+
     User pastes full N_m3u8DL-RE commands per instructions. App adds save options only.
-    
+
     Args:
         commands_text: Raw N_m3u8DL-RE commands, one per line
         output_dir: Directory to save downloaded files
-        episode_spec: Episode specification (e.g., "1", "1-5", "1,3,5-7")
+        mode: "episodes" or "movie"
+        name: Optional prefix (show/movie name)
+        use_s01e: For episodes, use S01E02 format
+        season: Season number when use_s01e
+        ep_spec: Episode range (1, 1-5, 1,3,5-7) for episodes
         progress_callback: Callback for progress updates
         log_callback: Callback for log messages
     """
@@ -752,7 +823,7 @@ def download_episodes(commands_text: str, output_dir: Path, episode_spec: str = 
         if log_callback:
             log_callback("Error: No commands provided.")
         return False
-    
+
     # Filter out HAR file lines (starting with @) and empty lines
     lines = []
     for line in commands_text.strip().split('\n'):
@@ -760,49 +831,42 @@ def download_episodes(commands_text: str, output_dir: Path, episode_spec: str = 
         # Skip empty lines, comments, and HAR file references
         if line and not line.startswith('#') and not line.startswith('@'):
             lines.append(line)
-    
+
     if not lines:
         if log_callback:
             log_callback("No commands found.")
         return False
-    
-    # Parse episode specification
-    episode_numbers = parse_episode_range(episode_spec)
-    if not episode_numbers:
-        episode_numbers = list(range(1, len(lines) + 1))  # Default to 1, 2, 3, ...
-    
-    # If fewer episode numbers than commands, extend sequentially
-    if len(episode_numbers) < len(lines):
-        last_num = episode_numbers[-1]
-        episode_numbers.extend(range(last_num + 1, last_num + 1 + (len(lines) - len(episode_numbers))))
-    
+
+    # Build save names from mode, name, spec
+    save_names = build_save_names(mode, name, use_s01e, season, ep_spec, len(lines))
+
     downloaded_files = []
     total = len(lines)
     if log_callback:
-        log_callback(f"Starting batch download for {total} episodes...")
-        if episode_numbers:
-            log_callback(f"Episode numbers: {', '.join(map(str, episode_numbers[:10]))}{' ...' if len(episode_numbers) > 10 else ''}")
+        log_callback(f"Starting batch download for {total} items...")
+        if save_names:
+            log_callback(f"Output names: {', '.join(save_names[:5])}{' ...' if len(save_names) > 5 else ''}")
     
     for i, base_command in enumerate(lines):
-        episode_number = episode_numbers[i] if i < len(episode_numbers) else (episode_numbers[-1] + i - len(episode_numbers) + 1)
-        
+        save_name = save_names[i] if i < len(save_names) else str(i + 1)
+
         # Skip empty lines or comments
         if not base_command or base_command.startswith('#'):
             continue
-        
+
         # Strip "N_m3u8DL-RE" prefix if present (user might paste full command)
         if base_command.lower().startswith('n_m3u8dl-re '):
             base_command = base_command[12:].strip()
-        
+
         # If line looks like a bare URL (no -H, no --key), add headers many CDNs require
         if ' -H ' not in base_command and ' --key ' not in base_command and base_command.lstrip('"').startswith('http'):
             base_command = _add_headers_for_bare_url(base_command)
             if log_callback:
                 log_callback("  (Bare URL detected – added Referer/Origin headers)")
-        
+
         if progress_callback:
-            progress_callback(i + 1, total, f"Episode {episode_number}")
-        
+            progress_callback(i + 1, total, save_name)
+
         # Parse user command with shlex so quoted URL and -H "..." are preserved (avoids shell mangling)
         try:
             user_args = shlex.split(base_command)
@@ -814,12 +878,12 @@ def download_episodes(commands_text: str, output_dir: Path, episode_spec: str = 
         user_args = _drop_n_m3u8_output_options(user_args)
         # N_m3u8DL-RE requires URL as first positional or it prints help and exits
         user_args = _url_first_args(user_args)
-        
+
         app_args = [
             "--tmp-dir", get_temp_dir(),
             "--del-after-done",
             "--check-segments-count", "False",
-            "--save-name", str(episode_number),
+            "--save-name", save_name,
             "--save-dir", str(output_dir),
             "--select-video", "best",
             "--select-audio", "all",
@@ -827,9 +891,9 @@ def download_episodes(commands_text: str, output_dir: Path, episode_spec: str = 
             "-M", "mkv",
         ]
         cmd = ["N_m3u8DL-RE"] + user_args + app_args
-        
+
         if log_callback:
-            log_callback(f"\n--- Task {i + 1}/{total}: Episode {episode_number} ---")
+            log_callback(f"\n--- Task {i + 1}/{total}: {save_name} ---")
             log_callback(f"Running: {base_command[:80]}...")
         
         # Use Popen with list (shell=False) so arguments are passed correctly to N_m3u8DL-RE
@@ -888,17 +952,19 @@ def download_episodes(commands_text: str, output_dir: Path, episode_spec: str = 
             returncode = process.wait()
             
             if returncode == 0:
-                candidates = list(output_dir.glob(f"{episode_number}.*"))
+                # Escape glob metacharacters * ? [ in save_name
+                pattern = save_name.replace("\\", "\\\\").replace("*", "[*]").replace("?", "[?]").replace("[", "[[]")
+                candidates = list(output_dir.glob(f"{pattern}.*"))
                 if candidates:
                     downloaded_files.append(candidates[0])
                     if log_callback:
                         log_callback(f"  ✓ Downloaded: {candidates[0].name}")
                 else:
                     if log_callback:
-                        log_callback(f"  ⚠ Warning: No output file found for episode {episode_number}")
+                        log_callback(f"  ⚠ Warning: No output file found for {save_name}")
             else:
                 if log_callback:
-                    log_callback(f"  ✗ Error downloading episode {episode_number} (exit code: {returncode})")
+                    log_callback(f"  ✗ Error downloading {save_name} (exit code: {returncode})")
                     # Show last few lines of output for debugging
                     if output_lines:
                         log_callback(f"    Last output lines:")
@@ -907,7 +973,7 @@ def download_episodes(commands_text: str, output_dir: Path, episode_spec: str = 
         
         except Exception as e:
             if log_callback:
-                log_callback(f"  ✗ Exception while downloading episode {episode_number}: {e}")
+                log_callback(f"  ✗ Exception while downloading {save_name}: {e}")
                 log_callback(f"    Traceback: {traceback.format_exc()}")
     
     if log_callback:
@@ -2837,8 +2903,8 @@ class FAQDialog(QDialog):
         <h3 style="color: #df4300;">Common Error Messages</h3>
         
         <p><b>"Error: No commands provided"</b><br>
-        This means you tried to download episodes but didn't paste any commands in the text box. 
-        Make sure you've copied your download commands and pasted them into the "Commands" area before clicking "Batch Download Episodes".
+        This means you tried to download but didn't paste any commands in the text box.
+        Make sure you've copied your download commands and pasted them into the "Commands" area before clicking "Batch download".
         Click <b>How to get commands</b> in the Download section for instructions.</p>
         
         <p><b>"Error: API key not set"</b><br>
@@ -5036,27 +5102,64 @@ class VideoProcessingApp(QMainWindow):
         download_group.setStyleSheet("QGroupBox { font-weight: bold; }")
         download_layout = QVBoxLayout()
         
-        # Episodes row and Instructions link
-        episodes_row = QHBoxLayout()
-        starting_ep_label = QLabel("Episodes:")
-        self.starting_episode_input = QLineEdit()
-        self.starting_episode_input.setText("1")
-        self.starting_episode_input.setMaximumWidth(120)
-        self.starting_episode_input.setPlaceholderText("1 or 1-5 or 1,3,5-7")
-        self.starting_episode_input.setToolTip("Episode numbers:\n• Single: 1\n• Range: 1-5\n• Mixed: 1,3,5-7,10")
-        
+        # Naming row: Mode, Name, S01E02, Season, Items
+        naming_row1 = QHBoxLayout()
+        naming_row1.addWidget(QLabel("Mode:"))
+        self.download_mode_combo = QComboBox()
+        self.download_mode_combo.addItems(["Episode(s)", "Movie"])
+        self.download_mode_combo.setMaximumWidth(100)
+        naming_row1.addWidget(self.download_mode_combo)
+
+        naming_row1.addWidget(QLabel("Name:"))
+        self.download_name_input = QLineEdit()
+        self.download_name_input.setPlaceholderText("e.g. Show Name (2025)")
+        self.download_name_input.setMinimumWidth(160)
+        naming_row1.addWidget(self.download_name_input)
+
+        self.download_s01e_check = QCheckBox("Use S01E02")
+        self.download_s01e_check.setChecked(False)
+        naming_row1.addWidget(self.download_s01e_check)
+
+        self.download_season_label = QLabel("Season:")
+        naming_row1.addWidget(self.download_season_label)
+        self.download_season_spin = QSpinBox()
+        self.download_season_spin.setMinimum(1)
+        self.download_season_spin.setMaximum(99)
+        self.download_season_spin.setValue(1)
+        self.download_season_spin.setMaximumWidth(50)
+        naming_row1.addWidget(self.download_season_spin)
+
+        self.download_items_label = QLabel("Items:")
+        naming_row1.addWidget(self.download_items_label)
+        self.download_items_input = QLineEdit()
+        self.download_items_input.setText("1")
+        self.download_items_input.setMaximumWidth(120)
+        self.download_items_input.setPlaceholderText("1 or 1-5 or 1,3,5-7")
+        self.download_items_input.setToolTip("Episode numbers or range:\n• Single: 1\n• Range: 1-5\n• Mixed: 1,3,5-7,10")
+        naming_row1.addWidget(self.download_items_input)
+
+        naming_row1.addStretch()
         instructions_btn = QPushButton("How to get commands")
         instructions_btn.setFlat(True)
         instructions_btn.setStyleSheet("color: #0066cc; text-decoration: underline;")
         instructions_btn.setCursor(Qt.PointingHandCursor)
         instructions_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(DOWNLOAD_INSTRUCTIONS_URL)))
         instructions_btn.setToolTip("Opens instructions in your browser")
-        
-        episodes_row.addWidget(starting_ep_label)
-        episodes_row.addWidget(self.starting_episode_input)
-        episodes_row.addStretch()
-        episodes_row.addWidget(instructions_btn)
-        download_layout.addLayout(episodes_row)
+        naming_row1.addWidget(instructions_btn)
+
+        def _update_naming_visibility():
+            is_episodes = self.download_mode_combo.currentText() == "Episode(s)"
+            self.download_s01e_check.setVisible(is_episodes)
+            show_season = is_episodes and self.download_s01e_check.isChecked()
+            self.download_season_label.setVisible(show_season)
+            self.download_season_spin.setVisible(show_season)
+            self.download_items_label.setVisible(is_episodes)
+            self.download_items_input.setVisible(is_episodes)
+        _update_naming_visibility()
+        self.download_mode_combo.currentTextChanged.connect(_update_naming_visibility)
+        self.download_s01e_check.toggled.connect(_update_naming_visibility)
+
+        download_layout.addLayout(naming_row1)
         
         download_label = QLabel("Commands (one per line, paste full command per instructions):")
         download_layout.addWidget(download_label)
@@ -5074,7 +5177,7 @@ class VideoProcessingApp(QMainWindow):
         download_buttons = QHBoxLayout()
         clear_btn = QPushButton("Clear")
         clear_btn.clicked.connect(lambda: self.commands_text.clear())
-        download_btn = QPushButton("Batch download episodes")
+        download_btn = QPushButton("Batch download")
         download_btn.clicked.connect(self.download_episodes)
         add_videos_btn = QPushButton("Add videos...")
         add_videos_btn.clicked.connect(self.add_videos)
@@ -5435,24 +5538,32 @@ class VideoProcessingApp(QMainWindow):
         self.stop_btn.setText("Stop")
     
     def download_episodes(self):
-        """Download episodes."""
+        """Download episodes or movies."""
         commands_text = self.commands_text.toPlainText()
         if not commands_text.strip():
             QMessageBox.warning(self, "Error", "Please paste commands in the text area.")
             return
-        
-        # Get episode specification from UI
-        episode_spec = self.starting_episode_input.text().strip() or "1"
-        
+
+        mode = "episodes" if self.download_mode_combo.currentText() == "Episode(s)" else "movie"
+        name = self.download_name_input.text().strip()
+        use_s01e = self.download_s01e_check.isChecked()
+        season = self.download_season_spin.value()
+        ep_spec = self.download_items_input.text().strip() or "1"
+
         output_dir = get_downloads_dir()
         self.log(f"Starting download to: {output_dir}")
-        self.log(f"Episodes: {episode_spec}")
-        
-        # Create a wrapper that adds detection after download
-        def download_with_detection(commands_text, output_dir, episode_spec, progress_callback=None, log_callback=None):
-            result = download_episodes(commands_text, output_dir, episode_spec, progress_callback, log_callback)
+        self.log(f"Mode: {mode}, Name: {name or '(none)'}, S01E02: {use_s01e}, Items: {ep_spec}")
+
+        def download_with_detection(
+            commands_text, output_dir, mode, name, use_s01e, season, ep_spec,
+            progress_callback=None, log_callback=None,
+        ):
+            result = download_episodes(
+                commands_text, output_dir,
+                mode=mode, name=name, use_s01e=use_s01e, season=season, ep_spec=ep_spec,
+                progress_callback=progress_callback, log_callback=log_callback,
+            )
             if result:
-                # Detect episode/scene for downloaded files
                 mkv_files = list(output_dir.glob("*.mkv"))
                 for mkv_file in mkv_files:
                     video_type, duration = detect_episode_or_scene(mkv_file)
@@ -5461,8 +5572,11 @@ class VideoProcessingApp(QMainWindow):
                         if log_callback:
                             log_callback(f"  {mkv_file.name}: {type_label} ({duration:.1f} min)")
             return result
-        
-        self.run_script(download_with_detection, commands_text, output_dir, episode_spec)
+
+        self.run_script(
+            download_with_detection,
+            commands_text, output_dir, mode, name, use_s01e, season, ep_spec,
+        )
     
     def add_videos(self):
         """Add videos manually."""

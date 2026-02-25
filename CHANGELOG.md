@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [10.1.0] - 2026-02-25
+
+### Added
+
+- Flexible download naming: Mode (Episode(s) | Movie), optional Name field, Use S01E02 checkbox with Season spinbox, Items field for episode numbers or ranges.
+- `build_save_names()` and `_sanitize_filename()` helpers for output filenames.
+
+### Changed
+
+- Batch downloader UI replaces Episodes spec with Mode, Name, S01E02, Season, and Items controls.
+- Button text "Batch download episodes" renamed to "Batch download".
+- `batchdownloader_guide.md` updated with naming options and examples.
+
 ## [10.0.1] - 2026-02-25
 
 ### Restored
