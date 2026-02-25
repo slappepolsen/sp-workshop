@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [10.2.0] - 2026-02-25
+
+### Added
+
+- Batch download debug log: full N_m3u8DL-RE output written to `_batch_download_debug_YYYYMMDD_HHMMSS.log` in the downloads folder.
+- Debug log path shown in GUI before batch starts.
+- `datetime` import and try/finally wrapper to ensure the debug file is closed after the batch loop.
+- Raw subprocess output (including progress bars) written to the debug file with flush after each line.
+- Task headers (`--- Task N/Total: Name ---`) written to the debug file for each item.
+
+### Changed
+
+- `batchdownloader_guide.md`: replaced Episodes spec with Mode (Episode(s) | Movie), optional Name, Use S01E02 with Season, and Items (e.g. `1`, `1-5`, `1,3,5-7`).
+- Added Naming Options section with examples for TV series, movies, and numeric-only naming.
+
 ## [10.1.0] - 2026-02-25
 
 ### Added

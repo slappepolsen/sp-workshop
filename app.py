@@ -19,6 +19,7 @@ import time
 import traceback
 import platform
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, List
 
@@ -846,136 +847,148 @@ def download_episodes(
         log_callback(f"Starting batch download for {total} items...")
         if save_names:
             log_callback(f"Output names: {', '.join(save_names[:5])}{' ...' if len(save_names) > 5 else ''}")
-    
-    for i, base_command in enumerate(lines):
-        save_name = save_names[i] if i < len(save_names) else str(i + 1)
 
-        # Skip empty lines or comments
-        if not base_command or base_command.startswith('#'):
-            continue
+    debug_log_path = output_dir / f"_batch_download_debug_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    debug_file = open(debug_log_path, 'w', encoding='utf-8')
+    if log_callback:
+        log_callback(f"Full debug log: {debug_log_path}")
 
-        # Strip "N_m3u8DL-RE" prefix if present (user might paste full command)
-        if base_command.lower().startswith('n_m3u8dl-re '):
-            base_command = base_command[12:].strip()
+    try:
+        for i, base_command in enumerate(lines):
+            save_name = save_names[i] if i < len(save_names) else str(i + 1)
 
-        # If line looks like a bare URL (no -H, no --key), add headers many CDNs require
-        if ' -H ' not in base_command and ' --key ' not in base_command and base_command.lstrip('"').startswith('http'):
-            base_command = _add_headers_for_bare_url(base_command)
+            # Skip empty lines or comments
+            if not base_command or base_command.startswith('#'):
+                continue
+
+            # Strip "N_m3u8DL-RE" prefix if present (user might paste full command)
+            if base_command.lower().startswith('n_m3u8dl-re '):
+                base_command = base_command[12:].strip()
+
+            # If line looks like a bare URL (no -H, no --key), add headers many CDNs require
+            if ' -H ' not in base_command and ' --key ' not in base_command and base_command.lstrip('"').startswith('http'):
+                base_command = _add_headers_for_bare_url(base_command)
+                if log_callback:
+                    log_callback("  (Bare URL detected – added Referer/Origin headers)")
+
+            if progress_callback:
+                progress_callback(i + 1, total, save_name)
+
+            # Parse user command with shlex so quoted URL and -H "..." are preserved (avoids shell mangling)
+            try:
+                user_args = shlex.split(base_command)
+            except ValueError as e:
+                if log_callback:
+                    log_callback(f"  ✗ Invalid quoting in command: {e}")
+                continue
+            # Drop user's output options so our --save-name/--save-dir/-M take effect
+            user_args = _drop_n_m3u8_output_options(user_args)
+            # N_m3u8DL-RE requires URL as first positional or it prints help and exits
+            user_args = _url_first_args(user_args)
+
+            app_args = [
+                "--tmp-dir", get_temp_dir(),
+                "--del-after-done",
+                "--check-segments-count", "False",
+                "--save-name", save_name,
+                "--save-dir", str(output_dir),
+                "--select-video", "best",
+                "--select-audio", "all",
+                "--select-subtitle", "all",
+                "-M", "mkv",
+            ]
+            cmd = ["N_m3u8DL-RE"] + user_args + app_args
+
             if log_callback:
-                log_callback("  (Bare URL detected – added Referer/Origin headers)")
+                log_callback(f"\n--- Task {i + 1}/{total}: {save_name} ---")
+                log_callback(f"Running: {base_command[:80]}...")
+            debug_file.write(f"\n--- Task {i + 1}/{total}: {save_name} ---\n")
+            debug_file.write(f"Running: {base_command[:80]}...\n")
+            debug_file.flush()
 
-        if progress_callback:
-            progress_callback(i + 1, total, save_name)
+            # Use Popen with list (shell=False) so arguments are passed correctly to N_m3u8DL-RE
+            try:
+                process = subprocess.Popen(
+                    cmd,
+                    shell=False,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,  # Combine stderr into stdout
+                    text=True,
+                    bufsize=1,
+                    universal_newlines=True
+                )
 
-        # Parse user command with shlex so quoted URL and -H "..." are preserved (avoids shell mangling)
-        try:
-            user_args = shlex.split(base_command)
-        except ValueError as e:
-            if log_callback:
-                log_callback(f"  ✗ Invalid quoting in command: {e}")
-            continue
-        # Drop user's output options so our --save-name/--save-dir/-M take effect
-        user_args = _drop_n_m3u8_output_options(user_args)
-        # N_m3u8DL-RE requires URL as first positional or it prints help and exits
-        user_args = _url_first_args(user_args)
+                # Stream output line by line
+                output_lines = []
+                last_logged_percent = -5  # Track last logged percentage to avoid spam
 
-        app_args = [
-            "--tmp-dir", get_temp_dir(),
-            "--del-after-done",
-            "--check-segments-count", "False",
-            "--save-name", save_name,
-            "--save-dir", str(output_dir),
-            "--select-video", "best",
-            "--select-audio", "all",
-            "--select-subtitle", "all",
-            "-M", "mkv",
-        ]
-        cmd = ["N_m3u8DL-RE"] + user_args + app_args
+                while True:
+                    line_output = process.stdout.readline()
+                    if not line_output:
+                        break
+                    debug_file.write(line_output)
+                    debug_file.flush()
+                    line_output = line_output.strip()
+                    if line_output:
+                        output_lines.append(line_output)
 
-        if log_callback:
-            log_callback(f"\n--- Task {i + 1}/{total}: {save_name} ---")
-            log_callback(f"Running: {base_command[:80]}...")
-        
-        # Use Popen with list (shell=False) so arguments are passed correctly to N_m3u8DL-RE
-        try:
-            process = subprocess.Popen(
-                cmd,
-                shell=False,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,  # Combine stderr into stdout
-                text=True,
-                bufsize=1,
-                universal_newlines=True
-            )
-            
-            # Stream output line by line
-            output_lines = []
-            last_logged_percent = -5  # Track last logged percentage to avoid spam
-            
-            while True:
-                line_output = process.stdout.readline()
-                if not line_output:
-                    break
-                
-                line_output = line_output.strip()
-                if line_output:
-                    output_lines.append(line_output)
-                    
-                    # Filter out progress bar spam (lines with ━ characters)
-                    is_progress_bar = '━' in line_output
-                    
-                    # Filter out file access warnings (normal concurrent download noise)
-                    is_file_access_warning = 'The process cannot access the file' in line_output
-                    
-                    # Only log important messages
-                    should_log = (
-                        not is_progress_bar and
-                        not is_file_access_warning and (
-                            'INFO' in line_output or
-                            'WARN' in line_output or
-                            'ERROR' in line_output or
-                            'Selected streams' in line_output or
-                            'Start downloading' in line_output or
-                            'Downloaded' in line_output or
-                            'Muxing' in line_output or
-                            'Done' in line_output
+                        # Filter out progress bar spam (lines with ━ characters)
+                        is_progress_bar = '━' in line_output
+
+                        # Filter out file access warnings (normal concurrent download noise)
+                        is_file_access_warning = 'The process cannot access the file' in line_output
+
+                        # Only log important messages
+                        should_log = (
+                            not is_progress_bar and
+                            not is_file_access_warning and (
+                                'INFO' in line_output or
+                                'WARN' in line_output or
+                                'ERROR' in line_output or
+                                'Selected streams' in line_output or
+                                'Start downloading' in line_output or
+                                'Downloaded' in line_output or
+                                'Muxing' in line_output or
+                                'Done' in line_output
+                            )
                         )
-                    )
-                    
-                    if should_log and log_callback:
-                        log_callback(f"  {line_output}")
-                    
-                    # Progress logging suppressed to avoid spam from multiple streams
-                    # (video, audio, subtitle each report 0-100% separately)
-            
-            # Wait for process to complete
-            returncode = process.wait()
-            
-            if returncode == 0:
-                # Escape glob metacharacters * ? [ in save_name
-                pattern = save_name.replace("\\", "\\\\").replace("*", "[*]").replace("?", "[?]").replace("[", "[[]")
-                candidates = list(output_dir.glob(f"{pattern}.*"))
-                if candidates:
-                    downloaded_files.append(candidates[0])
-                    if log_callback:
-                        log_callback(f"  ✓ Downloaded: {candidates[0].name}")
+
+                        if should_log and log_callback:
+                            log_callback(f"  {line_output}")
+
+                        # Progress logging suppressed to avoid spam from multiple streams
+                        # (video, audio, subtitle each report 0-100% separately)
+
+                # Wait for process to complete
+                returncode = process.wait()
+
+                if returncode == 0:
+                    # Escape glob metacharacters * ? [ in save_name
+                    pattern = save_name.replace("\\", "\\\\").replace("*", "[*]").replace("?", "[?]").replace("[", "[[]")
+                    candidates = list(output_dir.glob(f"{pattern}.*"))
+                    if candidates:
+                        downloaded_files.append(candidates[0])
+                        if log_callback:
+                            log_callback(f"  ✓ Downloaded: {candidates[0].name}")
+                    else:
+                        if log_callback:
+                            log_callback(f"  ⚠ Warning: No output file found for {save_name}")
                 else:
                     if log_callback:
-                        log_callback(f"  ⚠ Warning: No output file found for {save_name}")
-            else:
+                        log_callback(f"  ✗ Error downloading {save_name} (exit code: {returncode})")
+                        # Show last few lines of output for debugging
+                        if output_lines:
+                            log_callback(f"    Last output lines:")
+                            for err_line in output_lines[-5:]:
+                                log_callback(f"      {err_line}")
+
+            except Exception as e:
                 if log_callback:
-                    log_callback(f"  ✗ Error downloading {save_name} (exit code: {returncode})")
-                    # Show last few lines of output for debugging
-                    if output_lines:
-                        log_callback(f"    Last output lines:")
-                        for err_line in output_lines[-5:]:
-                            log_callback(f"      {err_line}")
-        
-        except Exception as e:
-            if log_callback:
-                log_callback(f"  ✗ Exception while downloading {save_name}: {e}")
-                log_callback(f"    Traceback: {traceback.format_exc()}")
-    
+                    log_callback(f"  ✗ Exception while downloading {save_name}: {e}")
+                    log_callback(f"    Traceback: {traceback.format_exc()}")
+    finally:
+        debug_file.close()
+
     if log_callback:
         log_callback(f"\nBatch download completed. Downloaded {len(downloaded_files)}/{total} files.")
     
