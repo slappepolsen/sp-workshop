@@ -4,7 +4,7 @@ Video Processing GUI Application
 A PyQt5 desktop app that provides a button-based interface for all video processing scripts.
 """
 
-__version__ = "10.0.0"
+__version__ = "10.0.1"
 VERSION_CODENAME = "Hallucination"
 
 import sys
