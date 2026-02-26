@@ -4,7 +4,7 @@ Video Processing GUI Application
 A PyQt5 desktop app that provides a button-based interface for all video processing scripts.
 """
 
-__version__ = "10.1.0"
+__version__ = "10.2.0"
 VERSION_CODENAME = "Hallucination"
 
 import sys
@@ -177,6 +177,7 @@ def load_config() -> Dict:
         "watermark_720p": str(Path.home() / "VideoProcessing" / "config" / "watermark_720p.png"),
         "watermark_1080p": str(Path.home() / "VideoProcessing" / "config" / "watermark_1080p.png"),
         "api_key": os.getenv("GST_API_KEY", ""),
+        "api_keys": [],  # List of API keys; migrated from api_key/api_key2 if empty
         "download_resolution": "1080",
         "ffmpeg_preset": "medium",
         "ffmpeg_path": "",
@@ -201,6 +202,12 @@ def load_config() -> Dict:
                 default_config.update(user_config)
         except Exception as e:
             print(f"Error loading config: {e}")
+    
+    # Migrate api_key/api_key2 to api_keys if api_keys is empty
+    api_keys = default_config.get("api_keys") or []
+    if not api_keys and (default_config.get("api_key") or default_config.get("api_key2")):
+        api_keys = [k for k in [default_config.get("api_key"), default_config.get("api_key2")] if k]
+        default_config["api_keys"] = api_keys
     
     return default_config
 
@@ -1152,185 +1159,201 @@ def clean_subtitles(subtitles_dir: Path, progress_callback=None, log_callback=No
     return True
 
 
-def translate_subtitles(selected_srt_files: List[Path], api_key: Optional[str] = None, 
-                       target_language: str = "English", use_iso639: bool = False,
-                       api_key2: Optional[str] = None,
+def _is_quota_limit_error(output_lines: List[str]) -> bool:
+    """Detect Gemini API quota/rate-limit errors from gst output."""
+    combined = " ".join(output_lines).lower()
+    patterns = ("429", "resource_exhausted", "quota", "rate limit", "exhausted", "too many requests")
+    return any(p in combined for p in patterns)
+
+
+def _get_key_pairs(env_key: Optional[str], api_keys: Optional[List[str]]) -> List[tuple]:
+    """Build (primary, secondary) key pairs for gst. gst uses GEMINI_API_KEY env + -k2."""
+    keys = list(api_keys) if api_keys else []
+    pairs = []
+    if env_key:
+        if keys:
+            pairs.append((env_key, keys[0]))
+            i = 1
+        else:
+            pairs.append((env_key, None))
+            i = 0
+    else:
+        i = 0
+    while i + 1 < len(keys):
+        pairs.append((keys[i], keys[i + 1]))
+        i += 2
+    if i < len(keys):
+        pairs.append((keys[i], None))
+    return pairs
+
+
+def translate_subtitles(selected_srt_files: List[Path], target_language: str = "English",
+                       use_iso639: bool = False, api_keys: Optional[List[str]] = None,
+                       api_key: Optional[str] = None, api_key2: Optional[str] = None,
                        progress_callback=None, log_callback=None) -> bool:
     """Translate selected subtitle files using gemini-srt-translator.
-    
+
+    Supports 6+ API keys: on quota-limit error, retries with the next key pair.
+
     Args:
         selected_srt_files: List of SRT files to translate
-        api_key: Optional API key (uses env var if available)
         target_language: Target language for translation (default: English)
         use_iso639: Whether to add ISO 639 language suffix to output filename
-        api_key2: Optional second API key for translation
+        api_keys: List of API keys (preferred). If None/empty, falls back to api_key/api_key2.
+        api_key, api_key2: Legacy params for backward compat
         progress_callback: Callback for progress updates
         log_callback: Callback for log messages
     """
-    # Check for API key in environment variables first (most secure)
     env_api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GST_API_KEY")
-    
-    # Use environment variable if available, otherwise fall back to provided api_key
-    final_api_key = env_api_key or api_key
-    
-    if not final_api_key:
+    resolved_keys = api_keys if api_keys else [k for k in [api_key, api_key2] if k]
+    key_pairs = _get_key_pairs(env_api_key, resolved_keys)
+    primary = (key_pairs[0][0] if key_pairs else None) or (resolved_keys[0] if resolved_keys else None)
+
+    if not primary:
         if log_callback:
             log_callback("Error: API key not set.")
             log_callback("Please set GEMINI_API_KEY or GST_API_KEY environment variable, or configure in Settings.")
         return False
-    
+
     if not selected_srt_files:
         if log_callback:
             log_callback("No SRT files selected.")
         return False
-    
+
     srt_files = [Path(f) for f in selected_srt_files if Path(f).suffix.lower() == ".srt" and not Path(f).name.endswith("_OG.srt")]
-    
     total = len(srt_files)
     success_count = 0
+
     for idx, srt_file in enumerate(srt_files, start=1):
         if progress_callback:
             progress_callback(idx, total, srt_file.name)
-        
+
         try:
-            # Rename original (in same directory as the SRT file)
-            # Check if the file has an ISO 639 language suffix (e.g., .spa in subtitle.spa.srt)
             iso_match = re.match(r'(.+)\.([a-z]{3})$', srt_file.stem)
             if iso_match:
-                # File has ISO suffix: subtitle.spa.srt → subtitle_OG.srt
                 base_name = iso_match.group(1)
                 og_file = srt_file.parent / f"{base_name}_OG.srt"
             else:
-                # No ISO suffix: subtitle.srt → subtitle_OG.srt
                 og_file = srt_file.parent / f"{srt_file.stem}_OG.srt"
-            
+
             if not og_file.exists():
                 srt_file.rename(og_file)
-            
+
             if log_callback:
                 log_callback(f"Translating: {srt_file.name}")
-            
-            # Find gst command
+
             gst_cmd = find_gst_command()
             if not gst_cmd:
                 if log_callback:
                     log_callback(f"  ✗ Failed: {srt_file.name}")
                     log_callback(f"    Error: gst command not found. Make sure gemini-srt-translator is installed.")
                 continue
-            
-            # Build command - NEVER use -k flag, always set environment variable
-            # (gst will automatically use GEMINI_API_KEY or GST_API_KEY if set)
-            base_cmd = ["translate", "-i", str(og_file), "-l", target_language, "-o", str(srt_file), "--skip-upgrade"]
-            
-            # Add second API key if provided
-            if api_key2:
-                base_cmd.extend(["-k2", api_key2])
-            
-            # Handle Python module format (e.g., "python3 -m gemini_srt_translator")
-            if " -m " in gst_cmd:
-                cmd_parts = gst_cmd.split() + base_cmd
-            else:
-                cmd_parts = [gst_cmd] + base_cmd
-            
-            # Prepare environment with API key set
-            # Copy current environment and add/override API key
-            env = os.environ.copy()
-            if final_api_key:
-                # Set GEMINI_API_KEY in the subprocess environment
-                env["GEMINI_API_KEY"] = final_api_key
-            
-            # Use Popen to stream output in real-time
-            process = subprocess.Popen(
-                cmd_parts,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,  # Combine stderr into stdout
-                stdin=subprocess.DEVNULL,  # Close stdin to prevent hanging on prompts
-                text=True,
-                bufsize=1,
-                universal_newlines=True,
-                env=env  # Pass environment with API key
-            )
-            
-            # Stream output line by line with cleaning
-            output_lines = []
-            last_progress_line = None
-            while True:
-                line_output = process.stdout.readline()
-                if not line_output:
-                    break
-                
-                # Clean the line
-                cleaned_line = clean_log_line(line_output)
-                
-                if cleaned_line:
-                    output_lines.append(line_output.strip())  # Keep original for error reporting
-                    
-                    # Only log if it's different from the last progress line (avoid duplicates)
-                    if cleaned_line != last_progress_line:
-                        if log_callback:
-                            log_callback(cleaned_line)
-                        last_progress_line = cleaned_line
-            
-            # Wait for process to complete
-            returncode = process.wait()
-            
-            # Clean up .progress files in the subtitle directory
-            progress_files = list(srt_file.parent.glob("*.progress"))
-            for progress_file in progress_files:
-                try:
-                    progress_file.unlink()
-                    if log_callback:
-                        log_callback(f"    Cleaned up: {progress_file.name}")
-                except Exception as e:
-                    if log_callback:
-                        log_callback(f"    Warning: Could not remove {progress_file.name}: {e}")
-            
-            # Verify translation completion
+
+            pair_index = 0
             translation_success = False
-            if returncode == 0 and srt_file.exists():
-                # Check if file has content (not empty)
-                try:
-                    file_size = srt_file.stat().st_size
-                    if file_size > 0:
-                        # Read a bit of the file to verify it's valid SRT content
-                        with open(srt_file, 'r', encoding='utf-8') as f:
-                            content_preview = f.read(100)
-                            if content_preview.strip():
-                                translation_success = True
-                except Exception:
-                    pass
-            
+            final_srt_file = srt_file
+
+            while pair_index < len(key_pairs):
+                primary_key, secondary_key = key_pairs[pair_index]
+                if not primary_key:
+                    pair_index += 1
+                    continue
+
+                base_cmd = ["translate", "-i", str(og_file), "-l", target_language, "-o", str(srt_file), "--skip-upgrade"]
+                if secondary_key:
+                    base_cmd.extend(["-k2", secondary_key])
+
+                if " -m " in gst_cmd:
+                    cmd_parts = gst_cmd.split() + base_cmd
+                else:
+                    cmd_parts = [gst_cmd] + base_cmd
+
+                env = os.environ.copy()
+                env["GEMINI_API_KEY"] = primary_key
+
+                process = subprocess.Popen(
+                    cmd_parts,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    stdin=subprocess.DEVNULL,
+                    text=True,
+                    bufsize=1,
+                    universal_newlines=True,
+                    env=env,
+                )
+
+                output_lines = []
+                last_progress_line = None
+                while True:
+                    line_output = process.stdout.readline()
+                    if not line_output:
+                        break
+                    cleaned_line = clean_log_line(line_output)
+                    if cleaned_line:
+                        output_lines.append(line_output.strip())
+                        if cleaned_line != last_progress_line:
+                            if log_callback:
+                                log_callback(cleaned_line)
+                            last_progress_line = cleaned_line
+
+                returncode = process.wait()
+
+                progress_files = list(srt_file.parent.glob("*.progress"))
+                for progress_file in progress_files:
+                    try:
+                        progress_file.unlink()
+                        if log_callback:
+                            log_callback(f"    Cleaned up: {progress_file.name}")
+                    except Exception as e:
+                        if log_callback:
+                            log_callback(f"    Warning: Could not remove {progress_file.name}: {e}")
+
+                if returncode == 0 and srt_file.exists():
+                    try:
+                        file_size = srt_file.stat().st_size
+                        if file_size > 0:
+                            with open(srt_file, 'r', encoding='utf-8') as f:
+                                content_preview = f.read(100)
+                                if content_preview.strip():
+                                    translation_success = True
+                    except Exception:
+                        pass
+
+                if translation_success:
+                    break
+
+                if _is_quota_limit_error(output_lines) and pair_index + 1 < len(key_pairs):
+                    if srt_file.exists():
+                        try:
+                            srt_file.unlink()
+                        except Exception:
+                            pass
+                    if log_callback:
+                        log_callback("    Retrying with next API key(s)...")
+                    pair_index += 1
+                else:
+                    break
+
             if translation_success:
-                # Add ISO 639 language suffix if enabled
-                final_srt_file = srt_file
                 if use_iso639:
                     target_code = ISO_639_CODES.get(target_language, "eng")
-                    
-                    # Check if source filename has existing language suffix to replace
                     source_match = re.match(r'(.+)\.([a-z]{3})$', srt_file.stem)
                     if source_match:
-                        # Replace existing suffix: video.spa → video.eng
                         base_name = source_match.group(1)
                     else:
-                        # No existing suffix: video → video
                         base_name = srt_file.stem
-                    
                     final_srt_file = srt_file.parent / f"{base_name}.{target_code}.srt"
-                    
-                    # Rename the translated file to include language suffix
                     if srt_file != final_srt_file:
                         srt_file.rename(final_srt_file)
                         if log_callback:
                             log_callback(f"    Renamed to: {final_srt_file.name}")
-                
+
                 success_count += 1
                 if log_callback:
                     log_callback(f"  ✓ Translated: {final_srt_file.name}")
             else:
                 if log_callback:
                     log_callback(f"  ✗ Failed: {srt_file.name}")
-                    if returncode != 0:
-                        log_callback(f"    Exit code: {returncode}")
                     if output_lines:
                         log_callback(f"    Last output lines:")
                         for err_line in output_lines[-5:]:
@@ -1338,10 +1361,10 @@ def translate_subtitles(selected_srt_files: List[Path], api_key: Optional[str] =
         except Exception as e:
             if log_callback:
                 log_callback(f"Error translating {srt_file.name}: {e}")
-    
+
     if log_callback:
         log_callback(f"\nTranslation complete. Translated {success_count}/{total} files.")
-    
+
     return success_count > 0
 
 
@@ -2742,7 +2765,7 @@ class SetupWizard(QDialog):
             checkbox_text += " ✓ Environment variable detected"
         
         self.api_key_checkbox = QCheckBox(checkbox_text)
-        self.api_key_checkbox.setChecked(has_env_key or bool(self.config.get("api_key", "")))
+        self.api_key_checkbox.setChecked(has_env_key or bool(self.config.get("api_key", "")) or bool(self.config.get("api_keys")))
         layout.addWidget(self.api_key_checkbox)
         
         layout.addSpacing(10)
@@ -3391,23 +3414,28 @@ class SettingsDialog(QDialog):
         api_form = QFormLayout()
         api_key_info = QLabel(
             'You can set up your API key safely by setting the GEMINI_API_KEY environment variable. '
-            '<a href="https://aistudio.google.com/app/apikey">Get your API key here</a> and follow the instructions '
-            'for your platform. Using the legacy API key input below is less secure, but it\'s fine if you prefer that.'
+            '<a href="https://aistudio.google.com/app/apikey">Get your API key here</a>. '
+            'Add multiple keys below; when one hits quota limits, the app retries with the next.'
         )
         api_key_info.setOpenExternalLinks(True)
         api_key_info.setWordWrap(True)
         api_key_info.setStyleSheet("color: #666;")
         api_form.addRow("", api_key_info)
-        self.api_key_input = QLineEdit()
-        self.api_key_input.setText(self.config.get("api_key", ""))
-        self.api_key_input.setEchoMode(QLineEdit.Password)
-        self.api_key_input.setPlaceholderText("Optional: Legacy API key input")
-        api_form.addRow("API Key (Legacy):", self.api_key_input)
-        self.api_key2_input = QLineEdit()
-        self.api_key2_input.setText(self.config.get("api_key2", ""))
-        self.api_key2_input.setEchoMode(QLineEdit.Password)
-        self.api_key2_input.setPlaceholderText("Optional: Second API key for translation")
-        api_form.addRow("API Key 2 (Optional):", self.api_key2_input)
+        keys_container = QWidget()
+        self.api_keys_layout = QVBoxLayout()
+        keys_container.setLayout(self.api_keys_layout)
+        self.api_key_inputs = []
+        api_keys_list = self.config.get("api_keys") or []
+        if not api_keys_list and (self.config.get("api_key") or self.config.get("api_key2")):
+            api_keys_list = [k for k in [self.config.get("api_key"), self.config.get("api_key2")] if k]
+        if not api_keys_list:
+            api_keys_list = [""]
+        for key in api_keys_list:
+            self._add_api_key_row(key)
+        add_btn = QPushButton("+ Add another key")
+        add_btn.clicked.connect(self._add_api_key_row_blank)
+        self.api_keys_layout.addWidget(add_btn)
+        api_form.addRow("", keys_container)
         api_group.setLayout(api_form)
         content_layout.addWidget(api_group)
         
@@ -3516,7 +3544,41 @@ class SettingsDialog(QDialog):
         main_layout.addLayout(button_layout)
         
         self.setLayout(main_layout)
-    
+
+    def _add_api_key_row(self, value: str = ""):
+        """Add an API key row. Called with value when populating, or blank when user clicks +."""
+        row = QWidget()
+        row_layout = QHBoxLayout()
+        row_layout.setContentsMargins(0, 4, 0, 4)
+        le = QLineEdit()
+        le.setText(value)
+        le.setEchoMode(QLineEdit.Password)
+        le.setPlaceholderText("Paste API key")
+        row_layout.addWidget(le)
+        remove_btn = QPushButton("−")
+        remove_btn.setFixedWidth(28)
+        remove_btn.setToolTip("Remove this key")
+
+        def do_remove():
+            self.api_key_inputs.remove((le, row, remove_btn))
+            row.setParent(None)
+            row.deleteLater()
+            self._update_remove_buttons()
+
+        remove_btn.clicked.connect(do_remove)
+        row_layout.addWidget(remove_btn)
+        row.setLayout(row_layout)
+        self.api_key_inputs.append((le, row, remove_btn))
+        self.api_keys_layout.insertWidget(self.api_keys_layout.count() - 1, row)
+        self._update_remove_buttons()
+
+    def _add_api_key_row_blank(self):
+        self._add_api_key_row("")
+
+    def _update_remove_buttons(self):
+        for le, row, remove_btn in self.api_key_inputs:
+            remove_btn.setEnabled(len(self.api_key_inputs) > 1)
+
     def toggle_watermark_fields(self):
         """Enable/disable watermark input fields based on checkbox."""
         enabled = self.use_watermarks_checkbox.isChecked()
@@ -3549,8 +3611,8 @@ class SettingsDialog(QDialog):
     
     def save_settings(self):
         """Save settings and close dialog."""
-        self.config["api_key"] = self.api_key_input.text()
-        self.config["api_key2"] = self.api_key2_input.text()
+        api_keys = [le.text().strip() for le, row, btn in self.api_key_inputs if le.text().strip()]
+        self.config["api_keys"] = api_keys
         self.config["ffmpeg_path"] = self.ffmpeg_path_input.text().strip()
         self.config["watermark_720p"] = self.watermark_720p_input.text()
         self.config["watermark_1080p"] = self.watermark_1080p_input.text()
@@ -5642,39 +5704,38 @@ class VideoProcessingApp(QMainWindow):
     
     def translate_subtitles(self):
         """Translate subtitles."""
-        # Check environment variables first (recommended), then config (legacy)
-        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GST_API_KEY") or self.config.get("api_key", "")
-        if not api_key:
+        env_key = os.getenv("GEMINI_API_KEY") or os.getenv("GST_API_KEY")
+        api_keys = self.config.get("api_keys") or []
+        if not api_keys and (self.config.get("api_key") or self.config.get("api_key2")):
+            api_keys = [k for k in [self.config.get("api_key"), self.config.get("api_key2")] if k]
+        if not env_key and not api_keys:
             QMessageBox.warning(
-                self, 
-                "API Key Not Set", 
+                self,
+                "API Key Not Set",
                 "API key not found.\n\n"
                 "Recommended: Set GEMINI_API_KEY or GST_API_KEY environment variable.\n"
                 "See Settings for instructions.\n\n"
-                "Legacy: You can also set it in Settings (less secure)."
+                "You can also add keys in Settings (API Keys section)."
             )
             return
-        
-        # Open file picker to select SRT files
+
         file_paths, _ = QFileDialog.getOpenFileNames(
             self, "Select SRT Files to Translate",
             str(get_subtitles_dir()),
             "Subtitle Files (*.srt);;All Files (*)"
         )
-        
+
         if not file_paths:
             return
-        
-        # Get translation settings from config
+
         target_language = self.config.get("translation_target_language", "English")
         use_iso639 = self.config.get("use_iso639_suffixes", False)
-        api_key2 = self.config.get("api_key2", "")
-        
+
         self.log(f"Starting subtitle translation for {len(file_paths)} file(s)...")
         self.log(f"Target language: {target_language}, ISO 639 suffixes: {'enabled' if use_iso639 else 'disabled'}")
-        if api_key2:
-            self.log("Using second API key for translation")
-        self.run_script(translate_subtitles, file_paths, api_key, target_language, use_iso639, api_key2)
+        if api_keys:
+            self.log(f"Using {len(api_keys)} API key(s) (quota retry enabled)")
+        self.run_script(translate_subtitles, file_paths, target_language, use_iso639, api_keys)
     
     def process_video(self, resolution: str):
         """Process video."""

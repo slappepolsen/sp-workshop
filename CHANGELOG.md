@@ -11,16 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Batch download debug log: full N_m3u8DL-RE output written to `_batch_download_debug_YYYYMMDD_HHMMSS.log` in the downloads folder.
-- Debug log path shown in GUI before batch starts.
-- `datetime` import and try/finally wrapper to ensure the debug file is closed after the batch loop.
-- Raw subprocess output (including progress bars) written to the debug file with flush after each line.
-- Task headers (`--- Task N/Total: Name ---`) written to the debug file for each item.
+- Support for many Gemini API keys for subtitle translation.
+- `api_keys` config (list) replacing `api_key` and `api_key2`; migration from existing keys in `load_config()`.
+- Quota-limit retry: on 429, RESOURCE_EXHAUSTED, quota, rate limit, or exhausted errors from gst, retry the same file with the next key pair.
+- `_is_quota_limit_error()` helper detecting quota/rate-limit patterns in gst output.
+- `_get_key_pairs()` helper building (primary, secondary) key pairs for gst from env and config.
+- Settings UI: dynamic API key list with "Add another key" button and per-key remove button (minimum one key).
+- Partial output file removed before retry so gst can re-run from scratch.
+- Log message "Retrying with next API key(s)..." when switching to a new key pair.
 
 ### Changed
 
-- `batchdownloader_guide.md`: replaced Episodes spec with Mode (Episode(s) | Movie), optional Name, Use S01E02 with Season, and Items (e.g. `1`, `1-5`, `1,3,5-7`).
-- Added Naming Options section with examples for TV series, movies, and numeric-only naming.
+- `translate_subtitles()` now accepts `api_keys: List[str]` and legacy `api_key`/`api_key2` for backward compatibility.
+- Translation logic pairs keys for gst (primary via `GEMINI_API_KEY` env, secondary via `-k2`).
+- Setup wizard API key checkbox now considers `api_keys` when deciding whether keys are configured.
 
 ## [10.1.0] - 2026-02-25
 
