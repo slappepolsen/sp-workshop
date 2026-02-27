@@ -28,6 +28,7 @@ env/
 build_venv/
 
 .rulesrules
+rentry.md
 
 # IDE
 .idea/

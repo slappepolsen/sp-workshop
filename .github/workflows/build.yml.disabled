@@ -36,7 +36,7 @@ jobs:
           mv dist/SP_Workshop.app dist/SP_Workshop_macOS/ 2>/dev/null || mv dist/SP_Workshop dist/SP_Workshop_macOS/
           cp whisper_auto.sh dist/SP_Workshop_macOS/
           cp icon.icns dist/SP_Workshop_macOS/
-          cp README.md SETUP.md CHANGELOG.md batchdownloader_guide.md LICENSE requirements.txt app.py dist/SP_Workshop_macOS/
+          cp README.md SETUP.md CHANGELOG.md LICENSE requirements.txt app.py dist/SP_Workshop_macOS/
           cp flowcharts.png icon.png dist/SP_Workshop_macOS/
       
       - name: Upload macOS artifact
@@ -79,7 +79,6 @@ jobs:
           copy README.md dist\SP_Workshop_Windows\
           copy SETUP.md dist\SP_Workshop_Windows\
           copy CHANGELOG.md dist\SP_Workshop_Windows\
-          copy batchdownloader_guide.md dist\SP_Workshop_Windows\
           copy LICENSE dist\SP_Workshop_Windows\
           copy requirements.txt dist\SP_Workshop_Windows\
           copy app.py dist\SP_Workshop_Windows\
@@ -126,7 +125,7 @@ jobs:
           chmod +x dist/SP_Workshop_Linux/SP_Workshop
           chmod +x dist/SP_Workshop_Linux/whisper_auto.sh
           cp icon.png dist/SP_Workshop_Linux/
-          cp README.md SETUP.md CHANGELOG.md batchdownloader_guide.md LICENSE requirements.txt app.py dist/SP_Workshop_Linux/
+          cp README.md SETUP.md CHANGELOG.md LICENSE requirements.txt app.py dist/SP_Workshop_Linux/
           cp flowcharts.png dist/SP_Workshop_Linux/
       
       - name: Upload Linux artifact

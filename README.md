@@ -192,8 +192,8 @@ Check the app log window for detailed error messages.
 - Internet connection (only for translation and downloading, the rest is local)
 
 ## Documentation
-- [batchdownloader_guide.md](batchdownloader_guide.md) - Batch downloader quick reference
 - [CHANGELOG.md](CHANGELOG.md) - Version history
+- [README.md](README.md) - This file
 
 ## Support
 

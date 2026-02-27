@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [10.3.1] - 2026-02-25
+
+### Changed
+
+- Batch download debug log now written to `VideoProcessing/logs` instead of the downloads folder.
+- `get_logs_dir()` helper for the logs directory.
+
+### Removed
+
+- `batchdownloader_guide.md`; content merged into the external rentry page. README Documentation section and build workflow updated accordingly.
+
 ## [10.3.0] - 2026-02-25
 
 ### Added
