@@ -51,3 +51,6 @@ settings.json
 # Test files
 test_*.py
 *_test.py
+
+# Deprecated (transcription now uses Python; kept locally for reference)
+whisper_auto.sh

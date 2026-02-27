@@ -177,7 +177,7 @@ SP Workshop supports three main workflows depending on your starting material.
 - **FFmpeg not found**: Install FFmpeg and ensure it is in PATH
 - **N_m3u8DL-RE not found**: Download and add to PATH
 - **Translation fails**: Check API key and internet connection
-- **Whisper issues**: Ensure `whisper_auto.sh` exists and is executable
+- **Whisper issues**: The app uses a Python venv (~/whisper-env) for transcription. Ensure FFmpeg is installed.
 
 Check the app log window for detailed error messages.
 
