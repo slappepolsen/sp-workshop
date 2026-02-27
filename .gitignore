@@ -27,8 +27,7 @@ env/
 .venv/
 build_venv/
 
-# Cursor
-.cursorrules
+.rulesrules
 
 # IDE
 .idea/

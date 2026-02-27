@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [10.3.0] - 2026-02-25
+
+### Added
+
+- Transcription on Windows without bash. Standard transcription now runs in Python with `_get_whisper_python()` instead of `whisper_auto.sh`, so Git for Windows is no longer required.
+- `_get_whisper_python()` helper to create and use `~/whisper-env`, install Whisper and PyTorch if missing, and return the Python path for both Windows and Unix.
+- Batch download debug log: full N_m3u8DL-RE output written to `VideoProcessing/logs/_batch_download_debug_YYYYMMDD_HHMMSS.log` for troubleshooting hangs or failures.
+
+### Changed
+
+- `transcribe_video()` no longer calls `whisper_auto.sh` or bash; it uses subprocess with ffmpeg and Whisper directly.
+- Platform-specific venv paths: `Scripts/python.exe` on Windows, `bin/python` on Unix for the whisper environment.
+- Update README: note under "Run the app" for older versions (before 10.0.0) that the main file may be `video_app_v8.py`.
+
 ## [10.2.0] - 2026-02-25
 
 ### Added

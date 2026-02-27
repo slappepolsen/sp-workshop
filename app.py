@@ -4,7 +4,7 @@ Video Processing GUI Application
 A PyQt5 desktop app that provides a button-based interface for all video processing scripts.
 """
 
-__version__ = "10.2.0"
+__version__ = "10.3.0"
 VERSION_CODENAME = "Hallucination"
 
 import sys
@@ -252,6 +252,13 @@ def get_output_dir() -> Path:
     output_dir = get_base_dir() / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
     return output_dir
+
+
+def get_logs_dir() -> Path:
+    """Get the logs directory (e.g. for batch download debug logs)."""
+    logs_dir = get_base_dir() / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    return logs_dir
 
 
 def open_folder_in_explorer(folder_path: Path):
@@ -855,7 +862,7 @@ def download_episodes(
         if save_names:
             log_callback(f"Output names: {', '.join(save_names[:5])}{' ...' if len(save_names) > 5 else ''}")
 
-    debug_log_path = output_dir / f"_batch_download_debug_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    debug_log_path = get_logs_dir() / f"_batch_download_debug_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
     debug_file = open(debug_log_path, 'w', encoding='utf-8')
     if log_callback:
         log_callback(f"Full debug log: {debug_log_path}")
@@ -2054,75 +2061,212 @@ def remux_mkv_with_srt_batch(folder_path: Path, output_format: str = "mkv",
     return success_count > 0
 
 
+def _get_whisper_python(log_callback=None) -> Optional[Path]:
+    """Return Path to Python in ~/whisper-env, creating venv and installing whisper/torch if missing."""
+    env_dir = Path.home() / "whisper-env"
+    if sys.platform == "win32":
+        python_exe = env_dir / "Scripts" / "python.exe"
+    else:
+        python_exe = env_dir / "bin" / "python"
+
+    if not env_dir.exists():
+        if log_callback:
+            log_callback("Creating virtual environment...")
+        try:
+            subprocess.run(
+                [sys.executable, "-m", "venv", str(env_dir)],
+                check=True,
+                capture_output=True,
+                timeout=120,
+            )
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+            if log_callback:
+                log_callback(f"Failed to create whisper-env: {e}")
+            return None
+
+    if not python_exe.exists():
+        if log_callback:
+            log_callback(f"whisper-env Python not found at {python_exe}")
+        return None
+
+    # Ensure whisper is installed
+    try:
+        result = subprocess.run(
+            [str(python_exe), "-m", "whisper", "--help"],
+            capture_output=True,
+            timeout=10,
+        )
+        if result.returncode != 0:
+            raise RuntimeError("whisper not available")
+    except Exception:
+        if log_callback:
+            log_callback("Installing Whisper (first time setup)...")
+        try:
+            subprocess.run(
+                [str(python_exe), "-m", "pip", "install", "-U", "pip"],
+                capture_output=True,
+                timeout=60,
+            )
+            subprocess.run(
+                [str(python_exe), "-m", "pip", "install", "-U", "openai-whisper"],
+                check=True,
+                capture_output=True,
+                timeout=300,
+            )
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+            if log_callback:
+                log_callback(f"Failed to install Whisper: {e}")
+            return None
+
+    # Ensure torch is installed
+    try:
+        result = subprocess.run(
+            [str(python_exe), "-c", "import torch"],
+            capture_output=True,
+            timeout=15,
+        )
+        if result.returncode != 0:
+            raise RuntimeError("torch not available")
+    except Exception:
+        if log_callback:
+            log_callback("Installing PyTorch (first time setup)...")
+        try:
+            subprocess.run(
+                [str(python_exe), "-m", "pip", "install", "torch", "torchvision", "torchaudio"],
+                check=True,
+                capture_output=True,
+                timeout=600,
+            )
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+            if log_callback:
+                log_callback(f"Failed to install PyTorch: {e}")
+            return None
+
+    return python_exe
+
+
 def transcribe_video(video_path: Path, language_code: str, model: str, whisper_options: Dict = None, output_format: str = "srt", progress_callback=None, log_callback=None) -> bool:
-    """Transcribe video using whisper_auto.sh script."""
+    """Transcribe video using Python + whisper (cross-platform, no bash required)."""
     if not video_path.exists():
         if log_callback:
             log_callback(f"Error: Video file not found: {video_path}")
         return False
-    
-    script_path = Path(__file__).parent / "whisper_auto.sh"
-    
-    if not script_path.exists():
+
+    if not check_command_exists("ffmpeg"):
         if log_callback:
-            log_callback(f"Error: whisper_auto.sh not found at {script_path}")
+            log_callback("Error: FFmpeg not found. Please install it and add to PATH.")
         return False
-    
+
+    whisper_python = _get_whisper_python(log_callback)
+    if not whisper_python:
+        if log_callback:
+            log_callback("Error: Could not set up Whisper environment.")
+        return False
+
     try:
         if log_callback:
             log_callback(f"Starting transcription of: {video_path.name}")
             log_callback(f"Language: {language_code}, Model: {model}, Format: {output_format}")
-        
-        # Prepare environment variables - pass user-typed extra arguments if provided
-        env = os.environ.copy()
-        if whisper_options and "extra_args_parsed" in whisper_options:
-            extra_args = whisper_options.get("extra_args_parsed", "")
-            if extra_args:
-                env["WHISPER_EXTRA_ARGS"] = extra_args
-        
-        # Run the script with video path, language code, model, and output format as arguments
-        result = subprocess.run(
-            ["bash", str(script_path), str(video_path), language_code, model, output_format],
+
+        video_dir = video_path.parent
+        base_name = video_path.stem
+        audio_stem = f"{base_name}_converted"
+        audio_path = video_dir / f"{audio_stem}.wav"
+
+        # Handle existing outputs (numbered suffix like whisper_auto.sh)
+        existing = list(video_dir.glob(f"{audio_stem}*"))
+        if existing:
+            n = 1
+            while (video_dir / f"{audio_stem}_{n}.wav").exists():
+                n += 1
+            audio_stem = f"{audio_stem}_{n}"
+            audio_path = video_dir / f"{audio_stem}.wav"
+            if log_callback:
+                log_callback(f"Existing outputs found, using new stem: {audio_stem}")
+
+        if log_callback:
+            log_callback("Extracting and normalizing audio...")
+        ffmpeg_result = subprocess.run(
+            [
+                "ffmpeg", "-y", "-i", str(video_path),
+                "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", "-af", "dynaudnorm",
+                str(audio_path), "-loglevel", "warning", "-hide_banner",
+            ],
             capture_output=True,
             text=True,
-            env=env
+            timeout=600,
         )
-        
-        # Log output
+        if ffmpeg_result.returncode != 0:
+            if log_callback:
+                log_callback(f"FFmpeg error: {ffmpeg_result.stderr or ffmpeg_result.stdout}")
+            return False
+
+        if not audio_path.exists():
+            if log_callback:
+                log_callback("FFmpeg did not produce audio file.")
+            return False
+
+        if log_callback:
+            log_callback("Transcribing with Whisper...")
+        whisper_cmd = [
+            str(whisper_python), "-m", "whisper", str(audio_path),
+            "--model", model,
+            "--fp16", "False",
+            "--output_format", output_format,
+            "--beam_size", "2",
+            "--output_dir", str(video_dir),
+        ]
+        if language_code and language_code != "auto":
+            whisper_cmd.extend(["--language", language_code])
+
+        # Append user-provided extra arguments
+        if whisper_options and "extra_args_parsed" in whisper_options:
+            extra_args = whisper_options.get("extra_args_parsed", "").strip()
+            if extra_args:
+                whisper_cmd.extend(extra_args.split())
+
+        result = subprocess.run(
+            whisper_cmd,
+            capture_output=True,
+            text=True,
+            timeout=3600,
+        )
+
         if log_callback:
             if result.stdout:
                 log_callback(result.stdout)
             if result.stderr:
                 log_callback(result.stderr)
-        
-        if result.returncode == 0:
-            # Check if SRT file was created (matches input video filename)
-            video_dir = video_path.parent
-            base_name = video_path.stem
-            # Check for exact match first, then numbered variants
-            srt_file = video_dir / f"{base_name}.srt"
-            if not srt_file.exists():
-                # Check for numbered variants (e.g., video_1.srt, video_2.srt)
-                n = 1
-                while n <= 10:  # Reasonable limit
-                    candidate = video_dir / f"{base_name}_{n}.srt"
-                    if candidate.exists():
-                        srt_file = candidate
-                        break
-                    n += 1
-            
-            if srt_file.exists():
-                if log_callback:
-                    log_callback(f"✓ Transcription complete: {srt_file.name}")
-                return True
-            else:
-                if log_callback:
-                    log_callback("Transcription completed but SRT file not found.")
-                return False
-        else:
+
+        whisper_srt = video_dir / f"{audio_stem}.srt"
+        final_srt = video_dir / f"{base_name}.srt"
+        if final_srt.exists():
+            n = 1
+            while (video_dir / f"{base_name}_{n}.srt").exists():
+                n += 1
+            final_srt = video_dir / f"{base_name}_{n}.srt"
+
+        if whisper_srt.exists():
+            shutil.move(str(whisper_srt), str(final_srt))
+        if audio_path.exists():
+            try:
+                audio_path.unlink()
+            except OSError:
+                pass
+
+        if result.returncode == 0 and final_srt.exists():
             if log_callback:
-                log_callback(f"Transcription failed with exit code {result.returncode}")
-            return False
+                log_callback(f"✓ Transcription complete: {final_srt.name}")
+            return True
+
+        if log_callback:
+            log_callback(f"Transcription failed with exit code {result.returncode}")
+        return False
+
+    except subprocess.TimeoutExpired:
+        if log_callback:
+            log_callback("Transcription timed out.")
+        return False
     except Exception as e:
         if log_callback:
             log_callback(f"Error during transcription: {e}")
