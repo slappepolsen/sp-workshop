@@ -4,7 +4,7 @@ Video Processing GUI Application
 A PyQt5 desktop app that provides a button-based interface for all video processing scripts.
 """
 
-__version__ = "10.3.0"
+__version__ = "10.3.1"
 VERSION_CODENAME = "Hallucination"
 
 import sys
@@ -3308,7 +3308,7 @@ class LanguageDialog(QDialog):
         
         # Selected languages with native names (curated list to avoid scrolling issues)
         languages = [
-            ("Auto-detect", "auto"),
+            ("(Select language)", "auto"),
             ("English (English)", "en"),
             ("French (Français)", "fr"),
             ("Spanish (Español)", "es"),
@@ -4112,7 +4112,7 @@ class VideoProcessingApp(QMainWindow):
         lang_label = QLabel("Language:")
         self.transcribe_language_combo = QComboBox()
         languages = [
-            ("Auto-detect", "auto"),
+            ("(Select language)", "auto"),
             ("English (English)", "en"),
             ("French (Français)", "fr"),
             ("Spanish (Español)", "es"),
@@ -4384,7 +4384,7 @@ class VideoProcessingApp(QMainWindow):
         output_format = self.transcribe_format_combo.currentData()
         
         self.transcribe_log(f"Starting transcription of: {video_path.name}")
-        lang_display = "Auto-detect" if language_code == "auto" else language_code
+        lang_display = "(detected from audio)" if language_code == "auto" else language_code
         self.transcribe_log(f"Language: {lang_display}, Model: {model}, Format: {output_format}")
         
         # Show progress bar and stop button
@@ -4456,7 +4456,7 @@ class VideoProcessingApp(QMainWindow):
             config["whisper_has_existing_model"] = model_dialog.get_result()
             save_config(config)
         self.transcribe_log(f"Starting VAD-assisted transcription of: {video_path.name}")
-        lang_display = "Auto-detect" if language_code == "auto" else language_code
+        lang_display = "(detected from audio)" if language_code == "auto" else language_code
         self.transcribe_log(f"Language: {lang_display}, Model: {model}")
         self.transcribe_progress_bar.setVisible(True)
         self.transcribe_stop_btn.setVisible(True)
@@ -6002,7 +6002,7 @@ class VideoProcessingApp(QMainWindow):
                 self.log(f"Will download Whisper model '{model}' on first use.")
             
             self.log(f"Starting transcription of: {video_path.name}")
-            lang_display = "Auto-detect" if language_code == "auto" else language_code
+            lang_display = "(detected from audio)" if language_code == "auto" else language_code
             self.log(f"Language: {lang_display}, Model: {model}")
             
             # Run transcription with language, model, and whisper options
