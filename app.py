@@ -4,7 +4,7 @@ Video Processing GUI Application
 A PyQt5 desktop app that provides a button-based interface for all video processing scripts.
 """
 
-__version__ = "10.3.0-alpha.1"
+__version__ = "10.3.3"
 VERSION_CODENAME = "Hallucination"
 
 import sys
@@ -125,6 +125,28 @@ from PyQt5.QtGui import QFont, QIcon, QPainter, QPen, QDesktopServices
 
 # URL for download instructions (rentry.co page - update when creating the page)
 DOWNLOAD_INSTRUCTIONS_URL = "https://rentry.co/sp-workshop"
+
+# Whisper transcription languages: (display name, Whisper code). Curated list, alphabetical.
+# Whisper --language accepts codes (en, es, fr, pt, zh...) or full names (English, Spanish...)
+TRANSCRIBE_LANGUAGES = [
+    ("(Select language)", "auto"),
+    ("Catalan", "ca"),
+    ("Dutch", "nl"),
+    ("English", "en"),
+    ("French", "fr"),
+    ("German", "de"),
+    ("Greek", "el"),
+    ("Indonesian", "id"),
+    ("Italian", "it"),
+    ("Japanese", "ja"),
+    ("Korean", "ko"),
+    ("Mandarin Chinese", "zh"),
+    ("Polish", "pl"),
+    ("Portuguese (Brazilian)", "pt"),
+    ("Spanish", "es"),
+    ("Thai", "th"),
+    ("Turkish", "tr"),
+]
 
 # ============================================================================
 # Custom Widgets
@@ -391,21 +413,21 @@ def check_whisper_model_exists(model_name: str) -> bool:
 # ISO 639-2/T Language Codes for Subtitle Suffixes
 # ============================================================================
 
+# Translation target languages (passed to gst -l). Alphabetical.
+TRANSLATION_TARGET_LANGUAGES = [
+    "Catalan", "Dutch", "English", "French", "German", "Greek",
+    "Indonesian", "Italian", "Japanese", "Korean", "Mandarin Chinese",
+    "Polish", "Portuguese", "Brazilian", "Spanish",
+    "Thai", "Turkish",
+]
+
+# ISO 639-2 codes for subtitle filename suffixes (.eng.srt etc)
 ISO_639_CODES = {
-    "English": "eng",
-    "French": "fra",
-    "Spanish": "spa",
-    "Catalan": "cat",
-    "German": "deu",
-    "Italian": "ita",
-    "Portuguese": "por",
-    "Dutch": "nld",
-    "Chinese": "zho",
-    "Japanese": "jpn",
-    "Korean": "kor",
-    "Arabic": "ara",
-    "Thai": "tha",
-    "Greek": "ell",
+    "Catalan": "cat", "Dutch": "nld", "English": "eng", "French": "fra",
+    "German": "deu", "Greek": "ell", "Indonesian": "ind", "Italian": "ita",
+    "Japanese": "jpn", "Korean": "kor", "Mandarin Chinese": "zho", "Polish": "pol",
+    "Portuguese": "por", "Portuguese (Brazilian)": "por", "Spanish": "spa",
+    "Thai": "tha", "Turkish": "tur",
 }
 
 
@@ -3565,27 +3587,7 @@ class LanguageDialog(QDialog):
         
         # Language dropdown
         self.language_combo = QComboBox()
-        
-        # Selected languages with native names (curated list to avoid scrolling issues)
-        languages = [
-            ("(Select language)", "auto"),
-            ("English (English)", "en"),
-            ("French (Français)", "fr"),
-            ("Spanish (Español)", "es"),
-            ("Catalan (Català)", "ca"),
-            ("German (Deutsch)", "de"),
-            ("Italian (Italiano)", "it"),
-            ("Portuguese (Português - BR/PT)", "pt"),
-            ("Dutch (Nederlands)", "nl"),
-            ("Chinese (中文)", "zh"),
-            ("Japanese (日本語)", "ja"),
-            ("Korean (한국어)", "ko"),
-            ("Arabic (العربية)", "ar"),
-            ("Thai (ไทย)", "th"),
-            ("Greek (Ελληνικά)", "el"),
-        ]
-        
-        for name, code in languages:
+        for name, code in TRANSCRIBE_LANGUAGES:
             self.language_combo.addItem(name, code)
         
         # Set default to English
@@ -3900,7 +3902,7 @@ class SettingsDialog(QDialog):
         translation_info.setStyleSheet("color: #666;")
         trans_form.addRow("", translation_info)
         self.translation_target_combo = QComboBox()
-        for lang in ["English", "French", "Spanish", "Catalan", "German", "Italian", "Portuguese", "Dutch"]:
+        for lang in TRANSLATION_TARGET_LANGUAGES:
             self.translation_target_combo.addItem(lang)
         current_target = self.config.get("translation_target_language", "English")
         target_index = self.translation_target_combo.findText(current_target)
@@ -4372,21 +4374,7 @@ class VideoProcessingApp(QMainWindow):
         lang_row = QHBoxLayout()
         lang_label = QLabel("Language:")
         self.transcribe_language_combo = QComboBox()
-        languages = [
-            ("(Select language)", "auto"),
-            ("English (English)", "en"),
-            ("French (Français)", "fr"),
-            ("Spanish (Español)", "es"),
-            ("Catalan (Català)", "ca"),
-            ("German (Deutsch)", "de"),
-            ("Italian (Italiano)", "it"),
-            ("Portuguese (Português)", "pt"),
-            ("Dutch (Nederlands)", "nl"),
-            ("Chinese (中文)", "zh"),
-            ("Japanese (日本語)", "ja"),
-            ("Korean (한국어)", "ko"),
-        ]
-        for name, code in languages:
+        for name, code in TRANSCRIBE_LANGUAGES:
             self.transcribe_language_combo.addItem(name, code)
         lang_row.addWidget(lang_label, 0)
         lang_row.addWidget(self.transcribe_language_combo, 1)
@@ -4748,19 +4736,19 @@ class VideoProcessingApp(QMainWindow):
         """Create the dedicated remuxing tab."""
         tab = QWidget()
         layout = QVBoxLayout()
-        layout.setSpacing(15)
+        layout.setSpacing(12)
         
-        # Header
-        header_label = QLabel("Remuxing Hub")
+        # Header - compact
+        header_row = QHBoxLayout()
+        header_label = QLabel("Remux")
         header_label.setFont(QFont("Arial", 14, QFont.Bold))
-        layout.addWidget(header_label)
+        header_row.addWidget(header_label)
+        header_row.addStretch()
+        layout.addLayout(header_row)
         
-        desc_label = QLabel(
-            "Combine video files (MKV/MP4) with subtitle files (SRT/VTT), split audio channels, "
-            "and convert audio formats. Use track analysis to see available tracks before remuxing."
-        )
+        desc_label = QLabel("Add subtitles to videos or pick which tracks to keep. Expand a file to see track details.")
         desc_label.setWordWrap(True)
-        desc_label.setStyleSheet("color: #666;")
+        desc_label.setStyleSheet("color: #666; font-size: 11px;")
         layout.addWidget(desc_label)
         
         # File management
@@ -4771,27 +4759,29 @@ class VideoProcessingApp(QMainWindow):
         self.remux_selected_files = []
         self.remux_file_configs = {}  # Store per-file configuration
         
-        # Buttons row
+        # Buttons row - primary actions first
         buttons_row = QHBoxLayout()
         add_files_btn = QPushButton("Add Files...")
         add_files_btn.clicked.connect(self.add_remux_files)
-        auto_match_btn = QPushButton("Auto-match subtitles")
+        auto_match_btn = QPushButton("Auto-match Subtitles")
         auto_match_btn.setToolTip("Find SRT/VTT with same name as each video (same folder or Subtitles folder) and attach.")
         auto_match_btn.clicked.connect(self.auto_match_remux_subtitles)
-        remove_files_btn = QPushButton("Remove Selected")
-        remove_files_btn.clicked.connect(self.remove_remux_files)
-        clear_files_btn = QPushButton("Clear All")
-        clear_files_btn.clicked.connect(self.clear_remux_files)
-        media_info_btn = QPushButton("Media Info")
-        media_info_btn.clicked.connect(self.show_media_info)
         buttons_row.addWidget(add_files_btn)
         buttons_row.addWidget(auto_match_btn)
+        buttons_row.addSpacing(10)
+        remove_files_btn = QPushButton("Remove")
+        remove_files_btn.clicked.connect(self.remove_remux_files)
+        clear_files_btn = QPushButton("Clear")
+        clear_files_btn.clicked.connect(self.clear_remux_files)
         buttons_row.addWidget(remove_files_btn)
         buttons_row.addWidget(clear_files_btn)
+        buttons_row.addStretch()
+        media_info_btn = QPushButton("Media Info")
+        media_info_btn.clicked.connect(self.show_media_info)
         buttons_row.addWidget(media_info_btn)
         file_layout.addLayout(buttons_row)
         
-        # Files tree widget (like MKVToolNix GUI)
+        # Files tree widget - columns: File/Track, Type, Codec/Format, Language/Subtitle, Channels, Action
         self.remux_files_tree = QTreeWidget()
         self.remux_files_tree.setHeaderLabels(["File / Track", "Type", "Codec", "Language", "Channels", "Actions"])
         self.remux_files_tree.setSelectionMode(QTreeWidget.ExtendedSelection)
@@ -4827,43 +4817,25 @@ class VideoProcessingApp(QMainWindow):
         file_group.setLayout(file_layout)
         layout.addWidget(file_group)
         
-        # Global options (defaults for new files)
-        options_group = QGroupBox("Default Options (for new files)")
-        options_layout = QVBoxLayout()
-        
-        # Output format
-        format_row = QHBoxLayout()
-        format_label = QLabel("Output Format:")
-        format_label.setFixedWidth(150)
+        # Default format for new files + batch actions
+        actions_row = QHBoxLayout()
+        actions_row.addWidget(QLabel("New files:"))
         self.remux_default_output_format = QComboBox()
         self.remux_default_output_format.addItem("MKV", "mkv")
         self.remux_default_output_format.addItem("MP4", "mp4")
-        format_row.addWidget(format_label)
-        format_row.addWidget(self.remux_default_output_format)
-        format_row.addStretch()
-        options_layout.addLayout(format_row)
-        
-        options_group.setLayout(options_layout)
-        layout.addWidget(options_group)
-        
-        # Action buttons
-        buttons_layout = QHBoxLayout()
-        
-        remux_selected_btn = QPushButton("Remux Selected Files")
+        self.remux_default_output_format.setMaximumWidth(70)
+        actions_row.addWidget(self.remux_default_output_format)
+        actions_row.addSpacing(20)
+        remux_selected_btn = QPushButton("Remux Selected")
         remux_selected_btn.clicked.connect(self.remux_selected_files_action)
-        buttons_layout.addWidget(remux_selected_btn, 2)
-        
-        split_audio_btn = QPushButton("Split Audio Channels")
+        actions_row.addWidget(remux_selected_btn)
+        split_audio_btn = QPushButton("Split Audio")
         split_audio_btn.clicked.connect(self.split_audio_channels_batch)
-        buttons_layout.addWidget(split_audio_btn, 1)
+        actions_row.addWidget(split_audio_btn)
+        actions_row.addStretch()
+        layout.addLayout(actions_row)
         
-        layout.addLayout(buttons_layout)
-        
-        # Minimal log (single line)
-        log_label = QLabel("Status:")
-        log_label.setFont(QFont("Arial", 10, QFont.Bold))
-        layout.addWidget(log_label)
-        
+        # Status
         self.remux_log_output = QLineEdit()
         self.remux_log_output.setReadOnly(True)
         self.remux_log_output.setPlaceholderText("Remuxing operations will show status here (success and errors)")
@@ -4901,7 +4873,9 @@ class VideoProcessingApp(QMainWindow):
                 # Initialize file config
                 self.remux_file_configs[video_path] = {
                     'output_format': self.remux_default_output_format.currentData(),
-                    'subtitle_file': None,  # Will be auto-detected or manually set
+                    'subtitle_file': None,
+                    'subtitle_language': 'eng',
+                    'subtitle_default': True,
                     'selected_video_tracks': [],
                     'selected_audio_tracks': [],
                     'selected_subtitle_tracks': []
@@ -4923,11 +4897,10 @@ class VideoProcessingApp(QMainWindow):
         for i in range(root.childCount()):
             file_item = root.child(i)
             if file_item.data(0, 256) == str(video_path):
-                for j in range(file_item.childCount()):
-                    child = file_item.child(j)
-                    if child.data(0, 256) == "external_subtitle":
-                        child.setText(2, sub_path.name)
-                        break
+                sub_btn = self.remux_file_configs.get(video_path, {}).get('subtitle_btn')
+                if sub_btn:
+                    sub_btn.setText("✓ Set")
+                    sub_btn.setToolTip(sub_path.name)
                 return True
         return False
     
@@ -4947,14 +4920,64 @@ class VideoProcessingApp(QMainWindow):
         if not video_path.exists():
             return
         
-        # Create file item
+        config = self.remux_file_configs.get(video_path, {})
+        sub_path = config.get('subtitle_file')
+        
+        # Create file item - collapsed by default for cleaner view
         file_item = QTreeWidgetItem(self.remux_files_tree)
         file_item.setText(0, video_path.name)
         file_item.setText(1, "File")
-        file_item.setExpanded(True)
+        file_item.setExpanded(False)  # Tracks hidden until user expands
         file_item.setData(0, 256, str(video_path))  # Store path in data
         
-        # Analyze tracks
+        # Per-file controls on the file row
+        format_combo = QComboBox()
+        format_combo.addItem("MKV", "mkv")
+        format_combo.addItem("MP4", "mp4")
+        default_format = config.get('output_format', 'mkv')
+        format_index = format_combo.findData(default_format)
+        if format_index >= 0:
+            format_combo.setCurrentIndex(format_index)
+        format_combo.currentIndexChanged.connect(
+            lambda idx, path=video_path: self.update_file_output_format(path, format_combo.currentData()))
+        format_combo.setMaximumWidth(70)
+        self.remux_files_tree.setItemWidget(file_item, 2, format_combo)
+        
+        # Col 3 (Language): lang + default - matches column header
+        opts_row = QWidget()
+        opts_row.setMaximumWidth(130)  # Keep within Language column
+        opts_layout = QHBoxLayout(opts_row)
+        opts_layout.setContentsMargins(0, 0, 0, 0)
+        opts_layout.setSpacing(6)
+        lang_combo = QComboBox()
+        lang_combo.addItems(["eng", "und", "fra", "spa", "deu", "ita", "jpn", "kor", "por", "rus", "ara", "chi"])
+        lang_combo.setCurrentText(config.get('subtitle_language', 'eng'))
+        lang_combo.setMaximumWidth(52)
+        lang_combo.currentTextChanged.connect(
+            lambda lang, path=video_path: self._update_subtitle_lang(path, lang))
+        opts_layout.addWidget(lang_combo)
+        default_cb = QCheckBox("Default")
+        default_cb.setChecked(config.get('subtitle_default', True))
+        default_cb.stateChanged.connect(
+            lambda s, path=video_path: self._update_subtitle_default(path, s == 2))
+        opts_layout.addWidget(default_cb)
+        opts_layout.addStretch()
+        self.remux_files_tree.setItemWidget(file_item, 3, opts_row)
+        
+        # Col 4 (Channels): subtitle file button - file row repurposes Channels for this
+        sub_btn = QPushButton("+ Add" if not sub_path else "✓ Set")
+        sub_btn.setFixedWidth(52)
+        sub_btn.setToolTip(sub_path.name if sub_path else "Add subtitle file (SRT/VTT)")
+        sub_btn.clicked.connect(lambda checked, path=video_path: self.browse_subtitle_file(path))
+        self.remux_files_tree.setItemWidget(file_item, 4, sub_btn)
+        self.remux_file_configs[video_path]['subtitle_btn'] = sub_btn
+        
+        remux_btn = QPushButton("Remux")
+        remux_btn.setMaximumWidth(80)
+        remux_btn.clicked.connect(lambda checked, path=video_path: self.remux_single_file(path))
+        self.remux_files_tree.setItemWidget(file_item, 5, remux_btn)
+        
+        # Analyze tracks and add as children (visible when expanded)
         tracks = analyze_tracks(video_path)
         
         # Add video tracks
@@ -4964,7 +4987,7 @@ class VideoProcessingApp(QMainWindow):
                 track_id = vid_track.get('track_id', 0)
                 codec = vid_track.get('codec', 'unknown')
                 res = vid_track.get('resolution', 'unknown')
-                track_item.setText(0, f"Video Track {track_id}")
+                track_item.setText(0, f"Video {track_id}")
                 track_item.setText(1, "Video")
                 track_item.setText(2, codec)
                 track_item.setText(3, vid_track.get('language', 'unknown'))
@@ -4981,7 +5004,7 @@ class VideoProcessingApp(QMainWindow):
                 codec = aud_track.get('codec', 'unknown')
                 channels = aud_track.get('channels', 0)
                 sample_rate = aud_track.get('sample_rate', 'unknown')
-                track_item.setText(0, f"Audio Track {track_id}")
+                track_item.setText(0, f"Audio {track_id}")
                 track_item.setText(1, "Audio")
                 track_item.setText(2, codec)
                 track_item.setText(3, aud_track.get('language', 'unknown'))
@@ -4996,7 +5019,7 @@ class VideoProcessingApp(QMainWindow):
                 track_item = QTreeWidgetItem(file_item)
                 track_id = sub_track.get('track_id', 0)
                 format_type = sub_track.get('format', sub_track.get('codec', 'unknown'))
-                track_item.setText(0, f"Subtitle Track {track_id}")
+                track_item.setText(0, f"Subtitle {track_id}")
                 track_item.setText(1, "Subtitle")
                 track_item.setText(2, format_type)
                 track_item.setText(3, sub_track.get('language', 'unknown'))
@@ -5004,45 +5027,6 @@ class VideoProcessingApp(QMainWindow):
                 # Add checkbox
                 track_item.setCheckState(0, 0)  # Unchecked by default (external subs preferred)
                 track_item.setData(0, 256, f"subtitle:{track_id}")  # Store track info
-        
-        # Add external subtitle file option
-        subtitle_item = QTreeWidgetItem(file_item)
-        subtitle_item.setText(0, "External Subtitle File")
-        subtitle_item.setText(1, "External")
-        subtitle_item.setText(2, "SRT/VTT")
-        subtitle_item.setText(3, "")
-        subtitle_item.setText(4, "")
-        # Add browse button in Actions column
-        browse_sub_btn = QPushButton("Browse...")
-        browse_sub_btn.setMaximumWidth(80)
-        browse_sub_btn.clicked.connect(lambda checked, path=video_path: self.browse_subtitle_file(path))
-        self.remux_files_tree.setItemWidget(subtitle_item, 5, browse_sub_btn)
-        subtitle_item.setData(0, 256, "external_subtitle")
-        
-        # Add per-file output format
-        format_item = QTreeWidgetItem(file_item)
-        format_item.setText(0, "Output Format")
-        format_item.setText(1, "Option")
-        format_combo = QComboBox()
-        format_combo.addItem("MKV", "mkv")
-        format_combo.addItem("MP4", "mp4")
-        # Set current format
-        default_format = self.remux_file_configs[video_path]['output_format']
-        format_index = format_combo.findData(default_format)
-        if format_index >= 0:
-            format_combo.setCurrentIndex(format_index)
-        format_combo.currentIndexChanged.connect(lambda idx, path=video_path: self.update_file_output_format(path, format_combo.currentData()))
-        self.remux_files_tree.setItemWidget(format_item, 2, format_combo)
-        format_item.setData(0, 256, "output_format")
-        
-        # Add remux button for this file
-        remux_file_item = QTreeWidgetItem(file_item)
-        remux_file_item.setText(0, "Actions")
-        remux_file_btn = QPushButton("Remux This File")
-        remux_file_btn.setMaximumWidth(120)
-        remux_file_btn.clicked.connect(lambda checked, path=video_path: self.remux_single_file(path))
-        self.remux_files_tree.setItemWidget(remux_file_item, 5, remux_file_btn)
-        remux_file_item.setData(0, 256, "remux_action")
     
     def remove_remux_files(self):
         """Remove selected files from the remux selection."""
@@ -5101,23 +5085,25 @@ class VideoProcessingApp(QMainWindow):
         
         if subtitle_file:
             self.remux_file_configs[video_path]['subtitle_file'] = Path(subtitle_file)
-            # Update the tree item text to show selected file
-            root = self.remux_files_tree.invisibleRootItem()
-            for i in range(root.childCount()):
-                file_item = root.child(i)
-                if file_item.data(0, 256) == str(video_path):
-                    # Find the external subtitle item
-                    for j in range(file_item.childCount()):
-                        child = file_item.child(j)
-                        if child.data(0, 256) == "external_subtitle":
-                            child.setText(2, Path(subtitle_file).name)
-                            break
-                    break
+            sub_btn = self.remux_file_configs.get(video_path, {}).get('subtitle_btn')
+            if sub_btn:
+                sub_btn.setText("✓ Set")
+                sub_btn.setToolTip(Path(subtitle_file).name)
     
     def update_file_output_format(self, video_path: Path, output_format: str):
         """Update output format for a specific file."""
         if video_path in self.remux_file_configs:
             self.remux_file_configs[video_path]['output_format'] = output_format
+    
+    def _update_subtitle_lang(self, video_path: Path, lang: str):
+        """Update subtitle language for a file."""
+        if video_path in self.remux_file_configs:
+            self.remux_file_configs[video_path]['subtitle_language'] = lang
+    
+    def _update_subtitle_default(self, video_path: Path, is_default: bool):
+        """Update subtitle default flag for a file."""
+        if video_path in self.remux_file_configs:
+            self.remux_file_configs[video_path]['subtitle_default'] = is_default
     
     def remux_single_file(self, video_path: Path):
         """Remux a single file with its configured tracks and options."""
@@ -5163,9 +5149,12 @@ class VideoProcessingApp(QMainWindow):
         
         # Remux the file
         self.remux_log_output.setText(f"Remuxing {video_path.name}...")
+        sub_lang = config.get('subtitle_language', 'eng')
+        sub_default = config.get('subtitle_default', True)
         success = self.remux_file_with_tracks(
-            video_path, output_format, selected_video, selected_audio, 
-            selected_subtitles, external_subtitle
+            video_path, output_format, selected_video, selected_audio,
+            selected_subtitles, external_subtitle,
+            subtitle_language=sub_lang, subtitle_default=sub_default
         )
         
         if success:
@@ -5177,10 +5166,12 @@ class VideoProcessingApp(QMainWindow):
     
     def remux_file_with_tracks(self, video_path: Path, output_format: str,
                                video_tracks: List[int], audio_tracks: List[int],
-                               subtitle_tracks: List[int], external_subtitle: Path = None) -> bool:
+                               subtitle_tracks: List[int], external_subtitle: Path = None,
+                               subtitle_language: str = 'eng', subtitle_default: bool = True) -> bool:
         """Remux a file with specific track selections.
         
         Note: Track IDs from analyze_tracks correspond to FFmpeg stream indices.
+        subtitle_language and subtitle_default apply to the external subtitle when present.
         """
         if not video_path.exists():
             return False
@@ -5210,6 +5201,11 @@ class VideoProcessingApp(QMainWindow):
             cmd.extend(["-map", "1:0"])  # Map first stream from second input
             subtitle_format = "srt" if external_subtitle.suffix.lower() == ".srt" else "vtt"
             cmd.extend(["-c:s", subtitle_format])
+            # External sub is at index len(subtitle_tracks) among subtitle streams
+            sub_idx = len(subtitle_tracks)
+            cmd.extend(["-metadata:s:s:" + str(sub_idx), f"language={subtitle_language}"])
+            if subtitle_default:
+                cmd.extend(["-disposition:s:s:" + str(sub_idx), "default"])
         
         # If no tracks explicitly selected, include all tracks (default)
         if not video_tracks and not audio_tracks and not subtitle_tracks:
@@ -5223,6 +5219,11 @@ class VideoProcessingApp(QMainWindow):
                 cmd.extend(["-map", "1:0"])  # Map subtitle from external file
                 subtitle_format = "srt" if external_subtitle.suffix.lower() == ".srt" else "vtt"
                 cmd.extend(["-c", "copy", "-c:s", subtitle_format])
+                tracks_info = analyze_tracks(video_path)
+                sub_idx = len(tracks_info.get('subtitles', []))
+                cmd.extend(["-metadata:s:s:" + str(sub_idx), f"language={subtitle_language}"])
+                if subtitle_default:
+                    cmd.extend(["-disposition:s:s:" + str(sub_idx), "default"])
             else:
                 # Check for auto-detected subtitle file
                 folder_path = video_path.parent
@@ -5548,8 +5549,8 @@ class VideoProcessingApp(QMainWindow):
         app_name_label.setFont(QFont("Arial", 30, QFont.Bold))
         app_name_label.setStyleSheet("""
             background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                stop:0 #df4300, stop:0.16 #f48a32, stop:0.33 #ffab68,
-                stop:0.5 white, stop:0.66 #dc7bb3, stop:0.83 #c46ea1, stop:1 #b42075);
+                stop:0 #df4300, stop:0.20 #f48a32, stop:0.33 #ffab68,
+                stop:0.5 white, stop:0.66 #dc7bb3, stop:0.80 #c46ea1, stop:1 #b42075);
             padding: 8px 16px;
             border-radius: 5px;
         """)
@@ -5558,7 +5559,7 @@ class VideoProcessingApp(QMainWindow):
         
         # Version number below title
         version_label = QLabel(f'version {__version__} "{VERSION_CODENAME}"')
-        version_label.setFont(QFont("Arial", 18))
+        version_label.setFont(QFont("Arial", 13))
         version_label.setStyleSheet("color: #999; font-style: italic;")
         header_left_layout.addWidget(version_label)
         
