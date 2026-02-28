@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [10.3.1-alpha.2] - 2026-02-28
+## [10.3.2] - 2026-02-28
 
 ### Added
 - Downloads directory as third subtitle search location when burning subtitles
@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Setup Wizard crash on startup (QCheckBox setWordWrap AttributeError)
 - FFmpeg subtitles filter failing with absolute paths (e.g. videos outside VideoProcessing)
 
-## [10.3.1-alpha.1] - 2026-02-28
+## [10.3.1] - 2026-02-28
 
 ### Added
 - Feature selection step in Setup Wizard
@@ -28,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Media directory support with backward-compatible icon resolution
 
 ### Changed
+- Batch download debug log now written to `VideoProcessing/logs` instead of the downloads folder.
+- `get_logs_dir()` helper for the logs directory.
 - Reorganized media assets into `media/`
 - Improved debug logging (ANSI stripping and progress filtering)
 - Translator now uses `--batch-size 30`
@@ -36,21 +38,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 - Manual “Add videos…” button in Batch Download tab
+- - `batchdownloader_guide.md`; content merged into the external rentry page. README Documentation section and build workflow updated accordingly.
 
 ### Fixed
 - Prevent transcription when language is set to "auto"
 - Improved missing dependency messages for long transcription
-
-## [10.3.1] - 2026-02-25
-
-### Changed
-
-- Batch download debug log now written to `VideoProcessing/logs` instead of the downloads folder.
-- `get_logs_dir()` helper for the logs directory.
-
-### Removed
-
-- `batchdownloader_guide.md`; content merged into the external rentry page. README Documentation section and build workflow updated accordingly.
 
 ## [10.3.0] - 2026-02-25
 
