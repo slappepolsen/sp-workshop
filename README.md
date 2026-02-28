@@ -62,6 +62,7 @@ Select **Source code (zip)** under Assets.
    pip install -r requirements.txt
    ```
 4b. (Optional) For "Transcribe longer video" (files over ~5 min): `pip install torch torchaudio torchcodec pysrt openai-whisper`
+
 5. Install FFmpeg (required)
    ```bash
    brew install ffmpeg
@@ -94,6 +95,7 @@ Select **Source code (zip)** under Assets.
    pip install -r requirements.txt
    ```
 4b. (Optional) For "Transcribe longer video" (files over ~5 min): `pip install torch torchaudio torchcodec pysrt openai-whisper`
+
 5. Install FFmpeg and add it to PATH
 6. Install N_m3u8DL-RE (optional, for downloads)
 7. Run the app
@@ -101,6 +103,7 @@ Select **Source code (zip)** under Assets.
    python app.py
    ```
    For older versions (before 10.0.0), the main file is called  `video_app_v8.py`. Use `python3 video_app_v8.py` or rename it to `app.py`.
+
 ---
 
 ## Linux
@@ -115,6 +118,7 @@ Select **Source code (zip)** under Assets.
    pip install -r requirements.txt
    ```
 2b. (Optional) For "Transcribe longer video" (files over ~5 min): `pip install torch torchaudio torchcodec pysrt openai-whisper`
+
 3. Install FFmpeg
    ```bash
    sudo apt install ffmpeg
