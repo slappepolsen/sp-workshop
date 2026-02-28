@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [10.3.0-alpha.2] - 2026-02-28
+## [10.3.1-alpha.2] - 2026-02-28
 
 ### Added
 - Downloads directory as third subtitle search location when burning subtitles
