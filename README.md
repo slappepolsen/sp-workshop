@@ -61,6 +61,7 @@ Select **Source code (zip)** under Assets.
    ```bash
    pip install -r requirements.txt
    ```
+4b. (Optional) For "Transcribe longer video" (files over ~5 min): `pip install torch torchaudio torchcodec pysrt openai-whisper`
 5. Install FFmpeg (required)
    ```bash
    brew install ffmpeg
@@ -92,6 +93,7 @@ Select **Source code (zip)** under Assets.
    ```bash
    pip install -r requirements.txt
    ```
+4b. (Optional) For "Transcribe longer video" (files over ~5 min): `pip install torch torchaudio torchcodec pysrt openai-whisper`
 5. Install FFmpeg and add it to PATH
 6. Install N_m3u8DL-RE (optional, for downloads)
 7. Run the app
@@ -112,6 +114,7 @@ Select **Source code (zip)** under Assets.
    ```bash
    pip install -r requirements.txt
    ```
+2b. (Optional) For "Transcribe longer video" (files over ~5 min): `pip install torch torchaudio torchcodec pysrt openai-whisper`
 3. Install FFmpeg
    ```bash
    sudo apt install ffmpeg
@@ -160,7 +163,7 @@ The whole point of this is to make WLW/sapphic/lesbian content accessible for ev
 
 SP Workshop supports three main workflows depending on your starting material.
 
-![Workflow Diagrams](flowcharts.png)
+![Workflow Diagrams](media/flowcharts.png)
 
 *From left to right: Workflow 1 (External Video + Separate SRT), Workflow 2 (Batch Downloader), Workflow 3 (Whisper Transcription)*
 
@@ -173,11 +176,13 @@ SP Workshop supports three main workflows depending on your starting material.
 
 ## Troubleshooting
 
+- **App won't start** (Qt platform plugin / "cocoa"): Run `pip install --force-reinstall PyQt5` in your venv. If that doesn't help, try Python 3.11 or 3.12 instead of 3.14.
 - **PyQt5 not found**: `pip install PyQt5`
 - **FFmpeg not found**: Install FFmpeg and ensure it is in PATH
 - **N_m3u8DL-RE not found**: Download and add to PATH
 - **Translation fails**: Check API key and internet connection
 - **Whisper issues**: The app uses a Python venv (~/whisper-env) for transcription. Ensure FFmpeg is installed.
+- **Transcribe longer video fails** (torch/torchaudio/torchcodec/pysrt): The anti-hallucination option needs extra packages. In your project venv, run: `pip install torch torchaudio torchcodec pysrt openai-whisper`
 
 Check the app log window for detailed error messages.
 

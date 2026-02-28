@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [10.3.1-alpha.1] - 2026-02-28
+
+### Added
+- Feature selection step in Setup Wizard
+- Automatic pip installer (non-blocking UI) for optional dependencies
+- Quality selector (480p/720p/1080p/4K/best) for batch downloads
+- Version-aware setup wizard re-run on app update
+- Detection of previous installation with optional reset
+- Support for torch, torchaudio, torchcodec for long transcription
+- Media directory support with backward-compatible icon resolution
+
+### Changed
+- Reorganized media assets into `media/`
+- Improved debug logging (ANSI stripping and progress filtering)
+- Translator now uses `--batch-size 30`
+- Setup wizard now feature-aware for required dependencies
+- Updated README with extended transcription dependency instructions
+
+### Removed
+- Manual “Add videos…” button in Batch Download tab
+
+### Fixed
+- Prevent transcription when language is set to "auto"
+- Improved missing dependency messages for long transcription
+
 ## [10.3.1] - 2026-02-25
 
 ### Changed

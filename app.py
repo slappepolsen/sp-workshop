@@ -4,7 +4,7 @@ Video Processing GUI Application
 A PyQt5 desktop app that provides a button-based interface for all video processing scripts.
 """
 
-__version__ = "10.3.1"
+__version__ = "10.3.0-alpha.1"
 VERSION_CODENAME = "Hallucination"
 
 import sys
@@ -222,6 +222,13 @@ def save_config(config: Dict):
         print(f"Error saving config: {e}")
 
 
+def _has_existing_setup() -> bool:
+    """Check if VideoProcessing folder and config file exist (returning user)."""
+    vp = Path.home() / "VideoProcessing"
+    config_path = vp / "config" / "settings.json"
+    return vp.exists() and config_path.exists()
+
+
 # ============================================================================
 # Directory Management (Fixed Structure)
 # ============================================================================
@@ -274,6 +281,16 @@ def open_folder_in_explorer(folder_path: Path):
         subprocess.run(["xdg-open", folder_str])
 
 
+def _resolve_media_path(filename: str) -> Optional[Path]:
+    """Return path to media file. Checks root first (older layouts), then media/ (new layout)."""
+    script_dir = Path(__file__).parent
+    for base in (script_dir, script_dir / "media"):
+        p = base / filename
+        if p.exists():
+            return p
+    return None
+
+
 def get_app_icon() -> QIcon:
     """Load application icon, preferring .icns on macOS, with fallback to PNG and default.
     
@@ -281,13 +298,11 @@ def get_app_icon() -> QIcon:
     and convert it to .icns using the create_icon.sh script. The icon should be at least
     1024x1024 pixels for best quality.
     """
-    script_dir = Path(__file__).parent
-    
     # On macOS, prefer .icns format for better integration
     # Use absolute path to ensure macOS can find it properly
     if sys.platform == "darwin":
-        icns_path = script_dir / "icon.icns"
-        if icns_path.exists():
+        icns_path = _resolve_media_path("icon.icns")
+        if icns_path:
             icon = QIcon(str(icns_path.absolute()))
             # Ensure icon is valid and has sizes
             if not icon.isNull():
@@ -295,12 +310,12 @@ def get_app_icon() -> QIcon:
     
     # Fallback to PNG (works on all platforms)
     # Try transparent version first if it exists
-    transparent_png = script_dir / "icon_transparent.png"
-    if transparent_png.exists():
+    transparent_png = _resolve_media_path("icon_transparent.png")
+    if transparent_png:
         return QIcon(str(transparent_png.absolute()))
     
-    png_path = script_dir / "icon.png"
-    if png_path.exists():
+    png_path = _resolve_media_path("icon.png")
+    if png_path:
         return QIcon(str(png_path.absolute()))
     
     # Fallback to default PyQt5 icon
@@ -804,6 +819,11 @@ def _url_first_args(args: List[str]) -> List[str]:
     return urls + rest
 
 
+def _strip_ansi(text: str) -> str:
+    """Remove ANSI escape sequences to reduce log file size."""
+    return re.sub(r'\x1b\[[0-9;]*m', '', text)
+
+
 # ============================================================================
 # Script Wrappers
 # ============================================================================
@@ -816,6 +836,7 @@ def download_episodes(
     use_s01e: bool = False,
     season: int = 1,
     ep_spec: str = "1",
+    select_video: str = "best",
     progress_callback=None,
     log_callback=None,
 ) -> bool:
@@ -906,7 +927,7 @@ def download_episodes(
                 "--check-segments-count", "False",
                 "--save-name", save_name,
                 "--save-dir", str(output_dir),
-                "--select-video", "best",
+                "--select-video", select_video,
                 "--select-audio", "all",
                 "--select-subtitle", "all",
                 "-M", "mkv",
@@ -940,8 +961,12 @@ def download_episodes(
                     line_output = process.stdout.readline()
                     if not line_output:
                         break
-                    debug_file.write(line_output)
-                    debug_file.flush()
+                    # Skip progress bar lines (repetitive, cause most of the bloat)
+                    is_progress_bar = '━' in line_output
+                    if not is_progress_bar:
+                        cleaned = _strip_ansi(line_output)
+                        debug_file.write(cleaned)
+                        debug_file.flush()
                     line_output = line_output.strip()
                     if line_output:
                         output_lines.append(line_output)
@@ -1266,7 +1291,7 @@ def translate_subtitles(selected_srt_files: List[Path], target_language: str = "
                     pair_index += 1
                     continue
 
-                base_cmd = ["translate", "-i", str(og_file), "-l", target_language, "-o", str(srt_file), "--skip-upgrade"]
+                base_cmd = ["translate", "-i", str(og_file), "-l", target_language, "-o", str(srt_file), "--skip-upgrade", "--batch-size", "30"]
                 if secondary_key:
                     base_cmd.extend(["-k2", secondary_key])
 
@@ -2282,7 +2307,7 @@ def transcribe_video_vad(
 ) -> bool:
     """Transcribe a long video using Silero VAD + Whisper per segment to reduce hallucination.
     Best for files over ~5 minutes. Writes SRT next to the input file.
-    Requires: torch, pysrt, openai-whisper (pip install torch pysrt openai-whisper).
+    Requires: torch, torchaudio, torchcodec, pysrt, openai-whisper (pip install torch torchaudio torchcodec pysrt openai-whisper).
     """
     from decimal import Decimal
 
@@ -2291,7 +2316,7 @@ def transcribe_video_vad(
         import pysrt
     except ImportError as e:
         if log_callback:
-            log_callback(f"Missing dependency: {e}. Install with: pip install torch pysrt openai-whisper")
+            log_callback(f"Missing dependency: {e}. Install with: pip install torch torchaudio torchcodec pysrt openai-whisper")
         return False
 
     if not video_path.exists():
@@ -2561,6 +2586,38 @@ class ScriptWorker(QThread):
             self.finished.emit(False)
 
 
+class PipInstallWorker(QThread):
+    """Worker thread for pip install without blocking UI."""
+    finished = pyqtSignal(bool)
+    log_message = pyqtSignal(str)
+    
+    def __init__(self, packages: List[str], parent=None):
+        super().__init__(parent)
+        self.packages = packages
+    
+    def run(self):
+        try:
+            self.log_message.emit(f"Installing: {' '.join(self.packages)}")
+            result = subprocess.run(
+                [sys.executable, "-m", "pip", "install"] + self.packages,
+                capture_output=True,
+                text=True,
+                timeout=600,
+            )
+            if result.returncode != 0:
+                self.log_message.emit(f"pip install failed: {result.stderr or result.stdout}")
+                self.finished.emit(False)
+            else:
+                self.log_message.emit("✓ Installation complete")
+                self.finished.emit(True)
+        except subprocess.TimeoutExpired:
+            self.log_message.emit("Installation timed out")
+            self.finished.emit(False)
+        except Exception as e:
+            self.log_message.emit(f"Error: {e}")
+            self.finished.emit(False)
+
+
 # ============================================================================
 # Setup Checking Functions
 # ============================================================================
@@ -2748,6 +2805,7 @@ class SetupWizard(QDialog):
         self.setMinimumHeight(550)
         self.config = load_config()
         self.current_step = 0
+        self._start_fresh_checked = False
         
         # Check installation status
         self.pyqt5_installed = check_python_package("PyQt5")
@@ -2757,9 +2815,14 @@ class SetupWizard(QDialog):
         self.vlc_installed = check_app_exists("VLC")
         self.lossless_installed = check_app_exists("LosslessCut")
         self.subtitle_edit_installed = check_app_exists("SubtitleEdit")
+        self.transcribe_long_installed = all(
+            check_python_package(p) for p in ("torch", "torchaudio", "torchcodec", "pysrt")
+        )
         
-        self.all_required_installed = (self.pyqt5_installed and self.gst_installed and 
-                                       self.ffmpeg_installed and self.n_m3u8_installed)
+        self.want_batch_download = True
+        self.want_translator = True
+        self.want_transcribe_long = True
+        self.all_required_installed = self._compute_all_required_installed()
         
         layout = QVBoxLayout()
         layout.setSpacing(10)
@@ -2777,7 +2840,7 @@ class SetupWizard(QDialog):
         layout.addWidget(title_bar)
         
         # Step indicator
-        self.step_label = QLabel("Step 1 of 4")
+        self.step_label = QLabel("Step 1 of 5")
         self.step_label.setFont(QFont("Arial", 9))
         self.step_label.setStyleSheet("color: #666;")
         layout.addWidget(self.step_label)
@@ -2785,6 +2848,7 @@ class SetupWizard(QDialog):
         # Stacked widget for different steps
         self.stacked = QStackedWidget()
         self.stacked.addWidget(self.create_welcome_step())
+        self.stacked.addWidget(self.create_features_step())
         self.stacked.addWidget(self.create_required_step())
         self.stacked.addWidget(self.create_optional_step())
         self.stacked.addWidget(self.create_final_step())
@@ -2812,6 +2876,104 @@ class SetupWizard(QDialog):
         
         self.setLayout(layout)
         self.update_navigation()
+    
+    def _compute_all_required_installed(self) -> bool:
+        """True if all required deps for selected features are installed."""
+        if not self.pyqt5_installed or not self.ffmpeg_installed:
+            return False
+        if self.want_batch_download and not self.n_m3u8_installed:
+            return False
+        if self.want_translator and not self.gst_installed:
+            return False
+        if self.want_transcribe_long and not self.transcribe_long_installed:
+            return False
+        return True
+    
+    def showEvent(self, event):
+        """On first show, check for existing setup and offer start fresh."""
+        super().showEvent(event)
+        if self._start_fresh_checked:
+            return
+        self._start_fresh_checked = True
+        if not _has_existing_setup():
+            return
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Previous Installation Detected")
+        msg.setText(
+            "We detected a previous SP Workshop installation.\n\n"
+            "Do you want to keep your current setup or start fresh with defaults?"
+        )
+        keep_btn = msg.addButton("Keep", QMessageBox.YesRole)
+        fresh_btn = msg.addButton("Start fresh", QMessageBox.NoRole)
+        msg.setDefaultButton(keep_btn)
+        msg.exec_()
+        if msg.clickedButton() == fresh_btn:
+            config_path = get_config_path()
+            backup_path = config_path.parent / "settings.json.bak"
+            try:
+                shutil.copy2(config_path, backup_path)
+            except Exception as e:
+                QMessageBox.warning(self, "Backup Failed", f"Could not backup config: {e}")
+                return
+            default_config = {
+                "base_dir": str(Path.home() / "VideoProcessing"),
+                "watermark_720p": str(Path.home() / "VideoProcessing" / "config" / "watermark_720p.png"),
+                "watermark_1080p": str(Path.home() / "VideoProcessing" / "config" / "watermark_1080p.png"),
+                "api_key": os.getenv("GST_API_KEY", ""),
+                "api_keys": [],
+                "download_resolution": "1080",
+                "ffmpeg_preset": "medium",
+                "ffmpeg_path": "",
+                "setup_complete": False,
+                "use_watermarks": True,
+                "whisper_output_format": "srt",
+                "use_iso639_suffixes": False,
+                "whisper_options": {"extra_args": "", "extra_args_parsed": ""}
+            }
+            save_config(default_config)
+            self.config = load_config()
+    
+    def create_features_step(self) -> QWidget:
+        """Create feature selection step."""
+        widget = QWidget()
+        layout = QVBoxLayout()
+        layout.setSpacing(15)
+        
+        title = QLabel("Which features do you plan to use?")
+        title.setFont(QFont("Arial", 12, QFont.Bold))
+        layout.addWidget(title)
+        
+        def on_feature_changed():
+            self.want_batch_download = self.batch_cb.isChecked()
+            self.want_translator = self.translator_cb.isChecked()
+            self.want_transcribe_long = self.transcribe_long_cb.isChecked()
+            self.all_required_installed = self._compute_all_required_installed()
+            if hasattr(self, "required_content"):
+                self.required_content.setHtml(self.get_required_html())
+            if hasattr(self, "install_buttons_layout"):
+                self._refresh_install_buttons()
+        
+        self.batch_cb = QCheckBox("Batch download episodes (needs N_m3u8DL-RE)")
+        self.batch_cb.setChecked(self.want_batch_download)
+        self.batch_cb.stateChanged.connect(lambda: on_feature_changed())
+        layout.addWidget(self.batch_cb)
+        
+        self.translator_cb = QCheckBox("Translate subtitles (needs gemini-srt-translator / gst)")
+        self.translator_cb.setChecked(self.want_translator)
+        self.translator_cb.stateChanged.connect(lambda: on_feature_changed())
+        layout.addWidget(self.translator_cb)
+        
+        self.transcribe_long_cb = QCheckBox(
+            "Transcribe long videos (files over ~5 min; needs torch, torchaudio, torchcodec, pysrt, openai-whisper — ~2–3 GB download)"
+        )
+        self.transcribe_long_cb.setChecked(self.want_transcribe_long)
+        self.transcribe_long_cb.stateChanged.connect(lambda: on_feature_changed())
+        self.transcribe_long_cb.setWordWrap(True)
+        layout.addWidget(self.transcribe_long_cb)
+        
+        layout.addStretch()
+        widget.setLayout(layout)
+        return widget
     
     def create_welcome_step(self) -> QWidget:
         """Create welcome/intro step."""
@@ -2846,13 +3008,75 @@ class SetupWizard(QDialog):
         title.setFont(QFont("Arial", 12, QFont.Bold))
         layout.addWidget(title)
         
-        content = QTextBrowser()
-        content.setOpenExternalLinks(True)
-        content.setHtml(self.get_required_html())
-        layout.addWidget(content)
+        self.required_content = QTextBrowser()
+        self.required_content.setOpenExternalLinks(True)
+        self.required_content.setHtml(self.get_required_html())
+        layout.addWidget(self.required_content)
+        
+        # Install buttons for missing pip packages
+        self.install_buttons_layout = QHBoxLayout()
+        self._refresh_install_buttons()
+        layout.addLayout(self.install_buttons_layout)
         
         widget.setLayout(layout)
         return widget
+    
+    def _refresh_status_after_install(self):
+        """Re-check installation status after pip install."""
+        self.gst_installed = find_gst_command() is not None
+        self.transcribe_long_installed = all(
+            check_python_package(p) for p in ("torch", "torchaudio", "torchcodec", "pysrt")
+        )
+        self.all_required_installed = self._compute_all_required_installed()
+        self.required_content.setHtml(self.get_required_html())
+        self._refresh_install_buttons()
+    
+    def _refresh_install_buttons(self):
+        """Populate install buttons for missing pip packages."""
+        while self.install_buttons_layout.count():
+            item = self.install_buttons_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        if self.want_translator and not self.gst_installed:
+            btn = QPushButton("Install gemini-srt-translator")
+            btn.clicked.connect(lambda: self._do_pip_install(["gemini-srt-translator"]))
+            self.install_buttons_layout.addWidget(btn)
+        if self.want_transcribe_long and not self.transcribe_long_installed:
+            btn = QPushButton("Install transcribe-long deps (~2–3 GB)")
+            btn.clicked.connect(lambda: self._do_pip_install(
+                ["torch", "torchaudio", "torchcodec", "pysrt", "openai-whisper"]
+            ))
+            self.install_buttons_layout.addWidget(btn)
+    
+    def _do_pip_install(self, packages: List[str]):
+        """Run pip install in a worker and show progress."""
+        if "torch" in packages:
+            reply = QMessageBox.question(
+                self,
+                "Large Download",
+                "This will download approximately 2–3 GB. Continue?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Installing...")
+        dlg.setMinimumWidth(400)
+        layout = QVBoxLayout()
+        log = QTextEdit()
+        log.setReadOnly(True)
+        layout.addWidget(log)
+        dlg.setLayout(layout)
+        worker = PipInstallWorker(packages)
+        worker.log_message.connect(lambda m: log.append(m))
+        def on_finished(ok):
+            dlg.accept()
+            if ok:
+                self._refresh_status_after_install()
+        worker.finished.connect(on_finished)
+        worker.start()
+        dlg.exec_()
     
     def create_optional_step(self) -> QWidget:
         """Create step showing optional components."""
@@ -2930,21 +3154,14 @@ class SetupWizard(QDialog):
         return widget
     
     def get_required_html(self) -> str:
-        """Generate HTML for required components."""
+        """Generate HTML for required components (feature-aware)."""
         html = "<div style='line-height: 1.6;'>"
         
-        # Python Packages
-        html += "<h4 style='color: #df4300; margin-top: 10px;'>Python Packages:</h4>"
+        html += "<h4 style='color: #df4300; margin-top: 10px;'>Core (always required):</h4>"
         html += f"<p><b>{'✓ INSTALLED' if self.pyqt5_installed else '✗ NOT FOUND'}</b> - PyQt5</p>"
         if not self.pyqt5_installed:
             html += "<p style='margin-left: 20px; color: #666;'>Install: <code>pip install PyQt5</code></p>"
         
-        html += f"<p><b>{'✓ INSTALLED' if self.gst_installed else '✗ NOT FOUND'}</b> - gemini-srt-translator</p>"
-        if not self.gst_installed:
-            html += "<p style='margin-left: 20px; color: #666;'>Install: <code>pip install gemini-srt-translator</code></p>"
-        
-        # External Programs
-        html += "<h4 style='color: #f48a32; margin-top: 15px;'>External Programs:</h4>"
         html += f"<p><b>{'✓ INSTALLED' if self.ffmpeg_installed else '✗ NOT FOUND'}</b> - FFmpeg</p>"
         if not self.ffmpeg_installed:
             system = platform.system()
@@ -2958,10 +3175,24 @@ class SetupWizard(QDialog):
                 html += "<p style='margin-left: 20px; color: #666;'>Install: <code>sudo apt install ffmpeg</code> (Debian/Ubuntu)<br>"
                 html += "or <code>sudo dnf install ffmpeg</code> (Fedora)</p>"
         
-        html += f"<p><b>{'✓ INSTALLED' if self.n_m3u8_installed else '✗ NOT FOUND'}</b> - N_m3u8DL-RE</p>"
-        if not self.n_m3u8_installed:
-            html += "<p style='margin-left: 20px; color: #666;'>Download: <a href='https://github.com/nilaoda/N_m3u8DL-RE/releases'>GitHub Releases</a><br>"
-            html += "Extract and add to PATH</p>"
+        if self.want_batch_download:
+            html += "<h4 style='color: #f48a32; margin-top: 15px;'>Batch Download:</h4>"
+            html += f"<p><b>{'✓ INSTALLED' if self.n_m3u8_installed else '✗ NOT FOUND'}</b> - N_m3u8DL-RE</p>"
+            if not self.n_m3u8_installed:
+                html += "<p style='margin-left: 20px; color: #666;'>Download: <a href='https://github.com/nilaoda/N_m3u8DL-RE/releases'>GitHub Releases</a><br>"
+                html += "Extract and add to PATH</p>"
+        
+        if self.want_translator:
+            html += "<h4 style='color: #f48a32; margin-top: 15px;'>Translator:</h4>"
+            html += f"<p><b>{'✓ INSTALLED' if self.gst_installed else '✗ NOT FOUND'}</b> - gemini-srt-translator</p>"
+            if not self.gst_installed:
+                html += "<p style='margin-left: 20px; color: #666;'>Install: <code>pip install gemini-srt-translator</code></p>"
+        
+        if self.want_transcribe_long:
+            html += "<h4 style='color: #f48a32; margin-top: 15px;'>Transcribe long videos (~2–3 GB download):</h4>"
+            html += f"<p><b>{'✓ INSTALLED' if self.transcribe_long_installed else '✗ NOT FOUND'}</b> - torch, torchaudio, torchcodec, pysrt, openai-whisper</p>"
+            if not self.transcribe_long_installed:
+                html += "<p style='margin-left: 20px; color: #666;'>Install: <code>pip install torch torchaudio torchcodec pysrt openai-whisper</code></p>"
         
         html += "</div>"
         return html
@@ -3026,12 +3257,14 @@ class SetupWizard(QDialog):
     def skip_setup(self):
         """Skip setup and mark as complete."""
         self.config["setup_complete"] = True
+        self.config["last_setup_version"] = __version__
         save_config(self.config)
         self.reject()
     
     def complete_setup(self):
         """Complete setup and mark as done."""
         self.config["setup_complete"] = True
+        self.config["last_setup_version"] = __version__
         save_config(self.config)
         self.accept()
 
@@ -3942,8 +4175,9 @@ class VideoProcessingApp(QMainWindow):
         # Set window icon
         self.setWindowIcon(get_app_icon())
         
-        # Show setup wizard on first launch
-        if not self.config.get("setup_complete", False):
+        # Show setup wizard on first launch or first run of this version
+        last_ver = self.config.get("last_setup_version", "")
+        if not self.config.get("setup_complete", False) or last_ver != __version__:
             wizard = SetupWizard(self)
             wizard.exec_()
         
@@ -4345,7 +4579,14 @@ class VideoProcessingApp(QMainWindow):
         
         # Get language from combo
         language_code = self.transcribe_language_combo.currentData()
-        
+        if language_code == "auto":
+            QMessageBox.warning(
+                self,
+                "Select Language",
+                "Please select a language before transcribing."
+            )
+            return
+
         # Get model from combo (saved to config automatically)
         model = self.transcribe_model_combo.currentText()
         
@@ -4384,8 +4625,7 @@ class VideoProcessingApp(QMainWindow):
         output_format = self.transcribe_format_combo.currentData()
         
         self.transcribe_log(f"Starting transcription of: {video_path.name}")
-        lang_display = "(detected from audio)" if language_code == "auto" else language_code
-        self.transcribe_log(f"Language: {lang_display}, Model: {model}, Format: {output_format}")
+        self.transcribe_log(f"Language: {language_code}, Model: {model}, Format: {output_format}")
         
         # Show progress bar and stop button
         self.transcribe_progress_bar.setVisible(True)
@@ -4436,15 +4676,24 @@ class VideoProcessingApp(QMainWindow):
             return
         try:
             import torch  # noqa: F401
+            import torchaudio  # noqa: F401
+            import torchcodec  # noqa: F401
             import pysrt  # noqa: F401
         except ImportError as e:
             QMessageBox.warning(
                 self,
                 "Missing Dependencies",
-                f"Transcribe (anti-hallucination) requires torch and pysrt.\n\nError: {e}\n\nInstall with:\npip install torch pysrt openai-whisper"
+                f"Transcribe (anti-hallucination) requires torch, torchaudio, torchcodec and pysrt.\n\nError: {e}\n\nInstall with:\npip install torch torchaudio torchcodec pysrt openai-whisper"
             )
             return
         language_code = self.transcribe_language_combo.currentData()
+        if language_code == "auto":
+            QMessageBox.warning(
+                self,
+                "Select Language",
+                "Please select a language before transcribing."
+            )
+            return
         model = self.transcribe_model_combo.currentText()
         config = load_config()
         whisper_model_asked = config.get("whisper_model_asked", False)
@@ -4456,8 +4705,7 @@ class VideoProcessingApp(QMainWindow):
             config["whisper_has_existing_model"] = model_dialog.get_result()
             save_config(config)
         self.transcribe_log(f"Starting VAD-assisted transcription of: {video_path.name}")
-        lang_display = "(detected from audio)" if language_code == "auto" else language_code
-        self.transcribe_log(f"Language: {lang_display}, Model: {model}")
+        self.transcribe_log(f"Language: {language_code}, Model: {model}")
         self.transcribe_progress_bar.setVisible(True)
         self.transcribe_stop_btn.setVisible(True)
         self.transcribe_stop_btn.setEnabled(True)
@@ -5394,19 +5642,29 @@ class VideoProcessingApp(QMainWindow):
         download_layout.addWidget(self.commands_text)
         
         download_buttons = QHBoxLayout()
+        self.download_quality_combo = QComboBox()
+        # Use res="A|B|C":for=best so unmatched resolutions fall back to next (e.g. 4K→1080p)
+        for name, code in [
+            ("480p", 'res="480":for=best'),
+            ("720p", 'res="720|480":for=best'),
+            ("1080p", 'res="1080|720|480":for=best'),
+            ("4K", 'res="2160|1080|720|480":for=best'),
+            ("Best quality", "best"),
+        ]:
+            self.download_quality_combo.addItem(name, code)
+        self.download_quality_combo.setCurrentIndex(self.download_quality_combo.findData("best"))
+        self.download_quality_combo.setMaximumWidth(120)
         clear_btn = QPushButton("Clear")
         clear_btn.clicked.connect(lambda: self.commands_text.clear())
-        download_btn = QPushButton("Batch download")
-        download_btn.clicked.connect(self.download_episodes)
-        add_videos_btn = QPushButton("Add videos...")
-        add_videos_btn.clicked.connect(self.add_videos)
+        download_btn = QPushButton("(Batch) Download")
+        download_btn.clicked.connect(lambda: self.download_episodes(self.download_quality_combo.currentData()))
         open_lossless_btn = QPushButton("Open in LosslessCut...")
         open_lossless_btn.clicked.connect(self.open_lossless_cut)
         open_downloads_btn = QPushButton("Open Downloads folder")
         open_downloads_btn.clicked.connect(lambda: open_folder_in_explorer(get_downloads_dir()))
-        download_buttons.addWidget(clear_btn)
+        download_buttons.addWidget(self.download_quality_combo)
         download_buttons.addWidget(download_btn)
-        download_buttons.addWidget(add_videos_btn)
+        download_buttons.addWidget(clear_btn)
         download_buttons.addWidget(open_lossless_btn)
         download_buttons.addWidget(open_downloads_btn)
         download_layout.addLayout(download_buttons)
@@ -5756,7 +6014,7 @@ class VideoProcessingApp(QMainWindow):
         # Reset button text
         self.stop_btn.setText("Stop")
     
-    def download_episodes(self):
+    def download_episodes(self, select_video: str = "best"):
         """Download episodes or movies."""
         commands_text = self.commands_text.toPlainText()
         if not commands_text.strip():
@@ -5771,15 +6029,16 @@ class VideoProcessingApp(QMainWindow):
 
         output_dir = get_downloads_dir()
         self.log(f"Starting download to: {output_dir}")
-        self.log(f"Mode: {mode}, Name: {name or '(none)'}, S01E02: {use_s01e}, Items: {ep_spec}")
+        self.log(f"Mode: {mode}, Name: {name or '(none)'}, S01E02: {use_s01e}, Items: {ep_spec}, Video: {select_video}")
 
         def download_with_detection(
-            commands_text, output_dir, mode, name, use_s01e, season, ep_spec,
+            commands_text, output_dir, mode, name, use_s01e, season, ep_spec, select_video,
             progress_callback=None, log_callback=None,
         ):
             result = download_episodes(
                 commands_text, output_dir,
                 mode=mode, name=name, use_s01e=use_s01e, season=season, ep_spec=ep_spec,
+                select_video=select_video,
                 progress_callback=progress_callback, log_callback=log_callback,
             )
             if result:
@@ -5794,42 +6053,8 @@ class VideoProcessingApp(QMainWindow):
 
         self.run_script(
             download_with_detection,
-            commands_text, output_dir, mode, name, use_s01e, season, ep_spec,
+            commands_text, output_dir, mode, name, use_s01e, season, ep_spec, select_video,
         )
-    
-    def add_videos(self):
-        """Add videos manually."""
-        file_paths, _ = QFileDialog.getOpenFileNames(
-            self, "Select Video Files", "", "Video Files (*.mkv *.mp4);;All Files (*)"
-        )
-        
-        if not file_paths:
-            return
-        
-        downloads_dir = get_downloads_dir()
-        copied_count = 0
-        
-        for file_path in file_paths:
-            try:
-                source_path = Path(file_path)
-                dest_path = downloads_dir / source_path.name
-                if dest_path.exists():
-                    self.log(f"Skipping {source_path.name} - already exists")
-                    continue
-                shutil.copy2(file_path, dest_path)
-                copied_count += 1
-                
-                # Detect episode or scene
-                video_type, duration = detect_episode_or_scene(dest_path)
-                if duration is not None:
-                    type_label = "Episode" if video_type == "episode" else "Scene"
-                    self.log(f"Copied: {source_path.name} ({type_label}, {duration:.1f} min)")
-                else:
-                    self.log(f"Copied: {source_path.name}")
-            except Exception as e:
-                self.log(f"Error copying {Path(file_path).name}: {e}")
-        
-        QMessageBox.information(self, "Complete", f"Added {copied_count} file(s) to downloads folder.")
     
     def extract_subtitles(self):
         """Extract subtitles."""
