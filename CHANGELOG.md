@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [10.3.0-alpha.2] - 2026-02-28
+
+### Added
+- Downloads directory as third subtitle search location when burning subtitles
+
+### Fixed
+- Setup Wizard crash on startup (QCheckBox setWordWrap AttributeError)
+- FFmpeg subtitles filter failing with absolute paths (e.g. videos outside VideoProcessing)
+
 ## [10.3.1-alpha.1] - 2026-02-28
 
 ### Added
