@@ -1403,7 +1403,7 @@ def translate_subtitles(selected_srt_files: List[Path], target_language: str = "
 def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_dir: Path,
                  watermark_path: str, resolution: str, use_watermarks: bool = True,
                  ffmpeg_path: str = "", use_iso639: bool = False, target_language: str = "English",
-                 progress_callback=None, log_callback=None) -> bool:
+                 downloads_dir: Path = None, progress_callback=None, log_callback=None) -> bool:
     """Process selected video files: burn subtitles, add watermark (if enabled), resize.
     
     Args:
@@ -1464,7 +1464,15 @@ def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_
                 srt_file = candidate
                 srt_location = "subtitles directory"
                 break
-        
+
+            # 3. Downloads directory (fallback)
+            if downloads_dir and downloads_dir.exists():
+                candidate = downloads_dir / filename
+                if candidate.exists():
+                    srt_file = candidate
+                    srt_location = "downloads directory"
+                    break
+
         out_file = output_dir / f"{base}.mp4"
         
         if progress_callback:
@@ -1480,6 +1488,8 @@ def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_
                 log_callback(f"Skipping {video_file.name} - subtitle file not found")
                 checked_files = [f"  Checked: {video_file.parent / fn}" for fn in filenames_to_try]
                 checked_files.extend([f"  Checked: {subtitles_dir / fn}" for fn in filenames_to_try])
+                if downloads_dir and downloads_dir.exists():
+                    checked_files.extend([f"  Checked: {downloads_dir / fn}" for fn in filenames_to_try])
                 for checked in checked_files:
                     log_callback(checked)
             continue
@@ -1525,14 +1535,14 @@ def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_
         if use_watermarks:
             if resolution == "720":
                 filter_complex = (
-                    f"[0:v]subtitles={srt_path},"
+                    f"[0:v]subtitles=filename={srt_path},"
                     f"scale=-2:{height}[scaled];"
                     f"[1:v]format=rgba,colorchannelmixer=aa=0.8[wm];"
                     f"[scaled][wm]overlay=W-w-10:H-h-10"
                 )
             else:  # 1080p
                 filter_complex = (
-                    f"[0:v]subtitles={srt_path},"
+                    f"[0:v]subtitles=filename={srt_path},"
                     f"scale=-1:{height}[vsub];"
                     f"[1:v]format=rgba,colorchannelmixer=aa=0.8[wm];"
                     f"[vsub][wm]overlay=0:0[outv]"
@@ -1554,7 +1564,7 @@ def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_
         else:
             # No watermark - just subtitles and resize
             filter_complex = (
-                f"[0:v]subtitles={srt_path},"
+                f"[0:v]subtitles=filename={srt_path},"
                 f"scale=-2:{height}" if resolution == "720" else f"scale=-1:{height}"
             )
             cmd = [
@@ -2963,13 +2973,30 @@ class SetupWizard(QDialog):
         self.translator_cb.stateChanged.connect(lambda: on_feature_changed())
         layout.addWidget(self.translator_cb)
         
-        self.transcribe_long_cb = QCheckBox(
-            "Transcribe long videos (files over ~5 min; needs torch, torchaudio, torchcodec, pysrt, openai-whisper — ~2–3 GB download)"
-        )
+        # QCheckBox doesn't support setWordWrap (Qt bug QTBUG-5370). Use checkbox + label combo.
+        transcribe_row = QWidget()
+        transcribe_row_layout = QHBoxLayout(transcribe_row)
+        transcribe_row_layout.setContentsMargins(0, 0, 0, 0)
+        transcribe_row_layout.setSpacing(8)
+
+        self.transcribe_long_cb = QCheckBox()
         self.transcribe_long_cb.setChecked(self.want_transcribe_long)
         self.transcribe_long_cb.stateChanged.connect(lambda: on_feature_changed())
-        self.transcribe_long_cb.setWordWrap(True)
-        layout.addWidget(self.transcribe_long_cb)
+
+        transcribe_label = QLabel(
+            "Transcribe long videos (files over ~5 min; needs torch, torchaudio, torchcodec, pysrt, openai-whisper — ~2–3 GB download)"
+        )
+        transcribe_label.setWordWrap(True)
+        transcribe_label.setCursor(Qt.PointingHandCursor)
+
+        def _on_transcribe_label_clicked(event):
+            if event.button() == Qt.LeftButton:
+                self.transcribe_long_cb.toggle()
+        transcribe_label.mousePressEvent = _on_transcribe_label_clicked
+
+        transcribe_row_layout.addWidget(self.transcribe_long_cb)
+        transcribe_row_layout.addWidget(transcribe_label, 1)
+        layout.addWidget(transcribe_row)
         
         layout.addStretch()
         widget.setLayout(layout)
@@ -6141,9 +6168,11 @@ class VideoProcessingApp(QMainWindow):
         if use_iso639:
             self.log(f"ISO 639 mode enabled - looking for .{ISO_639_CODES.get(target_language, 'eng')}.srt files")
         ffmpeg_path = self.config.get("ffmpeg_path", "").strip()
+        downloads_dir = get_downloads_dir()
         self.run_script(
             process_video, file_paths, subtitles_dir, output_dir,
-            watermark_path, resolution, use_watermarks, ffmpeg_path, use_iso639, target_language
+            watermark_path, resolution, use_watermarks, ffmpeg_path, use_iso639, target_language,
+            downloads_dir
         )
     
     def open_lossless_cut(self):
