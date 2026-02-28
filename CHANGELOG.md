@@ -7,84 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [10.3.1-alpha.2] - 2026-02-28
-
-### Added
-- Downloads directory as third subtitle search location when burning subtitles
-
-### Fixed
-- Setup Wizard crash on startup (QCheckBox setWordWrap AttributeError)
-- FFmpeg subtitles filter failing with absolute paths (e.g. videos outside VideoProcessing)
-
-## [10.3.1-alpha.1] - 2026-02-28
-
-### Added
-- Feature selection step in Setup Wizard
-- Automatic pip installer (non-blocking UI) for optional dependencies
-- Quality selector (480p/720p/1080p/4K/best) for batch downloads
-- Version-aware setup wizard re-run on app update
-- Detection of previous installation with optional reset
-- Support for torch, torchaudio, torchcodec for long transcription
-- Media directory support with backward-compatible icon resolution
-
-### Changed
-- Reorganized media assets into `media/`
-- Improved debug logging (ANSI stripping and progress filtering)
-- Translator now uses `--batch-size 30`
-- Setup wizard now feature-aware for required dependencies
-- Updated README with extended transcription dependency instructions
-
-### Removed
-- Manual “Add videos…” button in Batch Download tab
-
-### Fixed
-- Prevent transcription when language is set to "auto"
-- Improved missing dependency messages for long transcription
-
-## [10.3.1] - 2026-02-25
-
-### Changed
-
-- Batch download debug log now written to `VideoProcessing/logs` instead of the downloads folder.
-- `get_logs_dir()` helper for the logs directory.
-
-### Removed
-
-- `batchdownloader_guide.md`; content merged into the external rentry page. README Documentation section and build workflow updated accordingly.
-
-## [10.3.0] - 2026-02-25
-
-### Added
-
-- Transcription on Windows without bash. Standard transcription now runs in Python with `_get_whisper_python()` instead of `whisper_auto.sh`, so Git for Windows is no longer required.
-- `_get_whisper_python()` helper to create and use `~/whisper-env`, install Whisper and PyTorch if missing, and return the Python path for both Windows and Unix.
-- Batch download debug log: full N_m3u8DL-RE output written to `VideoProcessing/logs/_batch_download_debug_YYYYMMDD_HHMMSS.log` for troubleshooting hangs or failures.
-
-### Changed
-
-- `transcribe_video()` no longer calls `whisper_auto.sh` or bash; it uses subprocess with ffmpeg and Whisper directly.
-- Platform-specific venv paths: `Scripts/python.exe` on Windows, `bin/python` on Unix for the whisper environment.
-- Update README: note under "Run the app" for older versions (before 10.0.0) that the main file may be `video_app_v8.py`.
-
-## [10.2.0] - 2026-02-25
-
-### Added
-
-- Support for many Gemini API keys for subtitle translation.
-- `api_keys` config (list) replacing `api_key` and `api_key2`; migration from existing keys in `load_config()`.
-- Quota-limit retry: on 429, RESOURCE_EXHAUSTED, quota, rate limit, or exhausted errors from gst, retry the same file with the next key pair.
-- `_is_quota_limit_error()` helper detecting quota/rate-limit patterns in gst output.
-- `_get_key_pairs()` helper building (primary, secondary) key pairs for gst from env and config.
-- Settings UI: dynamic API key list with "Add another key" button and per-key remove button (minimum one key).
-- Partial output file removed before retry so gst can re-run from scratch.
-- Log message "Retrying with next API key(s)..." when switching to a new key pair.
-
-### Changed
-
-- `translate_subtitles()` now accepts `api_keys: List[str]` and legacy `api_key`/`api_key2` for backward compatibility.
-- Translation logic pairs keys for gst (primary via `GEMINI_API_KEY` env, secondary via `-k2`).
-- Setup wizard API key checkbox now considers `api_keys` when deciding whether keys are configured.
-
 ## [10.1.0] - 2026-02-25
 
 ### Added
@@ -509,3 +431,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Single-file implementation.
 - Worker threads for non-blocking operations.
 - Progress bars and status updates.
+
+---
+
+## Workshop / refactor log
+
+*Log notable workshop or refactor sessions below. Keep this section updated when making structural changes, fixes, or improvements so the project history stays clear.*
+
+### 2026-02-28
+
+#### Fixed
+
+- **Long-file transcription (files over ~5 minutes):** VAD-assisted path now uses the **Python Whisper API** instead of the `whisper` CLI, so it no longer depends on the CLI being on PATH. Added a **fallback** when Silero VAD detects no speech (e.g. long or quiet files): fixed-length ~25 s chunks are transcribed so SRT is still produced. Cancellation supported via `is_stopped` in the worker.
+
+#### Added
+
+- **Optional dependencies** in `requirements.txt` for the long-file transcription path: `torch`, `torchaudio`, `pysrt`, `openai-whisper`.
+- **`tests/`** directory with `test_config_and_har.py` (config and ISO 639 checks). Run from project root; add `pytest` for `pytest tests/ -v` if desired.
+
+#### Changed
+
+- **Modular layout:** Extracted shared code into separate modules:
+  - **`config.py`** — config load/save, directory paths, `get_matching_subtitle_for_remux`, `check_whisper_model_exists`, `ISO_639_CODES`.
+  - **`har_utils.py`** — `extract_cookies_from_har` and `extract_m3u8_urls` (single place for HAR logic).
+  - **`workers.py`** — `ScriptWorker` (with `is_stopped` callback for cancellation).
+  - **`widgets.py`** — `OutlinedLabel`.
+- **`extract_m3u8.py`** — Now a thin CLI that calls `har_utils.extract_m3u8_urls` (no duplicate HAR parsing).
+- **`app.py`** — Imports from the new modules; reduced duplication and clearer structure.
+
+#### Fixed (follow-up)
+
+- **"Transcribe longer video" SSL error on macOS:** When Silero VAD cannot be downloaded (e.g. `CERTIFICATE_VERIFY_FAILED` with Python from python.org), the app now shows a clear message and points to the fix: run `/Applications/Python 3.13/Install Certificates.command` or use `certifi`. README Troubleshooting updated.
+- **"Transcribe longer video" missing torchaudio:** Silero VAD requires `torchaudio`. Added to `requirements.txt` and a friendly `ModuleNotFoundError` message telling the user to `pip install torchaudio`.
+- **torchaudio 2.10+ / torchcodec:** Pinned `torchaudio<2.9` in requirements so Silero VAD works without installing torchcodec.
+- **torchaudio sox backend / libsox.dylib:** When loading audio for VAD fails (e.g. "Library not loaded: libsox.dylib" on macOS), the app now falls back to a built-in WAV loader using Python's `wave` module so no sox/torchaudio backend is required.
+- **Log windows:** Processing log and main LOG OUTPUT areas use a dark theme (black background, light text) for better readability.
+- **Remux tab redesigned:** Replaced the old tree-based (track selection) UI with a simple table: one row per video with columns Video file | Subtitle | Format | Action (Browse + Remux). Added a single reliable remux path: `remux_video_with_subtitle()` uses FFmpeg `-map 0 -map 1:0` so video + one external SRT/VTT always mux correctly without track-index issues. Status is a scrollable dark log (QTextEdit). Buttons: Add videos, Auto-match SRT, Remove selected, Clear all, Media info, Remux all.

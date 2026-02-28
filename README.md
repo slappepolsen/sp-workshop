@@ -61,8 +61,6 @@ Select **Source code (zip)** under Assets.
    ```bash
    pip install -r requirements.txt
    ```
-4b. (Optional) For "Transcribe longer video" (files over ~5 min): `pip install torch torchaudio torchcodec pysrt openai-whisper`
-
 5. Install FFmpeg (required)
    ```bash
    brew install ffmpeg
@@ -74,7 +72,6 @@ Select **Source code (zip)** under Assets.
    ```bash
    python3 app.py
    ```
-   For older versions (before 10.0.0), the main file is called  `video_app_v8.py`. Use `python3 video_app_v8.py` or rename it to `app.py`.
 
 ---
 
@@ -94,15 +91,12 @@ Select **Source code (zip)** under Assets.
    ```bash
    pip install -r requirements.txt
    ```
-4b. (Optional) For "Transcribe longer video" (files over ~5 min): `pip install torch torchaudio torchcodec pysrt openai-whisper`
-
 5. Install FFmpeg and add it to PATH
 6. Install N_m3u8DL-RE (optional, for downloads)
 7. Run the app
    ```bash
    python app.py
    ```
-   For older versions (before 10.0.0), the main file is called  `video_app_v8.py`. Use `python3 video_app_v8.py` or rename it to `app.py`.
 
 ---
 
@@ -117,8 +111,6 @@ Select **Source code (zip)** under Assets.
    ```bash
    pip install -r requirements.txt
    ```
-2b. (Optional) For "Transcribe longer video" (files over ~5 min): `pip install torch torchaudio torchcodec pysrt openai-whisper`
-
 3. Install FFmpeg
    ```bash
    sudo apt install ffmpeg
@@ -128,7 +120,6 @@ Select **Source code (zip)** under Assets.
    ```bash
    python3 app.py
    ```
-   For older versions (before 10.0.0), the main file is called  `video_app_v8.py`. Use `python3 video_app_v8.py` or rename it to `app.py`.
 
 ---
 
@@ -151,6 +142,18 @@ By default, SP Workshop creates:
 
 All paths can be changed in **Settings**.
 
+### Optional: "Transcribe longer video" (files over ~5 min)
+
+The **Transcribe longer video** button (VAD-assisted, reduces hallucination) needs extra packages. They are included in `requirements.txt` but are optional if you only use short clips or the script-based **Transcribe**:
+
+- `torch`, `torchaudio`, `pysrt`, `openai-whisper`
+
+If you skip them to keep install size down, install later when you need long-file transcription:
+
+```bash
+pip install torch torchaudio pysrt openai-whisper
+```
+
 ### Configuration:*
 Click *Settings* to configure:
 
@@ -167,7 +170,7 @@ The whole point of this is to make WLW/sapphic/lesbian content accessible for ev
 
 SP Workshop supports three main workflows depending on your starting material.
 
-![Workflow Diagrams](media/flowcharts.png)
+![Workflow Diagrams](flowcharts.png)
 
 *From left to right: Workflow 1 (External Video + Separate SRT), Workflow 2 (Batch Downloader), Workflow 3 (Whisper Transcription)*
 
@@ -180,13 +183,13 @@ SP Workshop supports three main workflows depending on your starting material.
 
 ## Troubleshooting
 
-- **App won't start** (Qt platform plugin / "cocoa"): Run `pip install --force-reinstall PyQt5` in your venv. If that doesn't help, try Python 3.11 or 3.12 instead of 3.14.
 - **PyQt5 not found**: `pip install PyQt5`
 - **FFmpeg not found**: Install FFmpeg and ensure it is in PATH
 - **N_m3u8DL-RE not found**: Download and add to PATH
 - **Translation fails**: Check API key and internet connection
-- **Whisper issues**: The app uses a Python venv (~/whisper-env) for transcription. Ensure FFmpeg is installed.
-- **Transcribe longer video fails** (torch/torchaudio/torchcodec/pysrt): The anti-hallucination option needs extra packages. In your project venv, run: `pip install torch torchaudio torchcodec pysrt openai-whisper`
+- **Whisper issues**: Ensure `whisper_auto.sh` exists and is executable
+- **"Transcribe longer video" fails or missing deps**: Install `torch`, `torchaudio`, `pysrt`, and `openai-whisper` (`pip install torch "torchaudio<2.9" pysrt openai-whisper`). Use `torchaudio<2.9` to avoid the torchcodec requirement in 2.10+.
+- **"Transcribe longer video" — SSL certificate error** (e.g. `CERTIFICATE_VERIFY_FAILED` on macOS): Python from python.org on macOS does not use the system root certificates. **Fix:** Run the installer’s certificate script: **Open `/Applications/Python 3.13/Install Certificates.command`** (double-click or run from Terminal). Alternatively: `pip install certifi` then before running the app set `export SSL_CERT_FILE=$(python -m certifi)`.
 
 Check the app log window for detailed error messages.
 
@@ -201,8 +204,9 @@ Check the app log window for detailed error messages.
 - Internet connection (only for translation and downloading, the rest is local)
 
 ## Documentation
-- [CHANGELOG.md](CHANGELOG.md) - Version history
-- [README.md](README.md) - This file
+- [batchdownloader_guide.md](batchdownloader_guide.md) - Batch downloader quick reference
+- [CHANGELOG.md](CHANGELOG.md) - Version history and workshop log
+- **Tests**: `tests/test_config_and_har.py` — run from project root with `python tests/test_config_and_har.py` (or add `pytest` and run `pytest tests/ -v`).
 
 ## Support
 

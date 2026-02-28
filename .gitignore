@@ -27,8 +27,8 @@ env/
 .venv/
 build_venv/
 
-.rulesrules
-rentry.md
+# Cursor
+.cursorrules
 
 # IDE
 .idea/
@@ -48,9 +48,7 @@ settings.json
 # Logs
 *.log
 
-# Test files
-test_*.py
-*_test.py
-
-# Deprecated (transcription now uses Python; kept locally for reference)
-whisper_auto.sh
+# Test files (root only; keep tests/ folder)
+/test_*.py
+/*_test.py
+!tests/
