@@ -30,6 +30,8 @@ build_venv/
 .rulesrules
 rentry.md
 RELEASE_CHECKLIST.md
+BENCHMARKS.md
+run.sh
 
 # IDE
 .idea/

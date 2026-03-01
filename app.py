@@ -1121,7 +1121,9 @@ def download_episodes(
                         if output_lines:
                             log_callback(f"    Last output lines:")
                             for err_line in output_lines[-5:]:
-                                log_callback(f"      {err_line}")
+                                clean = re.sub(r'\033\[[0-9;]*[a-zA-Z]', '', err_line).replace('\033[F', '').replace('\033[K', '').strip()
+                                if clean:
+                                    log_callback(f"      {clean}")
 
             except Exception as e:
                 if log_callback:
