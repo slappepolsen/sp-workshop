@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+- ...
+
+## [10.4.0-alpha.1] - 2025-03-01
 
 ### Added
 - Transcribe (Whisper CPP) button: alternative transcription using whisper.cpp. Faster, built-in VAD. Metal/GPU support on macOS (auto-downloads ggml-metal.metal). Auto-downloads models on first use. Config: whisper_cpp_path, whisper_cpp_model_dir, whisper_cpp_model, whisper_cpp_extra_args.
@@ -16,9 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Batch download: ANSI stripping for "Last output lines" when download fails.
 - README: troubleshooting updates (python -m pip, Python 3.14).
 - BENCHMARKS.md and run.sh added to .gitignore.
+- Simplify comments in app.py.
 
 ### Fixed
-- Remux tab: ffprobe for track indices, avoid -c copy + -c:s conflict.
+- Remux tab: ffprobe for track indices, avoid -c copy + -c:s conflic
 
 ## [10.3.2] - 2026-02-28
 
