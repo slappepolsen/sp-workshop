@@ -8,8 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Transcribe (Whisper CPP) button: alternative transcription using whisper.cpp. Faster, built-in VAD. Auto-downloads models on first use. Config: whisper_cpp_path, whisper_cpp_model_dir, whisper_cpp_extra_args.
+- Transcribe (Whisper CPP) button: alternative transcription using whisper.cpp. Faster, built-in VAD. Metal/GPU support on macOS (auto-downloads ggml-metal.metal). Auto-downloads models on first use. Config: whisper_cpp_path, whisper_cpp_model_dir, whisper_cpp_model, whisper_cpp_extra_args.
 - On-demand pip install: When a feature needs a missing dependency (Whisper CPP, Transcribe longer video, Translate subtitles), the app now offers to install it via pip. User can accept or install manually.
+
+### Changed
+- Subtitle translation: cleaner gst log output (dedupe progress/errors, strip ANSI, suppress RequestsDependencyWarning), progress bar driven by line progress, API key pair switching when "All API quotas exceeded" (no 60s wait), --thinking-budget 0 to reduce malformed responses, partial/interrupted translation reported as "Partially translated (interrupted)", ANSI stripping for "Last output lines" in translation failures.
+- Batch download: ANSI stripping for "Last output lines" when download fails.
+- README: troubleshooting updates (python -m pip, Python 3.14).
+- BENCHMARKS.md and run.sh added to .gitignore.
+
+### Fixed
+- Remux tab: ffprobe for track indices, avoid -c copy + -c:s conflict.
 
 ## [10.3.2] - 2026-02-28
 
