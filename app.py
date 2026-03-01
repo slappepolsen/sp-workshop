@@ -1756,72 +1756,8 @@ def analyze_tracks(video_path: Path, log_callback=None) -> Dict:
         return tracks
     
     try:
-        # Try mkvmerge first (best for MKV files)
-        if video_path.suffix.lower() == '.mkv':
-            try:
-                cmd = ['mkvmerge', '--identify-verbose', str(video_path)]
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-                
-                if result.returncode == 0:
-                    current_track = None
-                    track_info = {}
-                    
-                    for line in result.stdout.split('\n'):
-                        line = line.strip()
-                        if line.startswith('Track ID'):
-                            if current_track and track_info:
-                                track_type = track_info.get('type', '').lower()
-                                if 'video' in track_type:
-                                    tracks['video'].append(track_info)
-                                elif 'audio' in track_type:
-                                    tracks['audio'].append(track_info)
-                                elif 'subtitles' in track_type or 'subtitle' in track_type:
-                                    tracks['subtitles'].append(track_info)
-                            
-                            # New track
-                            track_id_match = re.search(r'(\d+):', line)
-                            if track_id_match:
-                                current_track = int(track_id_match.group(1))
-                                track_info = {'track_id': current_track}
-                        
-                        elif current_track is not None:
-                            if ':' in line:
-                                key, value = line.split(':', 1)
-                                key = key.strip().lower().replace(' ', '_')
-                                value = value.strip()
-                                
-                                if key == 'type':
-                                    track_info['type'] = value
-                                elif key == 'codec':
-                                    track_info['codec'] = value
-                                elif key == 'channels':
-                                    try:
-                                        track_info['channels'] = int(value)
-                                    except ValueError:
-                                        pass
-                                elif key == 'sample_rate':
-                                    track_info['sample_rate'] = value
-                                elif key == 'language':
-                                    track_info['language'] = value
-                                elif 'video' in key and 'pixel_dimensions' in key:
-                                    track_info['resolution'] = value
-                    
-                    # Add last track
-                    if current_track and track_info:
-                        track_type = track_info.get('type', '').lower()
-                        if 'video' in track_type:
-                            tracks['video'].append(track_info)
-                        elif 'audio' in track_type:
-                            tracks['audio'].append(track_info)
-                        elif 'subtitles' in track_type or 'subtitle' in track_type:
-                            tracks['subtitles'].append(track_info)
-                    
-                    return tracks
-            except (subprocess.TimeoutExpired, FileNotFoundError):
-                # Fall back to ffprobe
-                pass
-        
-        # Use ffprobe (works for all formats)
+        # Use ffprobe for all formats - track_id must be FFmpeg stream index for remux -map to work.
+        # (mkvmerge track IDs differ from FFmpeg stream indices and would cause remux failures.)
         cmd = [
             'ffprobe', '-v', 'quiet', '-print_format', 'json',
             '-show_streams', str(video_path)
@@ -5162,7 +5098,9 @@ class VideoProcessingApp(QMainWindow):
             out_path = video_path.parent / f"{base}_remuxed.{output_format}"
             self.remux_log_output.setText(f"✓ Saved: {out_path}")
         else:
-            self.remux_log_output.setText(f"✗ Failed to remux {video_path.name}")
+            # Preserve FFmpeg error if already set
+            if not self.remux_log_output.text().startswith("Error:"):
+                self.remux_log_output.setText(f"✗ Failed to remux {video_path.name}")
     
     def remux_file_with_tracks(self, video_path: Path, output_format: str,
                                video_tracks: List[int], audio_tracks: List[int],
@@ -5218,7 +5156,7 @@ class VideoProcessingApp(QMainWindow):
                 cmd.extend(["-map", "0"])  # Map all tracks from video
                 cmd.extend(["-map", "1:0"])  # Map subtitle from external file
                 subtitle_format = "srt" if external_subtitle.suffix.lower() == ".srt" else "vtt"
-                cmd.extend(["-c", "copy", "-c:s", subtitle_format])
+                cmd.extend(["-c:v", "copy", "-c:a", "copy", "-c:s", subtitle_format])
                 tracks_info = analyze_tracks(video_path)
                 sub_idx = len(tracks_info.get('subtitles', []))
                 cmd.extend(["-metadata:s:s:" + str(sub_idx), f"language={subtitle_language}"])
@@ -5235,20 +5173,23 @@ class VideoProcessingApp(QMainWindow):
                     cmd.extend(["-i", str(srt_file)])
                     cmd.extend(["-map", "0"])  # All video tracks
                     cmd.extend(["-map", "1:0"])  # Subtitle
-                    cmd.extend(["-c", "copy", "-c:s", "srt"])
+                    cmd.extend(["-c:v", "copy", "-c:a", "copy", "-c:s", "srt"])
                 elif vtt_file.exists():
                     cmd.extend(["-i", str(vtt_file)])
                     cmd.extend(["-map", "0"])  # All video tracks
                     cmd.extend(["-map", "1:0"])  # Subtitle
-                    cmd.extend(["-c", "copy", "-c:s", "vtt"])
+                    cmd.extend(["-c:v", "copy", "-c:a", "copy", "-c:s", "vtt"])
                 else:
                     # Just copy all tracks
                     cmd.extend(["-c", "copy"])
             
             cmd.append(str(output_file))
         else:
-            # Copy codecs for selected tracks
-            cmd.extend(["-c", "copy"])
+            # Copy codecs: avoid -c copy with -c:s (causes "stream type specified multiple times")
+            if external_subtitle and external_subtitle.exists():
+                cmd.extend(["-c:v", "copy", "-c:a", "copy"])  # -c:s already added above
+            else:
+                cmd.extend(["-c", "copy"])
             cmd.append(str(output_file))
         
         # Execute
