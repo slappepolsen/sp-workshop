@@ -148,7 +148,7 @@ By default, SP Workshop creates:
 
 All paths can be changed in **Settings**.
 
-### Configuration:*
+### Configuration:
 Click *Settings* to configure:
 
 - **Google Gemini API Key**: required for subtitle translation. Get one from [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey) and paste it into Settings.
