@@ -36,7 +36,7 @@ def quote_path(path: str) -> str:
     This function uses double quotes on Windows and shlex.quote on Unix.
     """
     if platform.system() == "Windows":
-        # Windows CMD uses double quotes; escape any existing double quotes
+        # Windows: use double quotes
         escaped = str(path).replace('"', '\\"')
         return f'"{escaped}"'
     else:
@@ -58,11 +58,10 @@ from PyQt5.QtCore import QThread, pyqtSignal, Qt, QProcess, QUrl, QTimer
 from PyQt5.QtGui import QFont, QIcon, QPainter, QPen, QDesktopServices
 
 
-# URL for download instructions (rentry.co page - update when creating the page)
+# Download instructions URL
 DOWNLOAD_INSTRUCTIONS_URL = "https://rentry.co/sp-workshop"
 
-# Whisper transcription languages: (display name, Whisper code). Curated list, alphabetical.
-# Whisper --language accepts codes (en, es, fr, pt, zh...) or full names (English, Spanish...)
+# Whisper languages: (display name, code)
 TRANSCRIBE_LANGUAGES = [
     ("(Select language)", "auto"),
     ("Catalan", "ca"),
@@ -83,7 +82,7 @@ TRANSCRIBE_LANGUAGES = [
     ("Turkish", "tr"),
 ]
 
-# Whisper CPP model name -> ggml filename
+# Model name -> ggml filename
 WHISPER_CPP_MODELS = {
     "tiny.en": "ggml-tiny.en.bin",
     "tiny": "ggml-tiny.bin",
@@ -109,7 +108,7 @@ WHISPER_CPP_MODELS = {
     "large-v3-turbo-q5_0": "ggml-large-v3-turbo-q5_0.bin",
 }
 
-# Approximate model sizes for download progress (MB)
+# Model sizes for progress (MB)
 WHISPER_CPP_MODEL_SIZES = {
     "ggml-tiny.en.bin": "75 MB",
     "ggml-tiny.bin": "75 MB",
@@ -152,12 +151,12 @@ class OutlinedLabel(QLabel):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         
-        # Get text metrics
+        # Text metrics
         font = self.font()
         painter.setFont(font)
         text = self.text()
         
-        # Draw black outline by drawing text multiple times with offsets
+        # Draw outline with offsets
         pen = QPen(Qt.black, 2, Qt.SolidLine)
         painter.setPen(pen)
         
@@ -166,7 +165,7 @@ class OutlinedLabel(QLabel):
         for dx, dy in offsets:
             painter.drawText(self.rect().adjusted(dx, dy, dx, dy), Qt.AlignCenter, text)
         
-        # Draw white text on top
+        # Draw text on top
         pen.setColor(Qt.white)
         painter.setPen(pen)
         painter.drawText(self.rect(), Qt.AlignCenter, text)
@@ -215,7 +214,7 @@ def load_config() -> Dict:
         try:
             with open(config_path, 'r') as f:
                 user_config = json.load(f)
-                # Merge whisper_options separately to ensure all defaults exist
+                # Merge whisper_options with defaults
                 if "whisper_options" in user_config:
                     default_config["whisper_options"].update(user_config["whisper_options"])
                     del user_config["whisper_options"]
@@ -223,7 +222,7 @@ def load_config() -> Dict:
         except Exception as e:
             print(f"Error loading config: {e}")
     
-    # Migrate api_key/api_key2 to api_keys if api_keys is empty
+    # Migrate api_key/api_key2 to api_keys
     api_keys = default_config.get("api_keys") or []
     if not api_keys and (default_config.get("api_key") or default_config.get("api_key2")):
         api_keys = [k for k in [default_config.get("api_key"), default_config.get("api_key2")] if k]
@@ -318,18 +317,17 @@ def get_app_icon() -> QIcon:
     and convert it to .icns using the create_icon.sh script. The icon should be at least
     1024x1024 pixels for best quality.
     """
-    # On macOS, prefer .icns format for better integration
-    # Use absolute path to ensure macOS can find it properly
+    # Prefer .icns on macOS
     if sys.platform == "darwin":
         icns_path = _resolve_media_path("icon.icns")
         if icns_path:
             icon = QIcon(str(icns_path.absolute()))
-            # Ensure icon is valid and has sizes
+            # Ensure icon is valid
             if not icon.isNull():
                 return icon
     
-    # Fallback to PNG (works on all platforms)
-    # Try transparent version first if it exists
+    # Fallback to PNG
+    # Try transparent version first
     transparent_png = _resolve_media_path("icon_transparent.png")
     if transparent_png:
         return QIcon(str(transparent_png.absolute()))
@@ -338,7 +336,7 @@ def get_app_icon() -> QIcon:
     if png_path:
         return QIcon(str(png_path.absolute()))
     
-    # Fallback to default PyQt5 icon
+    # Fallback to default icon
     return QIcon()
 
 
@@ -382,20 +380,19 @@ def check_whisper_model_exists(model_name: str) -> bool:
     """
     system = platform.system()
     
-    # Whisper stores models in ~/.cache/whisper/ on Unix/macOS
-    # and %USERPROFILE%\.cache\whisper\ on Windows
+    # Whisper cache: ~/.cache/whisper
     if system == "Windows":
         cache_dir = Path.home() / ".cache" / "whisper"
     else:  # macOS, Linux, etc.
         cache_dir = Path.home() / ".cache" / "whisper"
     
-    # Model file name mappings (Whisper uses these exact names)
+    # Model filename mappings
     model_files = {
         "tiny": "tiny.pt",
         "base": "base.pt",
         "small": "small.pt",
         "medium": "medium.pt",
-        "large": "large-v2.pt",  # Note: Whisper uses "large-v2" filename
+        "large": "large-v2.pt",  # Note: Whisper uses "large-v2" filename I
         "turbo": "turbo.pt"
     }
     
@@ -411,7 +408,7 @@ def check_whisper_model_exists(model_name: str) -> bool:
 # ISO 639-2/T Language Codes for Subtitle Suffixes
 # ============================================================================
 
-# Translation target languages (passed to gst -l). Alphabetical.
+# Target languages for gst
 TRANSLATION_TARGET_LANGUAGES = [
     "Catalan", "Dutch", "English", "French", "German", "Greek",
     "Indonesian", "Italian", "Japanese", "Korean", "Mandarin Chinese",
@@ -419,7 +416,7 @@ TRANSLATION_TARGET_LANGUAGES = [
     "Thai", "Turkish",
 ]
 
-# ISO 639-2 codes for subtitle filename suffixes (.eng.srt etc)
+# ISO 639 codes for .eng.srt etc
 ISO_639_CODES = {
     "Catalan": "cat", "Dutch": "nld", "English": "eng", "French": "fra",
     "German": "deu", "Greek": "ell", "Indonesian": "ind", "Italian": "ita",
@@ -491,25 +488,25 @@ def get_audio_channels(video_path: Path) -> Optional[int]:
 def parse_ffmpeg_time(time_str: str) -> Optional[float]:
     """Parse FFmpeg time string (HH:MM:SS.ms or MM:SS.ms) to seconds."""
     try:
-        # Remove any whitespace
+        # Strip whitespace
         time_str = time_str.strip()
         
         # Split by colon
         parts = time_str.split(':')
         
         if len(parts) == 3:
-            # Format: HH:MM:SS.ms
+            # HH:MM:SS.ms
             hours = float(parts[0])
             minutes = float(parts[1])
             seconds = float(parts[2])
             return hours * 3600 + minutes * 60 + seconds
         elif len(parts) == 2:
-            # Format: MM:SS.ms
+            # MM:SS.ms
             minutes = float(parts[0])
             seconds = float(parts[1])
             return minutes * 60 + seconds
         else:
-            # Try parsing as just seconds
+            # Try seconds only
             return float(time_str)
     except (ValueError, IndexError):
         return None
@@ -541,69 +538,67 @@ def clean_log_line(line: str) -> Optional[str]:
     if not line:
         return None
     
-    # Remove ANSI escape codes (colors, cursor movement, etc.)
-    # Pattern matches: \033[...m, \033[F, \033[K, etc.
+    # Remove ANSI codes
     line = re.sub(r'\033\[[0-9;]*[a-zA-Z]', '', line)
     
-    # Remove common cursor movement sequences
+    # Remove cursor sequences
     line = line.replace('\033[F', '').replace('\033[K', '')
     
-    # Skip lines that are just cursor movement codes
+    # Skip empty lines
     if not line.strip():
         return None
 
-    # Skip requests/urllib3/charset_normalizer dependency warnings (subprocess noise)
+    # Skip dependency warnings
     if "RequestsDependencyWarning" in line or ("urllib3" in line and "doesn't match" in line):
         return None
 
-    # IMPORTANT: Always preserve error/warning messages - check before filtering
+    # Preserve errors/warnings
     is_error = any(keyword in line.lower() for keyword in [
         'error', 'failed', 'exception', 'warning', 'warn', 'fail', 
         '✗', '⚠', '❌', 'critical', 'fatal', 'unable', 'cannot',
         'not found', 'missing', 'invalid', 'denied', 'timeout'
     ])
     
-    # If it's an error, return it immediately (cleaned but preserved)
+    # Return errors immediately
     if is_error:
         return f"    ⚠ {line.strip()}"
     
-    # Skip repeated "Validating token size..." messages
+    # Skip validating messages
     if "Validating token size..." in line:
         return None
     
-    # Skip "Token size validated. Translating..." (redundant)
+    # Skip token validated message
     if "Token size validated. Translating..." in line:
         return None
     
-    # Skip "Starting with API Key" messages (not useful)
+    # Skip API Key messages
     if "Starting with" in line and "API Key" in line:
         return None
 
-    # Handle "Starting translation of X lines..." - keep this but clean it
+    # Handle starting translation line
     if "Starting translation of" in line and "lines..." in line:
         match = re.search(r'Starting translation of (\d+) lines', line)
         if match:
             return f"    Starting translation of {match.group(1)} lines..."
     
-    # Clean up progress lines - extract just the useful info
+    # Extract progress info
     if "Translating:" in line and "|" in line:
-        # Extract progress bar, percentage, and status
-        # Format: Translating: |██████░░░░░░| 50% (10/20) model | Status
+        # Extract percent and status
         match = re.search(r'Translating:.*?(\d+)% \((\d+)/(\d+)\)', line)
         if match:
             percent = match.group(1)
             current = match.group(2)
             total = match.group(3)
             
-            # Extract status if present (after the last |)
+            # Extract status after |
             status_parts = line.split('|')
             status = ""
             if len(status_parts) > 1:
-                # Get the last part after |
+                # Last part after |
                 last_part = status_parts[-1].strip()
-                # Remove model name if present
+                # Remove model name
                 last_part = re.sub(r'gemini-[^\s]+', '', last_part).strip()
-                # Normalize spinner: "Thinking /", "Thinking \", "Processing —" etc. -> "Thinking..."/"Processing..."
+                # Normalize spinner
                 spinner_match = re.match(r'^(Thinking|Processing)\s*[—\\|/\s]*$', last_part)
                 if spinner_match:
                     status = f"{spinner_match.group(1)}..."
@@ -612,29 +607,28 @@ def clean_log_line(line: str) -> Optional[str]:
                 elif last_part in ['Thinking', 'Processing', 'Sending batch']:
                     status = f"{last_part}..." if last_part != "Sending batch" else "Sending batch..."
             
-            # Build clean progress line
+            # Build progress line
             if status:
                 return f"    Progress: {percent}% ({current}/{total} lines) - {status}"
             else:
                 return f"    Progress: {percent}% ({current}/{total} lines)"
     
-    # Clean up success messages
+    # Success message
     if "✅" in line or "Translation completed successfully" in line:
         return "    ✓ Translation completed successfully!"
 
-    # Fallback: lines already in "Progress: X% (Y/Z lines) - Status" format (e.g. from gst)
-    # Normalize spinner suffixes so they dedupe
+    # Fallback: Progress format
     prog_match = re.match(r'^\s*Progress:\s*(\d+)%\s*\((\d+)/(\d+)\s*lines?\)\s*-?\s*(.*)$', line.strip())
     if prog_match:
         percent, current, total, status = prog_match.groups()
         status = status.strip()
-        # Collapse spinner: "Thinking /", "Thinking \", "Processing —" -> "Thinking..."/"Processing..."
+        # Collapse spinner
         spin = re.match(r'^(Thinking|Processing)\s*[—\\|/\s]*$', status)
         if spin:
             status = f"{spin.group(1)}..."
         return f"    Progress: {percent}% ({current}/{total} lines) - {status}" if status else f"    Progress: {percent}% ({current}/{total} lines)"
 
-    # Return cleaned line for other messages
+    # Return other messages
     return line.strip()
 
 
@@ -671,13 +665,13 @@ def open_in_lossless_cut(video_paths: List[Path], log_callback=None) -> bool:
         path_strings = [str(p) for p in video_paths]
         
         if system == "Darwin":
-            # macOS: use 'open -a' for .app bundles
+            # macOS: open -a
             subprocess.run(["open", "-a", str(lossless_cut), *path_strings])
         elif system == "Windows":
-            # Windows: run the executable directly with the files as arguments
+            # Windows: run executable
             subprocess.Popen([str(lossless_cut), *path_strings])
         else:
-            # Linux: run the executable directly
+            # Linux: run executable
             subprocess.Popen([str(lossless_cut), *path_strings])
         
         if log_callback:
@@ -796,7 +790,7 @@ def build_save_names(
 
 def _add_headers_for_bare_url(url_or_cmd: str) -> str:
     """Add Referer/Origin headers for bare URLs. Many CDNs require these to avoid 403."""
-    # Derive Referer/Origin from URL domain (internal mapping, not user-facing)
+    # Referer/Origin from URL
     url = url_or_cmd.strip().strip('"')
     if not url.startswith('http'):
         return url_or_cmd
@@ -806,7 +800,7 @@ def _add_headers_for_bare_url(url_or_cmd: str) -> str:
     elif 'tf1.fr' in url_lower:
         referer, origin = "https://www.tf1.fr/", "https://www.tf1.fr"
     else:
-        # Generic: use URL's origin (scheme + host)
+        # Use URL origin
         try:
             p = urlparse(url)
             base = f"{p.scheme}://{p.netloc}"
@@ -819,7 +813,7 @@ def _add_headers_for_bare_url(url_or_cmd: str) -> str:
         f'-H {shlex.quote("Accept: */*")}',
         f'-H {shlex.quote("Origin: " + origin)}',
     ]
-    # Always quote URL to handle &, =, etc. in query params
+    # Quote URL for params
     return f"{' '.join(headers)} \"{url}\""
 
 
@@ -836,7 +830,7 @@ def _drop_n_m3u8_output_options(args: List[str]) -> List[str]:
         a = args[i]
         a_lower = a.lower()
         if a_lower in drop_flags:
-            # Skip this flag and its value if it takes one
+            # Skip flag and value
             if a_lower in ("-m", "-M", "--save-name", "--save-dir", "--tmp-dir", "--check-segments-count",
                           "--select-video", "--select-audio", "--select-subtitle"):
                 i += 2  # skip value (avoid bounds: don't skip past end)
@@ -903,11 +897,11 @@ def download_episodes(
             log_callback("Error: N_m3u8DL-RE not found. Install it via the Setup Wizard or set n_m3u8dl_path in Settings.")
         return False
 
-    # Filter out HAR file lines (starting with @) and empty lines
+    # Filter HAR and empty lines
     lines = []
     for line in commands_text.strip().split('\n'):
         line = line.strip()
-        # Skip empty lines, comments, and HAR file references
+        # Skip empty, comments, HAR
         if line and not line.startswith('#') and not line.startswith('@'):
             lines.append(line)
 
@@ -916,7 +910,7 @@ def download_episodes(
             log_callback("No commands found.")
         return False
 
-    # Build save names from mode, name, spec
+    # Build save names
     save_names = build_save_names(mode, name, use_s01e, season, ep_spec, len(lines))
 
     downloaded_files = []
@@ -935,15 +929,15 @@ def download_episodes(
         for i, base_command in enumerate(lines):
             save_name = save_names[i] if i < len(save_names) else str(i + 1)
 
-            # Skip empty lines or comments
+            # Skip empty or comments
             if not base_command or base_command.startswith('#'):
                 continue
 
-            # Strip "N_m3u8DL-RE" prefix if present (user might paste full command)
+            # Strip N_m3u8DL-RE prefix
             if base_command.lower().startswith('n_m3u8dl-re '):
                 base_command = base_command[12:].strip()
 
-            # If line looks like a bare URL (no -H, no --key), add headers many CDNs require
+            # Add CDN headers for bare URLs
             if ' -H ' not in base_command and ' --key ' not in base_command and base_command.lstrip('"').startswith('http'):
                 base_command = _add_headers_for_bare_url(base_command)
                 if log_callback:
@@ -952,16 +946,16 @@ def download_episodes(
             if progress_callback:
                 progress_callback(i + 1, total, save_name)
 
-            # Parse user command with shlex so quoted URL and -H "..." are preserved (avoids shell mangling)
+            # Parse with shlex
             try:
                 user_args = shlex.split(base_command)
             except ValueError as e:
                 if log_callback:
                     log_callback(f"  ✗ Invalid quoting in command: {e}")
                 continue
-            # Drop user's output options so our --save-name/--save-dir/-M take effect
+            # Drop user output options
             user_args = _drop_n_m3u8_output_options(user_args)
-            # N_m3u8DL-RE requires URL as first positional or it prints help and exits
+            # URL must be first
             user_args = _url_first_args(user_args)
 
             app_args = [
@@ -985,7 +979,7 @@ def download_episodes(
             debug_file.write(f"Running: {base_command[:80]}...\n")
             debug_file.flush()
 
-            # Use Popen with list (shell=False) so arguments are passed correctly to N_m3u8DL-RE
+            # Popen with list for correct args
             try:
                 process = subprocess.Popen(
                     cmd,
@@ -997,7 +991,7 @@ def download_episodes(
                     universal_newlines=True
                 )
 
-                # Stream output line by line
+                # Stream output
                 output_lines = []
                 last_logged_percent = -5  # Track last logged percentage to avoid spam
 
@@ -1005,7 +999,7 @@ def download_episodes(
                     line_output = process.stdout.readline()
                     if not line_output:
                         break
-                    # Skip progress bar lines (repetitive, cause most of the bloat)
+                    # Skip progress bar lines
                     is_progress_bar = '━' in line_output
                     if not is_progress_bar:
                         cleaned = _strip_ansi(line_output)
@@ -1015,13 +1009,13 @@ def download_episodes(
                     if line_output:
                         output_lines.append(line_output)
 
-                        # Filter out progress bar spam (lines with ━ characters)
+                        # Skip progress bar
                         is_progress_bar = '━' in line_output
 
-                        # Filter out file access warnings (normal concurrent download noise)
+                        # Skip file access warnings
                         is_file_access_warning = 'The process cannot access the file' in line_output
 
-                        # Only log important messages
+                        # Log important only
                         should_log = (
                             not is_progress_bar and
                             not is_file_access_warning and (
@@ -1039,14 +1033,13 @@ def download_episodes(
                         if should_log and log_callback:
                             log_callback(f"  {line_output}")
 
-                        # Progress logging suppressed to avoid spam from multiple streams
-                        # (video, audio, subtitle each report 0-100% separately)
+                        # Suppress progress spam
 
-                # Wait for process to complete
+                # Wait for process
                 returncode = process.wait()
 
                 if returncode == 0:
-                    # Escape glob metacharacters * ? [ in save_name
+                    # Escape glob metachars
                     pattern = save_name.replace("\\", "\\\\").replace("*", "[*]").replace("?", "[?]").replace("[", "[[]")
                     candidates = list(output_dir.glob(f"{pattern}.*"))
                     if candidates:
@@ -1059,7 +1052,7 @@ def download_episodes(
                 else:
                     if log_callback:
                         log_callback(f"  ✗ Error downloading {save_name} (exit code: {returncode})")
-                        # Show last few lines of output for debugging
+                        # Show last lines for debug
                         if output_lines:
                             log_callback(f"    Last output lines:")
                             for err_line in output_lines[-5:]:
@@ -1118,7 +1111,7 @@ def extract_subtitles(downloads_dir: Path, subtitles_dir: Path, progress_callbac
             "-map", "0:s:0", str(srt_file)
         ]
         
-        # Stream FFmpeg output in real-time
+        # Stream FFmpeg output
         try:
             process = subprocess.Popen(
                 cmd,
@@ -1129,7 +1122,7 @@ def extract_subtitles(downloads_dir: Path, subtitles_dir: Path, progress_callbac
                 universal_newlines=True
             )
             
-            # Read stderr line by line (FFmpeg outputs progress to stderr)
+            # Read stderr
             error_lines = []
             while True:
                 line = process.stderr.readline()
@@ -1142,7 +1135,7 @@ def extract_subtitles(downloads_dir: Path, subtitles_dir: Path, progress_callbac
                 
                 error_lines.append(line)
                 
-                # Log progress information
+                # Log progress
                 if "Stream #" in line or "Subtitle:" in line:
                     if log_callback:
                         log_callback(f"    {line}")
@@ -1150,7 +1143,7 @@ def extract_subtitles(downloads_dir: Path, subtitles_dir: Path, progress_callbac
                     if log_callback:
                         log_callback(f"    ⚠ {line}")
             
-            # Wait for process to complete
+            # Wait for process
             returncode = process.wait()
             
             if returncode == 0 and srt_file.exists():
@@ -1204,7 +1197,7 @@ def clean_subtitles(subtitles_dir: Path, progress_callback=None, log_callback=No
             progress_callback(idx, total, srt_file.name)
         
         try:
-            # Get file size for logging
+            # File size for logging
             file_size = srt_file.stat().st_size
             file_size_kb = file_size / 1024
             
@@ -1213,7 +1206,7 @@ def clean_subtitles(subtitles_dir: Path, progress_callback=None, log_callback=No
             
             original_length = len(content)
             
-            # Remove color tags like <c.yellow>, <c.red>, <c.bg_black>, etc.
+            # Remove color tags
             cleaned = re.sub(r'<c\.[a-zA-Z0-9_]+>', '', content)
             cleaned = re.sub(r'</c\.[a-zA-Z0-9_]+>', '', cleaned)
             
@@ -1373,7 +1366,7 @@ def translate_subtitles(selected_srt_files: List[Path], target_language: str = "
                     cleaned_line = clean_log_line(line_output)
                     if cleaned_line:
                         output_lines.append(line_output.strip())
-                        # When gst says both keys exhausted and is waiting, kill and switch to next pair
+                        # Switch keys when exhausted
                         if "All API quotas exceeded" in cleaned_line and "waiting" in cleaned_line:
                             if log_callback and pair_index + 1 < len(key_pairs):
                                 log_callback(f"    All API quotas exceeded - switching to next API key pair ({pair_index + 2}/{len(key_pairs)})...")
@@ -1384,11 +1377,11 @@ def translate_subtitles(selected_srt_files: List[Path], target_language: str = "
                                 process.kill()
                                 process.wait()
                             break
-                        # Progress lines: drive progress bar, skip log spam (bar shows it)
+                        # Progress: update bar, skip log
                         prog_match = re.match(r'\s*Progress:\s*(\d+)%\s*\((\d+)/(\d+)\s*lines?\)', cleaned_line)
                         if prog_match:
                             pct, cur, tot = int(prog_match.group(1)), int(prog_match.group(2)), int(prog_match.group(3))
-                            # Only update progress bar when advancing (never decrease on API-pair restart)
+                            # Update bar when advancing
                             if pct >= max_progress_pct:
                                 max_progress_pct = pct
                                 if progress_callback:
@@ -1396,14 +1389,13 @@ def translate_subtitles(selected_srt_files: List[Path], target_language: str = "
                             if (pct, cur, tot) == last_progress_tuple:
                                 continue
                             last_progress_tuple = (pct, cur, tot)
-                            # Don't log progress to LOG OUTPUT - bar above shows it
+                            # Skip progress log
                             last_progress_line = cleaned_line
                             continue
-                        # Dedupe: skip if same as last (don't reset last_progress_tuple - keeps progress collapse working)
-                        # Dedupe noisy repeated errors: only log first occurrence of each
+                        # Dedupe same line
                         if cleaned_line == last_progress_line:
                             continue
-                        # Dedupe noisy repeated errors: only log first occurrence of each
+                        # Dedupe repeated errors
                         noise_key = None
                         if "Consecutive error count:" in cleaned_line:
                             noise_key = re.search(r'Consecutive error count: \d+/\d+', cleaned_line)
@@ -1546,22 +1538,21 @@ def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_
     for idx, video_file in enumerate(video_files, start=1):
         base = video_file.stem
         
-        # Check for subtitle file in multiple locations
-        # Try different filename patterns based on ISO 639 settings
+        # Find subtitle
         srt_file = None
         srt_location = None
         
-        # Build list of filenames to try (in priority order)
+        # Build filename list
         filenames_to_try = [f"{base}.srt"]  # Always try exact match first
         
         if use_iso639:
-            # Also try with ISO 639 suffix for target language
+            # Try ISO 639 suffix
             target_code = ISO_639_CODES.get(target_language, "eng")
             filenames_to_try.append(f"{base}.{target_code}.srt")
         
-        # Check each location for each filename pattern
+        # Check each location
         for filename in filenames_to_try:
-            # 1. Same directory as video file (preferred)
+            # Video directory first
             candidate = video_file.parent / filename
             if candidate.exists():
                 srt_file = candidate
@@ -1575,7 +1566,7 @@ def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_
                 srt_location = "subtitles directory"
                 break
 
-            # 3. Downloads directory (fallback)
+            # Downloads fallback
             if downloads_dir and downloads_dir.exists():
                 candidate = downloads_dir / filename
                 if candidate.exists():
@@ -1611,33 +1602,30 @@ def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_
             if use_watermarks:
                 log_callback(f"  Watermark: {Path(watermark_path).name}")
         
-        # Get video duration for percentage/ETA calculation
+        # Video duration for ETA
         video_duration_seconds = get_video_duration_seconds(video_file)
         
-        # Check audio channels and prepare audio filter if needed
+        # Audio filter for multichannel
         audio_channels = get_audio_channels(video_file)
         audio_filter = None
         if audio_channels and audio_channels > 2:
             if log_callback:
                 log_callback(f"  Audio: {audio_channels} channels detected, converting to stereo (2.0) for higher compatibility")
-            # For 5.1 (6 channels): downmix to stereo
-            # Channel mapping: FL=0, FR=1, FC=2, LFE=3, BL=4, BR=5
-            # Stereo output: mix center + front L/R + rear L/R
+            # Downmix to stereo
             if audio_channels == 6:
-                # 5.1 to stereo: mix center channel with front and rear channels
+                # 5.1 to stereo
                 audio_filter = "pan=stereo|c0=0.5*c2+0.5*c0+0.3*c4|c1=0.5*c2+0.5*c1+0.3*c5"
             elif audio_channels >= 4:
-                # 4+ channels: simple downmix
+                # 4+ channels downmix
                 audio_filter = "pan=stereo|c0=0.5*c0+0.5*c2|c1=0.5*c1+0.5*c3"
             else:
-                # 3 channels: mix to stereo
+                # 3 channels downmix
                 audio_filter = "pan=stereo|c0=0.5*c0+0.5*c2|c1=0.5*c1+0.5*c2"
         
-        # Build FFmpeg filter. FFmpeg 7.x rejects subtitles with quoted path in filter_complex;
-        # pass path unquoted (escape only \ and : for filter graph). Path with spaces: use script.
+        # Build FFmpeg filter, escape path for filter
         def escape_subtitle_path_for_filter(p):
             s = str(p).replace("\\", "\\\\")
-            # Colon in path (e.g. Windows C:) must be escaped in filter
+            # Escape colon for filter
             s = s.replace(":", "\\:")
             return s
         srt_path = escape_subtitle_path_for_filter(srt_file)
@@ -1667,7 +1655,7 @@ def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_
                 "-filter_complex", filter_complex,
                 "-c:v", "libx264", "-preset", preset, "-crf", "20",
             ]
-            # Add audio filter if needed for downmixing
+            # Add audio filter if needed
             if audio_filter:
                 cmd.extend(["-af", audio_filter])
             cmd.extend(["-c:a", "aac", "-b:a", "128k", str(out_file)])
@@ -1686,7 +1674,7 @@ def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_
                 "-vf", filter_complex,
                 "-c:v", "libx264", "-preset", preset, "-crf", "20",
             ]
-            # Add audio filter if needed for downmixing
+            # Add audio filter if needed
             if audio_filter:
                 cmd.extend(["-af", audio_filter])
             cmd.extend(["-c:a", "aac", "-b:a", "128k", str(out_file)])
@@ -1695,7 +1683,7 @@ def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_
         if log_callback:
             log_callback(f"  Running: {' '.join(cmd[:3])} ... [filter] ... {cmd[-1]}")
         
-        # Stream FFmpeg output in real-time
+        # Stream FFmpeg output
         try:
             process = subprocess.Popen(
                 cmd,
@@ -1706,7 +1694,7 @@ def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_
                 universal_newlines=True
             )
             
-            # Read stderr line by line (FFmpeg outputs progress to stderr)
+            # Read stderr
             error_lines = []
             last_progress_time = None
             current_time_seconds = None
@@ -1794,7 +1782,7 @@ def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_
                     if log_callback:
                         log_callback(f"    ⚠ {line}")
             
-            # Wait for process to complete
+            # Wait for process
             returncode = process.wait()
             
             if returncode == 0 and out_file.exists():
@@ -2262,8 +2250,7 @@ def _get_whisper_cpp_binary(config: Dict) -> Optional[Path]:
         except Exception:
             return False
 
-    # Check directory of running Python first (pip installs whisper-cpp to venv bin/Scripts)
-    # This works when PATH doesn't include the venv (e.g. app run from IDE)
+    # Check Python venv first
     for exe_dir in [
         Path(sys.executable).resolve().parent,
         Path(__file__).resolve().parent / ".venv" / ("Scripts" if os.name == "nt" else "bin"),
@@ -3395,14 +3382,14 @@ def find_gst_command() -> Optional[str]:
     
     # Try to run via Python module as fallback
     try:
-        # Check if gemini_srt_translator is installed and can be run as module
+        # Check gst module
         result = subprocess.run(
             [sys.executable, "-m", "gemini_srt_translator", "--help"],
             capture_output=True,
             timeout=2
         )
         if result.returncode == 0:
-            # Return Python command to run as module
+            # Run as module
             return f"{sys.executable} -m gemini_srt_translator"
     except Exception:
         pass
@@ -3489,7 +3476,7 @@ def get_app_executable(app_name: str) -> Optional[Path]:
         if Path(exe_path).exists():
             return Path(exe_path)
     
-    # Check if executable is in PATH
+    # Check PATH
     exe_name = info.get("exe_name")
     if exe_name:
         found = shutil.which(exe_name)
@@ -3520,7 +3507,7 @@ class SetupWizard(QDialog):
         self.current_step = 0
         self._start_fresh_checked = False
         
-        # Check installation status
+        # Installation status
         self.pyqt5_installed = check_python_package("PyQt5")
         self.gst_installed = find_gst_command() is not None  # Check for gst command, not Python package (pipx support)
         self.ffmpeg_installed = ffmpeg_installed(self.config)
@@ -3541,7 +3528,7 @@ class SetupWizard(QDialog):
         layout = QVBoxLayout()
         layout.setSpacing(10)
         
-        # Title bar (consistent across all steps)
+        # Title bar
         title_bar = QWidget()
         title_layout = QVBoxLayout()
         title = QLabel("Welcome to Video Processing Studio")
@@ -3559,7 +3546,7 @@ class SetupWizard(QDialog):
         self.step_label.setStyleSheet("color: #666;")
         layout.addWidget(self.step_label)
         
-        # Stacked widget for different steps
+        # Stacked steps
         self.stacked = QStackedWidget()
         self.stacked.addWidget(self.create_welcome_step())
         self.stacked.addWidget(self.create_features_step())
@@ -4997,7 +4984,7 @@ class VideoProcessingApp(QMainWindow):
     
     def darken_color(self, hex_color: str, percent: float = 0.15) -> str:
         """Darken a hex color by a percentage."""
-        # Remove # if present
+        # Strip #
         hex_color = hex_color.lstrip('#')
         # Convert to RGB
         r = int(hex_color[0:2], 16)
@@ -5007,7 +4994,7 @@ class VideoProcessingApp(QMainWindow):
         r = max(0, int(r * (1 - percent)))
         g = max(0, int(g * (1 - percent)))
         b = max(0, int(b * (1 - percent)))
-        # Convert back to hex
+        # To hex
         return f"#{r:02x}{g:02x}{b:02x}"
     
     def apply_button_style(self, button: QPushButton, color: str):
@@ -5039,7 +5026,7 @@ class VideoProcessingApp(QMainWindow):
     
     def apply_lesbian_flag_styles(self):
         """Apply lesbian flag color scheme to buttons."""
-        # Lesbian flag colors: Red → Orange → Light Orange → Pink → Purple → Dark Pink
+        # Flag colors
         colors = [
             "#df4300",  # Red
             "#f48a32",  # Orange
@@ -5049,14 +5036,10 @@ class VideoProcessingApp(QMainWindow):
             "#b42075",  # Dark Pink
         ]
         
-        # Find all buttons and apply colors by section
-        # We'll need to store button references or find them by their parent group
-        # For now, let's apply styles directly to buttons we can identify
-        
-        # Get all QPushButton widgets
+        # Find buttons by section
         buttons = self.findChildren(QPushButton)
         
-        # Group buttons by their parent QGroupBox
+        # Group by QGroupBox
         download_buttons = []
         subtitle_buttons = []
         process_buttons = []
@@ -5068,7 +5051,7 @@ class VideoProcessingApp(QMainWindow):
         
         for btn in buttons:
             parent = btn.parent()
-            # Walk up the parent chain to find QGroupBox
+            # Find QGroupBox
             while parent:
                 if isinstance(parent, QGroupBox):
                     group_title = parent.title()
@@ -5085,7 +5068,7 @@ class VideoProcessingApp(QMainWindow):
                     break
                 parent = parent.parent()
             
-            # Settings, FAQ, and About buttons are in top bar, not in a group
+            # Top bar buttons
             if btn.text() == "Settings":
                 settings_button = btn
             elif btn.text() == "FAQ":
@@ -5093,28 +5076,22 @@ class VideoProcessingApp(QMainWindow):
             elif btn.text() == "About":
                 about_button = btn
         
-        # Apply colors to each group
-        # Group 1: Download buttons - Red
+        # Apply colors
         for btn in download_buttons:
             self.apply_button_style(btn, colors[0])
         
-        # Group 2: Subtitles buttons - Orange
         for btn in subtitle_buttons:
             self.apply_button_style(btn, colors[1])
         
-        # Group 3: Process video buttons - Light Orange
         for btn in process_buttons:
             self.apply_button_style(btn, colors[2])
         
-        # Group 4: Remux buttons - Pink
         for btn in remux_buttons:
             self.apply_button_style(btn, colors[3])
         
-        # Group 5: Transcribe button - Purple
         for btn in transcribe_buttons:
             self.apply_button_style(btn, colors[4])
         
-        # Settings, FAQ, and About buttons - Dark Pink
         if settings_button:
             self.apply_button_style(settings_button, colors[5])
         if faq_button:
@@ -6504,10 +6481,10 @@ class VideoProcessingApp(QMainWindow):
         
         main_layout.addLayout(header_layout)
         
-        # Create tab widget for main content
+        # Main tabs
         self.main_tabs = QTabWidget()
         
-        # Create "Main" tab with all existing sections
+        # Main tab
         main_tab = QWidget()
         layout = QVBoxLayout()
         main_tab.setLayout(layout)
@@ -6517,7 +6494,7 @@ class VideoProcessingApp(QMainWindow):
         download_group.setStyleSheet("QGroupBox { font-weight: bold; }")
         download_layout = QVBoxLayout()
         
-        # Naming row: Mode, Name, S01E02, Season, Items
+        # Naming row
         naming_row1 = QHBoxLayout()
         naming_row1.addWidget(QLabel("Mode:"))
         self.download_mode_combo = QComboBox()
@@ -6591,7 +6568,7 @@ class VideoProcessingApp(QMainWindow):
         
         download_buttons = QHBoxLayout()
         self.download_quality_combo = QComboBox()
-        # Use res="A|B|C":for=best so unmatched resolutions fall back to next (e.g. 4K→1080p)
+        # Resolution fallback
         for name, code in [
             ("480p", 'res="480":for=best'),
             ("720p", 'res="720|480":for=best'),
@@ -6805,7 +6782,7 @@ class VideoProcessingApp(QMainWindow):
             QMessageBox.warning(self, "Busy", "Another operation is already running.")
             return
         
-        # Determine operation type from function name
+        # Operation from func name
         func_name = script_func.__name__
         operation_names = {
             "download_episodes": "Downloading episodes",
@@ -6820,12 +6797,12 @@ class VideoProcessingApp(QMainWindow):
         }
         self.current_operation = operation_names.get(func_name, "Processing")
         
-        # Hide progress section for downloads (user preference), show for other operations
+        # Hide progress for downloads
         is_download = func_name in ["download_episodes", "download_with_detection"]
         self.progress_group.setVisible(not is_download)
         
         if not is_download:
-            # Only configure progress bar if visible
+            # Configure progress bar
             self.progress_bar.setRange(0, 100)
             self.progress_bar.setValue(0)
             self.progress_bar.setFormat("%p%")
@@ -6833,7 +6810,7 @@ class VideoProcessingApp(QMainWindow):
             self.progress_file_label.setText("")
             self.progress_counter_label.setText("")
             self.update_progress_bar_color()
-            # Enable stop button
+            # Enable stop
             self.stop_btn.setEnabled(True)
         
         self.statusBar().showMessage("Running...")
@@ -6875,11 +6852,11 @@ class VideoProcessingApp(QMainWindow):
     
     def on_progress_update(self, current: int, total: int, filename: str):
         """Handle progress update."""
-        # Try to extract percentage from filename (format: "filename.mp4 (45.2%)")
+        # Extract % from filename
         file_percentage = None
         if filename and '(' in filename and '%' in filename:
             try:
-                # Extract percentage from filename like "video.mp4 (45.2%)"
+                # Get percentage
                 match = re.search(r'\((\d+\.?\d*)%\)', filename)
                 if match:
                     file_percentage = float(match.group(1))
@@ -6888,21 +6865,19 @@ class VideoProcessingApp(QMainWindow):
         
         if total > 0:
             if file_percentage is not None:
-                # Calculate combined progress: file-level progress + per-file percentage
-                # File-level progress accounts for completed files (0 to total-1)
-                # Per-file progress accounts for current file (0 to 1)
+                # Combined progress
                 completed_files_progress = ((current - 1) / total) * 100 if current > 1 else 0
                 current_file_progress = (file_percentage / 100) * (100 / total)
                 combined_percent = completed_files_progress + current_file_progress
                 percent = int(min(100, max(0, combined_percent)))
             else:
-                # Fallback to file-level progress only
+                # Fallback progress
                 percent = int((current / total) * 100)
             
             self.progress_bar.setValue(percent)
             self.progress_counter_label.setText(f"{current}/{total}")
         else:
-            # Indeterminate progress for single-file operations
+            # Indeterminate progress
             self.progress_bar.setRange(0, 0)  # Indeterminate mode
             self.progress_counter_label.setText("")
         
