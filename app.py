@@ -9,12 +9,15 @@ VERSION_CODENAME = "Hallucination"
 
 import sys
 import os
+
 import json
 from urllib.parse import urlparse
+from urllib.request import urlretrieve
 import re
 import shlex
 import subprocess
 import shutil
+import threading
 import time
 import traceback
 import platform
@@ -148,6 +151,64 @@ TRANSCRIBE_LANGUAGES = [
     ("Turkish", "tr"),
 ]
 
+# Whisper CPP model name -> ggml filename
+WHISPER_CPP_MODELS = {
+    "tiny.en": "ggml-tiny.en.bin",
+    "tiny": "ggml-tiny.bin",
+    "tiny.en-q5_1": "ggml-tiny.en-q5_1.bin",
+    "tiny-q5_1": "ggml-tiny-q5_1.bin",
+    "base.en": "ggml-base.en.bin",
+    "base": "ggml-base.bin",
+    "base.en-q5_1": "ggml-base.en-q5_1.bin",
+    "base-q5_1": "ggml-base-q5_1.bin",
+    "small.en": "ggml-small.en.bin",
+    "small": "ggml-small.bin",
+    "small.en-q5_1": "ggml-small.en-q5_1.bin",
+    "small-q5_1": "ggml-small-q5_1.bin",
+    "medium.en": "ggml-medium.en.bin",
+    "medium": "ggml-medium.bin",
+    "medium.en-q5_0": "ggml-medium.en-q5_0.bin",
+    "medium-q5_0": "ggml-medium-q5_0.bin",
+    "large-v1": "ggml-large-v1.bin",
+    "large-v2": "ggml-large-v2.bin",
+    "large": "ggml-large-v3.bin",
+    "large-q5_0": "ggml-large-v3-q5_0.bin",
+    "large-v3-turbo": "ggml-large-v3-turbo.bin",
+    "large-v3-turbo-q5_0": "ggml-large-v3-turbo-q5_0.bin",
+}
+
+# Approximate model sizes for download progress (MB)
+WHISPER_CPP_MODEL_SIZES = {
+    "ggml-tiny.en.bin": "75 MB",
+    "ggml-tiny.bin": "75 MB",
+    "ggml-tiny.en-q5_1.bin": "32 MB",
+    "ggml-tiny-q5_1.bin": "32 MB",
+    "ggml-base.en.bin": "141 MB",
+    "ggml-base.bin": "141 MB",
+    "ggml-base.en-q5_1.bin": "60 MB",
+    "ggml-base-q5_1.bin": "60 MB",
+    "ggml-small.en.bin": "465 MB",
+    "ggml-small.bin": "465 MB",
+    "ggml-small.en-q5_1.bin": "190 MB",
+    "ggml-small-q5_1.bin": "190 MB",
+    "ggml-medium.en.bin": "1.4 GB",
+    "ggml-medium.bin": "1.4 GB",
+    "ggml-medium.en-q5_0.bin": "539 MB",
+    "ggml-medium-q5_0.bin": "539 MB",
+    "ggml-large-v1.bin": "2.9 GB",
+    "ggml-large-v2.bin": "2.9 GB",
+    "ggml-large-v3.bin": "2.9 GB",
+    "ggml-large-v3-q5_0.bin": "2.9 GB",
+    "ggml-large-v3-turbo.bin": "1.5 GB",
+    "ggml-large-v3-turbo-q5_0.bin": "547 MB",
+}
+
+
+def _whisper_cpp_model_size(filename: str) -> str:
+    """Return approximate size string for model filename."""
+    return WHISPER_CPP_MODEL_SIZES.get(filename, "?")
+
+
 # ============================================================================
 # Custom Widgets
 # ============================================================================
@@ -210,7 +271,11 @@ def load_config() -> Dict:
         "whisper_options": {
             "extra_args": "",
             "extra_args_parsed": ""
-        }
+        },
+        "whisper_cpp_path": "",
+        "whisper_cpp_model_dir": "",
+        "whisper_cpp_model": "base",
+        "whisper_cpp_extra_args": ""
     }
     
     if config_path.exists():
@@ -2216,6 +2281,346 @@ def _get_whisper_python(log_callback=None) -> Optional[Path]:
     return python_exe
 
 
+def _get_whisper_cpp_binary(config: Dict) -> Optional[Path]:
+    """Resolve Whisper CPP executable. Config whisper_cpp_path overrides; else check PATH."""
+    user_path = (config.get("whisper_cpp_path") or "").strip()
+    if user_path:
+        p = Path(user_path).expanduser()
+        if p.is_file():
+            return p.resolve()
+        if p.is_dir():
+            exe = p / ("whisper-cli.exe" if os.name == "nt" else "whisper-cli")
+            if exe.exists():
+                return exe.resolve()
+            main_exe = p / ("main.exe" if os.name == "nt" else "main")
+            if main_exe.exists():
+                return main_exe.resolve()
+    def _is_whisper_cpp(bin_path: Path) -> bool:
+        """Check if binary is whisper.cpp (not Python openai-whisper)."""
+        try:
+            r = subprocess.run(
+                [str(bin_path), "-h"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            out = (r.stdout or "") + (r.stderr or "")
+            # Python whisper has --output_format; reject it
+            if "output_format" in out:
+                return False
+            # Original whisper.cpp has --vad and -f; pip whisper.cpp-cli has -m and -f
+            return ("-f" in out or "--file" in out) and (
+                "--vad" in out or "-m" in out or "--model" in out
+            )
+        except Exception:
+            return False
+
+    # Check directory of running Python first (pip installs whisper-cpp to venv bin/Scripts)
+    # This works when PATH doesn't include the venv (e.g. app run from IDE)
+    for exe_dir in [
+        Path(sys.executable).resolve().parent,
+        Path(__file__).resolve().parent / ".venv" / ("Scripts" if os.name == "nt" else "bin"),
+        Path(__file__).resolve().parent / "venv" / ("Scripts" if os.name == "nt" else "bin"),
+    ]:
+        if not exe_dir.exists():
+            continue
+        for name in ("whisper-cpp", "whisper-cli", "main", "whisper"):
+            candidate = exe_dir / (name + (".exe" if os.name == "nt" else ""))
+            if candidate.exists() and _is_whisper_cpp(candidate):
+                return candidate
+
+    for name in ("whisper-cpp", "whisper-cli", "main", "whisper"):
+        found = shutil.which(name)
+        if found:
+            p = Path(found)
+            if _is_whisper_cpp(p):
+                return p
+    return None
+
+
+def transcribe_video_whisper_cpp(
+    video_path: Path,
+    language_code: str,
+    model_name: str,
+    progress_callback=None,
+    log_callback=None,
+) -> bool:
+    """Transcribe video using Whisper CPP. Uses built-in VAD. Faster than Python Whisper."""
+    if not video_path.exists():
+        if log_callback:
+            log_callback(f"Error: Video file not found: {video_path}")
+        return False
+
+    if not check_command_exists("ffmpeg"):
+        if log_callback:
+            log_callback("Error: FFmpeg not found. Please install it and add to PATH.")
+        return False
+
+    config = load_config()
+    binary = _get_whisper_cpp_binary(config)
+    if not binary or not Path(binary).exists():
+        if log_callback:
+            log_callback(
+                "Error: Whisper CPP binary not found. Install from https://github.com/ggerganov/whisper.cpp "
+                "and set whisper_cpp_path in settings.json to the folder containing the binary."
+            )
+        return False
+
+    model_filename = WHISPER_CPP_MODELS.get(model_name)
+    if not model_filename:
+        model_filename = f"ggml-{model_name}.bin" if not model_name.endswith(".bin") else model_name
+
+    model_dir = (config.get("whisper_cpp_model_dir") or "").strip()
+    if model_dir:
+        model_path = Path(model_dir).expanduser() / model_filename
+    else:
+        # Try binary's folder first (e.g. whisper.cpp/build)
+        base_dir = Path(binary).parent
+        # Skip binary dir if it's a venv/bin (pip-installed whisper has no models there)
+        if ".venv" in str(base_dir) or "venv" in str(base_dir) or base_dir.name == "bin":
+            base_dir = None
+        candidates = []
+        if base_dir:
+            candidates.extend([
+                base_dir / "Models" / model_filename,
+                base_dir / "models" / model_filename,
+                base_dir / model_filename,
+            ])
+        # Common locations when binary is from pip/venv
+        home = Path.home()
+        candidates.extend([
+            home / ".cache" / "whisper.cpp" / model_filename,
+            home / ".cache" / "whisper.cpp" / "models" / model_filename,
+            home / "whisper.cpp" / "models" / model_filename,
+        ])
+        model_path = None
+        for c in candidates:
+            if c.exists():
+                model_path = c
+                break
+        if model_path is None:
+            model_path = candidates[0]  # Use first for error message
+
+    if not model_path.exists():
+        download_url = f"https://huggingface.co/ggerganov/whisper.cpp/resolve/main/{model_filename}"
+        model_path.parent.mkdir(parents=True, exist_ok=True)
+        if log_callback:
+            log_callback(f"Model not found. Downloading {model_filename} (~{_whisper_cpp_model_size(model_filename)})...")
+        try:
+            last_pct = [-1]  # mutable to allow update in closure
+            def _reporthook(block_num, block_size, total_size):
+                if log_callback and total_size > 0:
+                    pct = min(100, block_num * block_size * 100 // total_size)
+                    if pct >= last_pct[0] + 10 or pct == 100:  # throttle to every 10%
+                        last_pct[0] = pct
+                        mb = (block_num * block_size) / (1024 * 1024)
+                        total_mb = total_size / (1024 * 1024)
+                        log_callback(f"Downloading model: {mb:.1f}/{total_mb:.1f} MB ({pct}%)")
+            urlretrieve(download_url, model_path, reporthook=_reporthook)
+        except Exception as e:
+            if model_path.exists():
+                try:
+                    model_path.unlink()
+                except OSError:
+                    pass
+            if log_callback:
+                log_callback(f"Error: Failed to download model: {e}")
+                log_callback(f"Manual download: {download_url}")
+            return False
+        if log_callback:
+            log_callback("Download complete.")
+    if not model_path.exists():
+        return False
+
+    try:
+        if log_callback:
+            log_callback(f"Starting Whisper CPP transcription: {video_path.name}")
+            log_callback(f"Language: {language_code}, Model: {model_name}")
+
+        video_dir = video_path.parent
+        base_name = video_path.stem
+        audio_stem = f"{base_name}_whisper_cpp"
+        audio_path = video_dir / f"{audio_stem}.wav"
+
+        existing = list(video_dir.glob(f"{audio_stem}*"))
+        if existing:
+            n = 1
+            while (video_dir / f"{audio_stem}_{n}.wav").exists():
+                n += 1
+            audio_stem = f"{audio_stem}_{n}"
+            audio_path = video_dir / f"{audio_stem}.wav"
+
+        if log_callback:
+            log_callback("Extracting audio (16kHz mono, volume=1.75)...")
+        ffmpeg_result = subprocess.run(
+            [
+                "ffmpeg", "-y", "-i", str(video_path),
+                "-vn", "-ar", "16000", "-ac", "1", "-ab", "32k",
+                "-af", "volume=1.75", "-f", "wav",
+                str(audio_path), "-loglevel", "warning", "-hide_banner",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+        if ffmpeg_result.returncode != 0:
+            if log_callback:
+                log_callback(f"FFmpeg error: {ffmpeg_result.stderr or ffmpeg_result.stdout}")
+            return False
+
+        if not audio_path.exists():
+            if log_callback:
+                log_callback("FFmpeg did not produce audio file.")
+            return False
+
+        output_stem = str(video_dir / base_name)
+
+        # On macOS, pip whisper.cpp-cli lacks ggml-metal.metal; download it to enable Metal/GPU
+        metal_dir = None
+        if sys.platform == "darwin":
+            binary_dir = Path(binary).parent
+            metal_in_cwd = binary_dir / "ggml-metal.metal"
+            cache_metal = Path.home() / ".cache" / "whisper.cpp" / "ggml-metal.metal"
+            if metal_in_cwd.exists():
+                metal_dir = str(binary_dir)
+            elif cache_metal.exists():
+                metal_dir = str(cache_metal.parent)
+            else:
+                # Pip package doesn't bundle it; download from whisper.cpp repo
+                if log_callback:
+                    log_callback("Downloading ggml-metal.metal for Metal/GPU support (~400 KB)...")
+                try:
+                    cache_metal.parent.mkdir(parents=True, exist_ok=True)
+                    urlretrieve(
+                        "https://raw.githubusercontent.com/ggml-org/whisper.cpp/master/ggml/src/ggml-metal/ggml-metal.metal",
+                        cache_metal,
+                    )
+                    metal_dir = str(cache_metal.parent)
+                    if log_callback:
+                        log_callback("ggml-metal.metal ready for Metal acceleration.")
+                except Exception as e:
+                    if log_callback:
+                        log_callback(f"Could not download ggml-metal.metal: {e} (will fall back to CPU)")
+
+        vad_args = []
+        try:
+            r = subprocess.run([str(binary), "-h"], capture_output=True, text=True, timeout=5)
+            if "--vad" in ((r.stdout or "") + (r.stderr or "")):
+                vad_args = ["--vad"]  # Pip whisper.cpp-cli doesn't support --vad; original does
+        except Exception:
+            pass
+        subtitle_edit_args = ["-sow", "-bo", "3", "-bs", "2", "-nf"]
+        cmd = [
+            str(binary), "-m", str(model_path), "-f", str(audio_path),
+            "-l", language_code if language_code != "auto" else "auto",
+        ] + vad_args + subtitle_edit_args + ["--print-progress", "-osrt", "-of", output_stem]
+        extra_args = (config.get("whisper_cpp_extra_args") or "").strip()
+        if extra_args:
+            cmd.extend(extra_args.split())
+
+        cwd = str(Path(binary).parent)
+
+        def _run_whisper_streaming(cmd_args, cwd_path, extra_env=None):
+            """Run whisper-cli, streaming stdout/stderr to log_callback in real-time.
+            Returns (returncode, stderr_text) for CPU fallback check.
+            """
+            env = os.environ.copy()
+            if extra_env:
+                env.update(extra_env)
+            proc = subprocess.Popen(
+                cmd_args,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                cwd=cwd_path,
+                bufsize=1,
+                env=env,
+            )
+            stderr_lines = []
+
+            def read_out(stream):
+                for line in iter(stream.readline, ""):
+                    if log_callback:
+                        log_callback(line.rstrip())
+
+            def read_err(stream):
+                for line in iter(stream.readline, ""):
+                    stderr_lines.append(line)
+                    if log_callback:
+                        log_callback(line.rstrip())
+
+            t_out = threading.Thread(target=read_out, args=(proc.stdout,))
+            t_err = threading.Thread(target=read_err, args=(proc.stderr,))
+            t_out.daemon = True
+            t_err.daemon = True
+            t_out.start()
+            t_err.start()
+            try:
+                proc.wait(timeout=3600)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+                if log_callback:
+                    log_callback("Transcription timed out.")
+                return -1, "".join(stderr_lines)
+            t_out.join(timeout=1)
+            t_err.join(timeout=1)
+            return proc.returncode, "".join(stderr_lines)
+
+        extra_env = {"GGML_METAL_PATH_RESOURCES": metal_dir} if metal_dir else None
+        if log_callback:
+            log_callback("Transcribing with Whisper CPP...")
+        returncode, stderr_text = _run_whisper_streaming(cmd, cwd, extra_env)
+
+        # CPU fallback: if GPU/Metal init failed, retry with --no-gpu (important for CPU-only laptops)
+        if returncode != 0 and "-ng" not in cmd and "--no-gpu" not in cmd:
+            stderr_lower = (stderr_text or "").lower()
+            gpu_error = (
+                "ggml-metal" in stderr_lower or "ggml_metal" in stderr_lower
+                or ("metal" in stderr_lower and ("error" in stderr_lower or "not found" in stderr_lower or "could not" in stderr_lower))
+                or ("cuda" in stderr_lower and ("error" in stderr_lower or "not found" in stderr_lower))
+            )
+            if gpu_error and log_callback:
+                log_callback("GPU init failed, retrying with CPU (--no-gpu)...")
+            if gpu_error:
+                cmd_fallback = cmd + ["-ng"]
+                returncode, _ = _run_whisper_streaming(cmd_fallback, cwd, extra_env)
+
+        final_srt = video_dir / f"{base_name}.srt"
+        if final_srt.exists():
+            n = 1
+            while (video_dir / f"{base_name}_{n}.srt").exists():
+                n += 1
+            final_srt = video_dir / f"{base_name}_{n}.srt"
+
+        whisper_srt = Path(output_stem + ".srt")
+        if whisper_srt.exists():
+            shutil.move(str(whisper_srt), str(final_srt))
+        if audio_path.exists():
+            try:
+                audio_path.unlink()
+            except OSError:
+                pass
+
+        if returncode == 0 and final_srt.exists():
+            if log_callback:
+                log_callback(f"✓ Transcription complete: {final_srt.name}")
+            return True
+
+        if log_callback:
+            log_callback(f"Transcription failed with exit code {returncode}")
+        return False
+
+    except subprocess.TimeoutExpired:
+        if log_callback:
+            log_callback("Transcription timed out.")
+        return False
+    except Exception as e:
+        if log_callback:
+            log_callback(f"Error during transcription: {e}")
+        return False
+
+
 def transcribe_video(video_path: Path, language_code: str, model: str, whisper_options: Dict = None, output_format: str = "srt", progress_callback=None, log_callback=None) -> bool:
     """Transcribe video using Python + whisper (cross-platform, no bash required)."""
     if not video_path.exists():
@@ -2651,7 +3056,9 @@ class PipInstallWorker(QThread):
                 timeout=600,
             )
             if result.returncode != 0:
-                self.log_message.emit(f"pip install failed: {result.stderr or result.stdout}")
+                err = (result.stderr or result.stdout or "").strip()
+                self.log_message.emit(f"pip install failed: {err}")
+                self.log_message.emit("Try manually: python -m pip install " + " ".join(self.packages))
                 self.finished.emit(False)
             else:
                 self.log_message.emit("✓ Installation complete")
@@ -2864,6 +3271,7 @@ class SetupWizard(QDialog):
         self.transcribe_long_installed = all(
             check_python_package(p) for p in ("torch", "torchaudio", "torchcodec", "pysrt")
         )
+        self.whisper_cpp_installed = _get_whisper_cpp_binary(self.config) is not None
         
         self.want_batch_download = True
         self.want_translator = True
@@ -3090,6 +3498,7 @@ class SetupWizard(QDialog):
         self.transcribe_long_installed = all(
             check_python_package(p) for p in ("torch", "torchaudio", "torchcodec", "pysrt")
         )
+        self.whisper_cpp_installed = _get_whisper_cpp_binary(self.config) is not None
         self.all_required_installed = self._compute_all_required_installed()
         self.required_content.setHtml(self.get_required_html())
         self._refresh_install_buttons()
@@ -3109,6 +3518,10 @@ class SetupWizard(QDialog):
             btn.clicked.connect(lambda: self._do_pip_install(
                 ["torch", "torchaudio", "torchcodec", "pysrt", "openai-whisper"]
             ))
+            self.install_buttons_layout.addWidget(btn)
+        if not self.whisper_cpp_installed:
+            btn = QPushButton("Install Whisper CPP")
+            btn.clicked.connect(lambda: self._do_pip_install(["whisper.cpp-cli"]))
             self.install_buttons_layout.addWidget(btn)
     
     def _do_pip_install(self, packages: List[str]):
@@ -3130,13 +3543,20 @@ class SetupWizard(QDialog):
         log = QTextEdit()
         log.setReadOnly(True)
         layout.addWidget(log)
+        close_btn = QPushButton("Close")
+        close_btn.setEnabled(False)
+        layout.addWidget(close_btn)
         dlg.setLayout(layout)
         worker = PipInstallWorker(packages)
         worker.log_message.connect(lambda m: log.append(m))
         def on_finished(ok):
-            dlg.accept()
             if ok:
+                dlg.accept()
                 self._refresh_status_after_install()
+            else:
+                log.append("\nInstallation failed. Click Close, then run: python -m pip install " + " ".join(packages))
+                close_btn.setEnabled(True)
+        close_btn.clicked.connect(dlg.accept)
         worker.finished.connect(on_finished)
         worker.start()
         dlg.exec_()
@@ -3223,7 +3643,7 @@ class SetupWizard(QDialog):
         html += "<h4 style='color: #df4300; margin-top: 10px;'>Core (always required):</h4>"
         html += f"<p><b>{'✓ INSTALLED' if self.pyqt5_installed else '✗ NOT FOUND'}</b> - PyQt5</p>"
         if not self.pyqt5_installed:
-            html += "<p style='margin-left: 20px; color: #666;'>Install: <code>pip install PyQt5</code></p>"
+            html += "<p style='margin-left: 20px; color: #666;'>Install: <code>python -m pip install PyQt5</code></p>"
         
         html += f"<p><b>{'✓ INSTALLED' if self.ffmpeg_installed else '✗ NOT FOUND'}</b> - FFmpeg</p>"
         if not self.ffmpeg_installed:
@@ -3249,13 +3669,18 @@ class SetupWizard(QDialog):
             html += "<h4 style='color: #f48a32; margin-top: 15px;'>Translator:</h4>"
             html += f"<p><b>{'✓ INSTALLED' if self.gst_installed else '✗ NOT FOUND'}</b> - gemini-srt-translator</p>"
             if not self.gst_installed:
-                html += "<p style='margin-left: 20px; color: #666;'>Install: <code>pip install gemini-srt-translator</code></p>"
+                html += "<p style='margin-left: 20px; color: #666;'>Install: <code>python -m pip install gemini-srt-translator</code></p>"
         
         if self.want_transcribe_long:
             html += "<h4 style='color: #f48a32; margin-top: 15px;'>Transcribe long videos (~2–3 GB download):</h4>"
             html += f"<p><b>{'✓ INSTALLED' if self.transcribe_long_installed else '✗ NOT FOUND'}</b> - torch, torchaudio, torchcodec, pysrt, openai-whisper</p>"
             if not self.transcribe_long_installed:
-                html += "<p style='margin-left: 20px; color: #666;'>Install: <code>pip install torch torchaudio torchcodec pysrt openai-whisper</code></p>"
+                html += "<p style='margin-left: 20px; color: #666;'>Install: <code>python -m pip install torch torchaudio torchcodec pysrt openai-whisper</code></p>"
+        
+        html += "<h4 style='color: #f48a32; margin-top: 15px;'>Transcribe (Whisper CPP, faster):</h4>"
+        html += f"<p><b>{'✓ INSTALLED' if self.whisper_cpp_installed else '✗ NOT FOUND'}</b> - whisper.cpp-cli</p>"
+        if not self.whisper_cpp_installed:
+            html += "<p style='margin-left: 20px; color: #666;'>Install: <code>python -m pip install whisper.cpp-cli</code></p>"
         
         html += "</div>"
         return html
@@ -3289,8 +3714,20 @@ class SetupWizard(QDialog):
             html += "<p style='color: #00aa00;'><b>✓ All required components are installed!</b></p>"
             html += "<p>You're ready to use the app. Optional components can be installed later if needed.</p>"
         else:
+            missing = []
+            if not self.pyqt5_installed:
+                missing.append("PyQt5")
+            if not self.ffmpeg_installed:
+                missing.append("FFmpeg")
+            if self.want_batch_download and not self.n_m3u8_installed:
+                missing.append("N_m3u8DL-RE")
+            if self.want_translator and not self.gst_installed:
+                missing.append("gemini-srt-translator")
+            if self.want_transcribe_long and not self.transcribe_long_installed:
+                missing.append("torch, torchaudio, torchcodec, pysrt, openai-whisper")
             html += "<p style='color: #aa0000;'><b>⚠ Some required components are missing.</b></p>"
-            html += "<p>The app may not work properly. Install missing items, then restart the app.</p>"
+            html += "<p><b>Missing:</b> " + ", ".join(missing) + "</p>"
+            html += "<p>Install from Step 3, or run <code>python -m pip install &lt;package&gt;</code> in your terminal. Then restart the app.</p>"
         html += "</div>"
         return html
     
@@ -4499,17 +4936,41 @@ class VideoProcessingApp(QMainWindow):
         """)
         transcribe_long_btn.clicked.connect(self.transcribe_long_from_tab)
         
+        transcribe_cpp_btn = QPushButton("Transcribe (Whisper CPP)")
+        transcribe_cpp_btn.setToolTip(
+            "Uses whisper.cpp. Faster, built-in VAD. Requires whisper.cpp binary (whisper-cli or main); models auto-download on first use."
+        )
+        transcribe_cpp_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #a85d8a;
+                color: white;
+                border: none;
+                border-radius: 5px;
+                padding: 4px 12px;
+                font-weight: bold;
+                min-height: 18px;
+            }
+            QPushButton:hover {
+                background-color: #984d7a;
+            }
+            QPushButton:pressed {
+                background-color: #8a4570;
+            }
+        """)
+        transcribe_cpp_btn.clicked.connect(self.transcribe_whisper_cpp_from_tab)
+        
         advanced_btn = QPushButton("Advanced Options...")
         advanced_btn.clicked.connect(self.open_whisper_options)
         
         buttons_layout.addWidget(self.transcribe_main_btn, 2)
         buttons_layout.addWidget(transcribe_long_btn, 2)
+        buttons_layout.addWidget(transcribe_cpp_btn, 2)
         buttons_layout.addWidget(advanced_btn, 1)
         layout.addLayout(buttons_layout)
         
         transcribe_hint = QLabel(
-            "Use \"Transcribe\" for short clipsn. "
-            "Use \"Transcribe longer video\" for files over ~5 min (VAD-assisted, prevents hallucination (~1-2x real-time on CPU)."
+            "Use \"Transcribe\" for short clips. Use \"Transcribe longer video\" for files over ~5 min (VAD-assisted, prevents hallucination). "
+            "Use \"Transcribe (Whisper CPP)\" for a faster alternative with built-in VAD (requires whisper.cpp installed)."
         )
         transcribe_hint.setStyleSheet("color: #666; font-size: 12px;")
         transcribe_hint.setWordWrap(True)
@@ -4709,11 +5170,41 @@ class VideoProcessingApp(QMainWindow):
             import torchcodec  # noqa: F401
             import pysrt  # noqa: F401
         except ImportError as e:
-            QMessageBox.warning(
+            reply = QMessageBox.question(
                 self,
                 "Missing Dependencies",
-                f"Transcribe (anti-hallucination) requires torch, torchaudio, torchcodec and pysrt.\n\nError: {e}\n\nInstall with:\npip install torch torchaudio torchcodec pysrt openai-whisper"
+                "This feature requires torch, torchaudio, torchcodec, pysrt, openai-whisper (~2–3 GB download).\n\n"
+                "Would you like us to install them for you?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes,
             )
+            if reply == QMessageBox.Yes:
+                dlg = QDialog(self)
+                dlg.setWindowTitle("Installing...")
+                dlg.setMinimumWidth(450)
+                layout = QVBoxLayout()
+                log = QTextEdit()
+                log.setReadOnly(True)
+                layout.addWidget(log)
+                close_btn = QPushButton("Close")
+                close_btn.setEnabled(False)
+                layout.addWidget(close_btn)
+                dlg.setLayout(layout)
+                worker = PipInstallWorker(
+                    ["torch", "torchaudio", "torchcodec", "pysrt", "openai-whisper"]
+                )
+                worker.log_message.connect(lambda m: log.append(m))
+                def on_finished(ok):
+                    if ok:
+                        dlg.accept()
+                        self.transcribe_long_from_tab()  # Retry
+                    else:
+                        log.append("\nInstallation failed. Click Close and try: python -m pip install torch torchaudio torchcodec pysrt openai-whisper")
+                        close_btn.setEnabled(True)
+                close_btn.clicked.connect(dlg.accept)
+                worker.finished.connect(on_finished)
+                worker.start()
+                dlg.exec_()
             return
         language_code = self.transcribe_language_combo.currentData()
         if language_code == "auto":
@@ -4742,6 +5233,83 @@ class VideoProcessingApp(QMainWindow):
         def tab_log_callback(msg):
             self.transcribe_log(msg)
         self.worker = ScriptWorker(transcribe_video_vad, video_path, language_code, model)
+        self.worker.log_message.connect(tab_log_callback)
+        self.worker.finished.connect(self.on_transcribe_finished)
+        self.worker.start()
+
+    def transcribe_whisper_cpp_from_tab(self):
+        """Transcribe using Whisper CPP. Faster, built-in VAD."""
+        file_path = self.transcribe_file_input.text()
+        if not file_path or file_path == "No file selected":
+            QMessageBox.warning(self, "No File", "Please select a video or audio file to transcribe.")
+            return
+        video_path = Path(file_path)
+        if not video_path.exists():
+            QMessageBox.warning(self, "File Not Found", f"The selected file does not exist:\n{file_path}")
+            return
+        language_code = self.transcribe_language_combo.currentData()
+        if not language_code:
+            language_code = "auto"
+        config = load_config()
+        binary = _get_whisper_cpp_binary(config)
+        if not binary or not Path(binary).exists():
+            reply = QMessageBox.question(
+                self,
+                "Whisper CPP Not Installed",
+                "Whisper CPP is not installed. Would you like us to install it for you?\n\n"
+                "(whisper.cpp-cli, ~50 MB. On Windows, pre-built wheels may not be available—we'll try anyway; "
+                "if it fails, you can build from source or use WSL.)",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes,
+            )
+            if reply == QMessageBox.Yes:
+                dlg = QDialog(self)
+                dlg.setWindowTitle("Installing Whisper CPP...")
+                dlg.setMinimumWidth(400)
+                layout = QVBoxLayout()
+                log = QTextEdit()
+                log.setReadOnly(True)
+                layout.addWidget(log)
+                close_btn = QPushButton("Close")
+                close_btn.setEnabled(False)
+                layout.addWidget(close_btn)
+                dlg.setLayout(layout)
+                worker = PipInstallWorker(["whisper.cpp-cli"])
+                worker.log_message.connect(lambda m: log.append(m))
+                def on_finished(ok):
+                    if ok:
+                        dlg.accept()
+                        self.transcribe_whisper_cpp_from_tab()  # Retry
+                    else:
+                        log.append("\nInstallation failed. Click Close, then run in terminal:\n  python -m pip install whisper.cpp-cli")
+                        close_btn.setEnabled(True)
+                close_btn.clicked.connect(dlg.accept)
+                worker.finished.connect(on_finished)
+                worker.start()
+                dlg.exec_()
+                return
+            QMessageBox.warning(
+                self,
+                "Whisper CPP Not Found",
+                "Whisper CPP binary not found.\n\n"
+                "Install from https://github.com/ggerganov/whisper.cpp and set whisper_cpp_path "
+                "in settings.json, or use the install option when prompted."
+            )
+            return
+        # Use same model as UI selector (turbo -> large-v3-turbo for Whisper CPP)
+        ui_model = self.transcribe_model_combo.currentText()
+        model_name = "large-v3-turbo" if ui_model == "turbo" else ui_model
+        self.transcribe_log(f"Starting Whisper CPP transcription of: {video_path.name}")
+        self.transcribe_log(f"Language: {language_code}, Model: {model_name}")
+        self.transcribe_progress_bar.setVisible(True)
+        self.transcribe_stop_btn.setVisible(True)
+        self.transcribe_stop_btn.setEnabled(True)
+        self.transcribe_progress_bar.setRange(0, 0)
+
+        def tab_log_callback(msg):
+            self.transcribe_log(msg)
+
+        self.worker = ScriptWorker(transcribe_video_whisper_cpp, video_path, language_code, model_name)
         self.worker.log_message.connect(tab_log_callback)
         self.worker.finished.connect(self.on_transcribe_finished)
         self.worker.start()
@@ -4819,7 +5387,7 @@ class VideoProcessingApp(QMainWindow):
             }
         """)
         # Enable context menu
-        self.remux_files_tree.setContextMenuPolicy(3)  # Qt.CustomContextMenu
+        self.remux_files_tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.remux_files_tree.customContextMenuRequested.connect(self.show_track_context_menu)
         file_layout.addWidget(self.remux_files_tree)
         

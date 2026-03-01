@@ -180,7 +180,7 @@ SP Workshop supports three main workflows depending on your starting material.
 
 ## Troubleshooting
 
-- **App won't start** (Qt platform plugin / "cocoa"): Run `pip install --force-reinstall PyQt5` in your venv. If that doesn't help, try Python 3.11 or 3.12 instead of 3.14.
+- **App won't start** (Qt platform plugin / "cocoa"): Run `python -m pip install --force-reinstall PyQt5` in your venv. If it works once then fails on the next run, try a fresh terminal or `python -m pip install --force-reinstall PyQt5` again. Python 3.14 is incompatible with PyQt5; use Python 3.12.
 - **PyQt5 not found**: `pip install PyQt5`
 - **FFmpeg not found**: Install FFmpeg and ensure it is in PATH
 - **N_m3u8DL-RE not found**: Download and add to PATH
