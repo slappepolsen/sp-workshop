@@ -550,7 +550,11 @@ def clean_log_line(line: str) -> Optional[str]:
     # Skip lines that are just cursor movement codes
     if not line.strip():
         return None
-    
+
+    # Skip requests/urllib3/charset_normalizer dependency warnings (subprocess noise)
+    if "RequestsDependencyWarning" in line or ("urllib3" in line and "doesn't match" in line):
+        return None
+
     # IMPORTANT: Always preserve error/warning messages - check before filtering
     is_error = any(keyword in line.lower() for keyword in [
         'error', 'failed', 'exception', 'warning', 'warn', 'fail', 
@@ -573,7 +577,7 @@ def clean_log_line(line: str) -> Optional[str]:
     # Skip "Starting with API Key" messages (not useful)
     if "Starting with" in line and "API Key" in line:
         return None
-    
+
     # Handle "Starting translation of X lines..." - keep this but clean it
     if "Starting translation of" in line and "lines..." in line:
         match = re.search(r'Starting translation of (\d+) lines', line)
@@ -598,15 +602,14 @@ def clean_log_line(line: str) -> Optional[str]:
                 last_part = status_parts[-1].strip()
                 # Remove model name if present
                 last_part = re.sub(r'gemini-[^\s]+', '', last_part).strip()
-                if last_part and last_part not in ['Thinking', 'Processing', 'Sending batch']:
+                # Normalize spinner: "Thinking /", "Thinking \", "Processing —" etc. -> "Thinking..."/"Processing..."
+                spinner_match = re.match(r'^(Thinking|Processing)\s*[—\\|/\s]*$', last_part)
+                if spinner_match:
+                    status = f"{spinner_match.group(1)}..."
+                elif last_part and last_part not in ['Thinking', 'Processing', 'Sending batch']:
                     status = last_part
-                elif last_part in ['Thinking', 'Processing']:
-                    # Extract spinner character if present
-                    spinner_match = re.search(r'(Thinking|Processing)\s*([—\\|/])', line)
-                    if spinner_match:
-                        status = f"{spinner_match.group(1)}..."
-                    else:
-                        status = f"{last_part}..."
+                elif last_part in ['Thinking', 'Processing', 'Sending batch']:
+                    status = f"{last_part}..." if last_part != "Sending batch" else "Sending batch..."
             
             # Build clean progress line
             if status:
@@ -617,7 +620,19 @@ def clean_log_line(line: str) -> Optional[str]:
     # Clean up success messages
     if "✅" in line or "Translation completed successfully" in line:
         return "    ✓ Translation completed successfully!"
-    
+
+    # Fallback: lines already in "Progress: X% (Y/Z lines) - Status" format (e.g. from gst)
+    # Normalize spinner suffixes so they dedupe
+    prog_match = re.match(r'^\s*Progress:\s*(\d+)%\s*\((\d+)/(\d+)\s*lines?\)\s*-?\s*(.*)$', line.strip())
+    if prog_match:
+        percent, current, total, status = prog_match.groups()
+        status = status.strip()
+        # Collapse spinner: "Thinking /", "Thinking \", "Processing —" -> "Thinking..."/"Processing..."
+        spin = re.match(r'^(Thinking|Processing)\s*[—\\|/\s]*$', status)
+        if spin:
+            status = f"{spin.group(1)}..."
+        return f"    Progress: {percent}% ({current}/{total} lines) - {status}" if status else f"    Progress: {percent}% ({current}/{total} lines)"
+
     # Return cleaned line for other messages
     return line.strip()
 
@@ -1306,6 +1321,7 @@ def translate_subtitles(selected_srt_files: List[Path], target_language: str = "
             pair_index = 0
             translation_success = False
             final_srt_file = srt_file
+            max_progress_pct = 0  # Never decrease bar when switching API pairs (restart from 0)
 
             while pair_index < len(key_pairs):
                 primary_key, secondary_key = key_pairs[pair_index]
@@ -1313,7 +1329,7 @@ def translate_subtitles(selected_srt_files: List[Path], target_language: str = "
                     pair_index += 1
                     continue
 
-                base_cmd = ["translate", "-i", str(og_file), "-l", target_language, "-o", str(srt_file), "--skip-upgrade", "--batch-size", "30"]
+                base_cmd = ["translate", "-i", str(og_file), "-l", target_language, "-o", str(srt_file), "--skip-upgrade", "--batch-size", "30", "--thinking-budget", "0"]
                 if secondary_key:
                     base_cmd.extend(["-k2", secondary_key])
 
@@ -1338,6 +1354,8 @@ def translate_subtitles(selected_srt_files: List[Path], target_language: str = "
 
                 output_lines = []
                 last_progress_line = None
+                last_progress_tuple = None  # (percent, current, total) - only log when this changes
+                logged_once = set()  # Dedupe noisy repeated messages
                 while True:
                     line_output = process.stdout.readline()
                     if not line_output:
@@ -1345,10 +1363,59 @@ def translate_subtitles(selected_srt_files: List[Path], target_language: str = "
                     cleaned_line = clean_log_line(line_output)
                     if cleaned_line:
                         output_lines.append(line_output.strip())
-                        if cleaned_line != last_progress_line:
-                            if log_callback:
-                                log_callback(cleaned_line)
+                        # When gst says both keys exhausted and is waiting, kill and switch to next pair
+                        if "All API quotas exceeded" in cleaned_line and "waiting" in cleaned_line:
+                            if log_callback and pair_index + 1 < len(key_pairs):
+                                log_callback(f"    All API quotas exceeded - switching to next API key pair ({pair_index + 2}/{len(key_pairs)})...")
+                            process.terminate()
+                            try:
+                                process.wait(timeout=5)
+                            except subprocess.TimeoutExpired:
+                                process.kill()
+                                process.wait()
+                            break
+                        # Progress lines: drive progress bar, skip log spam (bar shows it)
+                        prog_match = re.match(r'\s*Progress:\s*(\d+)%\s*\((\d+)/(\d+)\s*lines?\)', cleaned_line)
+                        if prog_match:
+                            pct, cur, tot = int(prog_match.group(1)), int(prog_match.group(2)), int(prog_match.group(3))
+                            # Only update progress bar when advancing (never decrease on API-pair restart)
+                            if pct >= max_progress_pct:
+                                max_progress_pct = pct
+                                if progress_callback:
+                                    progress_callback(idx, total, f"{srt_file.name} ({pct}%)")
+                            if (pct, cur, tot) == last_progress_tuple:
+                                continue
+                            last_progress_tuple = (pct, cur, tot)
+                            # Don't log progress to LOG OUTPUT - bar above shows it
                             last_progress_line = cleaned_line
+                            continue
+                        # Dedupe: skip if same as last (don't reset last_progress_tuple - keeps progress collapse working)
+                        # Dedupe noisy repeated errors: only log first occurrence of each
+                        if cleaned_line == last_progress_line:
+                            continue
+                        # Dedupe noisy repeated errors: only log first occurrence of each
+                        noise_key = None
+                        if "Consecutive error count:" in cleaned_line:
+                            noise_key = re.search(r'Consecutive error count: \d+/\d+', cleaned_line)
+                            noise_key = noise_key.group(0) if noise_key else cleaned_line
+                        elif "malformed object" in cleaned_line and "line" in cleaned_line:
+                            noise_key = re.search(r'for line \d+', cleaned_line)
+                            noise_key = noise_key.group(0) if noise_key else cleaned_line
+                        elif "Retrying batch for lines" in cleaned_line:
+                            noise_key = re.search(r'Retrying batch for lines \d+-\d+', cleaned_line)
+                            noise_key = noise_key.group(0) if noise_key else cleaned_line
+                        elif "quota exceeded" in cleaned_line.lower() and "Switching to" in cleaned_line:
+                            noise_key = re.search(r'API \d+ quota.*Switching to API \d+', cleaned_line, re.I)
+                            noise_key = noise_key.group(0) if noise_key else cleaned_line
+                        elif "All API quotas exceeded" in cleaned_line and "waiting" in cleaned_line:
+                            noise_key = "All API quotas exceeded, waiting"
+                        if noise_key and noise_key in logged_once:
+                            continue
+                        if noise_key:
+                            logged_once.add(noise_key)
+                        if log_callback:
+                            log_callback(cleaned_line)
+                        last_progress_line = cleaned_line
 
                 returncode = process.wait()
 
@@ -1383,7 +1450,7 @@ def translate_subtitles(selected_srt_files: List[Path], target_language: str = "
                         except Exception:
                             pass
                     if log_callback:
-                        log_callback("    Retrying with next API key(s)...")
+                        log_callback(f"    Retrying with API key pair {pair_index + 2}/{len(key_pairs)}...")
                     pair_index += 1
                 else:
                     break
@@ -1404,14 +1471,25 @@ def translate_subtitles(selected_srt_files: List[Path], target_language: str = "
 
                 success_count += 1
                 if log_callback:
-                    log_callback(f"  ✓ Translated: {final_srt_file.name}")
+                    output_combined = " ".join(output_lines).lower()
+                    was_interrupted = (
+                        "translation interrupted" in output_combined
+                        or "5 consecutive errors" in output_combined
+                        or "stopping script due to reaching" in output_combined
+                    )
+                    if was_interrupted:
+                        log_callback(f"  ✓ Partially translated (interrupted): {final_srt_file.name}")
+                    else:
+                        log_callback(f"  ✓ Translated: {final_srt_file.name}")
             else:
                 if log_callback:
                     log_callback(f"  ✗ Failed: {srt_file.name}")
                     if output_lines:
                         log_callback(f"    Last output lines:")
                         for err_line in output_lines[-5:]:
-                            log_callback(f"      {err_line}")
+                            clean = re.sub(r'\033\[[0-9;]*[a-zA-Z]', '', err_line).replace('\033[F', '').replace('\033[K', '').strip()
+                            if clean:
+                                log_callback(f"      {clean}")
         except Exception as e:
             if log_callback:
                 log_callback(f"Error translating {srt_file.name}: {e}")
@@ -6064,6 +6142,42 @@ class VideoProcessingApp(QMainWindow):
         )
 
         if not file_paths:
+            return
+
+        gst_cmd = find_gst_command()
+        if not gst_cmd:
+            reply = QMessageBox.question(
+                self,
+                "Translator Not Found",
+                "Translation requires gemini-srt-translator (gst).\n\n"
+                "Would you like us to install it via pip?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes,
+            )
+            if reply == QMessageBox.Yes:
+                dlg = QDialog(self)
+                dlg.setWindowTitle("Installing gemini-srt-translator...")
+                dlg.setMinimumWidth(400)
+                layout = QVBoxLayout()
+                log = QTextEdit()
+                log.setReadOnly(True)
+                layout.addWidget(log)
+                close_btn = QPushButton("Close")
+                close_btn.setEnabled(False)
+                layout.addWidget(close_btn)
+                dlg.setLayout(layout)
+                worker = PipInstallWorker(["gemini-srt-translator"])
+                worker.log_message.connect(lambda m: log.append(m))
+                def on_finished(ok):
+                    if ok:
+                        dlg.accept()
+                    else:
+                        log.append("\nInstallation failed. Click Close and try: python -m pip install gemini-srt-translator")
+                        close_btn.setEnabled(True)
+                close_btn.clicked.connect(dlg.accept)
+                worker.finished.connect(on_finished)
+                worker.start()
+                dlg.exec_()
             return
 
         target_language = self.config.get("translation_target_language", "English")
