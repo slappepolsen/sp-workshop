@@ -12,7 +12,7 @@ import os
 
 import json
 from urllib.parse import urlparse
-from urllib.request import urlretrieve
+from urllib.request import urlopen, urlretrieve
 import re
 import shlex
 import subprocess
@@ -21,7 +21,9 @@ import threading
 import time
 import traceback
 import platform
+import tarfile
 import tempfile
+import zipfile
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, List
@@ -39,76 +41,6 @@ def quote_path(path: str) -> str:
         return f'"{escaped}"'
     else:
         return shlex.quote(str(path))
-
-
-def extract_cookies_from_har(har_file: Path) -> Optional[str]:
-    """Extract cookies from a HAR file for use in requests.
-    
-    Returns a cookie string in the format "name1=value1; name2=value2" or None.
-    Extracts from both request and response cookies, prioritizing request cookies.
-    """
-    if not har_file or not har_file.exists():
-        return None
-    
-    try:
-        with open(har_file, 'r', encoding='utf-8') as f:
-            har_data = json.load(f)
-        
-        # Collect cookies from all requests and responses
-        cookies = {}
-        
-        # First, try to get cookies from the browser's cookie store (if present in HAR)
-        if 'log' in har_data and 'pages' in har_data['log']:
-            for page in har_data['log'].get('pages', []):
-                # Some HAR files store cookies at page level
-                pass
-        
-        # Get cookies from all entries (generic - no domain filter)
-        for entry in har_data.get('log', {}).get('entries', []):
-            # Get cookies from request headers (Cookie header)
-            request = entry.get('request', {})
-            for header in request.get('headers', []):
-                if header.get('name', '').lower() == 'cookie':
-                    # Parse Cookie header: "name1=value1; name2=value2"
-                    cookie_header = header.get('value', '')
-                    for cookie_pair in cookie_header.split(';'):
-                        cookie_pair = cookie_pair.strip()
-                        if '=' in cookie_pair:
-                            name, value = cookie_pair.split('=', 1)
-                            name = name.strip()
-                            value = value.strip()
-                            if name:
-                                cookies[name] = value
-            
-            # Get cookies from request.cookies array
-            for cookie in request.get('cookies', []):
-                name = cookie.get('name', '')
-                value = cookie.get('value', '')
-                if name:
-                    cookies[name] = value
-            
-            # Get cookies from response (Set-Cookie headers)
-            response = entry.get('response', {})
-            for header in response.get('headers', []):
-                if header.get('name', '').lower() == 'set-cookie':
-                    # Parse Set-Cookie header: "name=value; path=/; domain=..."
-                    cookie_value = header.get('value', '')
-                    if '=' in cookie_value:
-                        cookie_name = cookie_value.split('=')[0].strip()
-                        cookie_val = cookie_value.split('=')[1].split(';')[0].strip()
-                        if cookie_name:
-                            cookies[cookie_name] = cookie_val
-        
-        if cookies:
-            cookie_string = '; '.join(f"{name}={value}" for name, value in sorted(cookies.items()))
-            return cookie_string
-    except Exception as e:
-        # Log error for debugging
-        import traceback
-        print(f"Error extracting cookies from HAR: {e}")
-        traceback.print_exc()
-    
-    return None
 
 
 def get_temp_dir() -> str:
@@ -264,6 +196,7 @@ def load_config() -> Dict:
         "download_resolution": "1080",
         "ffmpeg_preset": "medium",
         "ffmpeg_path": "",
+        "n_m3u8dl_path": "",
         "setup_complete": False,
         "use_watermarks": True,
         "whisper_output_format": "srt",
@@ -503,8 +436,9 @@ ISO_639_CODES = {
 def get_video_duration(video_path: Path) -> Optional[float]:
     """Get video duration in minutes using ffprobe."""
     try:
+        ffprobe_exe = get_ffprobe_command()
         cmd = [
-            "ffprobe", "-v", "error", "-show_entries",
+            ffprobe_exe, "-v", "error", "-show_entries",
             "format=duration", "-of", "default=noprint_wrappers=1:nokey=1",
             str(video_path)
         ]
@@ -520,8 +454,9 @@ def get_video_duration(video_path: Path) -> Optional[float]:
 def get_video_duration_seconds(video_path: Path) -> Optional[float]:
     """Get video duration in seconds using ffprobe."""
     try:
+        ffprobe_exe = get_ffprobe_command()
         cmd = [
-            "ffprobe", "-v", "error", "-show_entries",
+            ffprobe_exe, "-v", "error", "-show_entries",
             "format=duration", "-of", "default=noprint_wrappers=1:nokey=1",
             str(video_path)
         ]
@@ -536,8 +471,9 @@ def get_video_duration_seconds(video_path: Path) -> Optional[float]:
 def get_audio_channels(video_path: Path) -> Optional[int]:
     """Get audio channel count using ffprobe."""
     try:
+        ffprobe_exe = get_ffprobe_command()
         cmd = [
-            "ffprobe", "-v", "error", "-select_streams", "a:0",
+            ffprobe_exe, "-v", "error", "-select_streams", "a:0",
             "-show_entries", "stream=channels",
             "-of", "default=noprint_wrappers=1:nokey=1",
             str(video_path)
@@ -962,6 +898,11 @@ def download_episodes(
             log_callback("Error: No commands provided.")
         return False
 
+    if not n_m3u8dl_installed():
+        if log_callback:
+            log_callback("Error: N_m3u8DL-RE not found. Install it via the Setup Wizard or set n_m3u8dl_path in Settings.")
+        return False
+
     # Filter out HAR file lines (starting with @) and empty lines
     lines = []
     for line in commands_text.strip().split('\n'):
@@ -1034,7 +975,8 @@ def download_episodes(
                 "--select-subtitle", "all",
                 "-M", "mkv",
             ]
-            cmd = ["N_m3u8DL-RE"] + user_args + app_args
+            n_m3u8_cmd = get_n_m3u8dl_command()
+            cmd = [n_m3u8_cmd] + user_args + app_args
 
             if log_callback:
                 log_callback(f"\n--- Task {i + 1}/{total}: {save_name} ---")
@@ -1170,8 +1112,9 @@ def extract_subtitles(downloads_dir: Path, subtitles_dir: Path, progress_callbac
         if log_callback:
             log_callback(f"Extracting subtitles from: {mkv_file.name}")
         
+        ffmpeg_exe = get_ffmpeg_command()
         cmd = [
-            "ffmpeg", "-y", "-i", str(mkv_file),
+            ffmpeg_exe, "-y", "-i", str(mkv_file),
             "-map", "0:s:0", str(srt_file)
         ]
         
@@ -1903,8 +1846,9 @@ def analyze_tracks(video_path: Path, log_callback=None) -> Dict:
     try:
         # Use ffprobe for all formats - track_id must be FFmpeg stream index for remux -map to work.
         # (mkvmerge track IDs differ from FFmpeg stream indices and would cause remux failures.)
+        ffprobe_exe = get_ffprobe_command()
         cmd = [
-            'ffprobe', '-v', 'quiet', '-print_format', 'json',
+            ffprobe_exe, '-v', 'quiet', '-print_format', 'json',
             '-show_streams', str(video_path)
         ]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
@@ -2153,8 +2097,9 @@ def remux_mkv_with_srt_batch(folder_path: Path, output_format: str = "mkv",
             continue
         
         # Build FFmpeg command
+        ffmpeg_exe = get_ffmpeg_command()
         cmd = [
-            "ffmpeg", "-y",
+            ffmpeg_exe, "-y",
             "-i", str(video_file),
             "-i", str(subtitle_file),
             "-c", "copy",
@@ -2353,12 +2298,12 @@ def transcribe_video_whisper_cpp(
             log_callback(f"Error: Video file not found: {video_path}")
         return False
 
-    if not check_command_exists("ffmpeg"):
+    config = load_config()
+    if not ffmpeg_installed(config):
         if log_callback:
             log_callback("Error: FFmpeg not found. Please install it and add to PATH.")
         return False
 
-    config = load_config()
     binary = _get_whisper_cpp_binary(config)
     if not binary or not Path(binary).exists():
         if log_callback:
@@ -2454,9 +2399,10 @@ def transcribe_video_whisper_cpp(
 
         if log_callback:
             log_callback("Extracting audio (16kHz mono, volume=1.75)...")
+        ffmpeg_exe = get_ffmpeg_command(config)
         ffmpeg_result = subprocess.run(
             [
-                "ffmpeg", "-y", "-i", str(video_path),
+                ffmpeg_exe, "-y", "-i", str(video_path),
                 "-vn", "-ar", "16000", "-ac", "1", "-ab", "32k",
                 "-af", "volume=1.75", "-f", "wav",
                 str(audio_path), "-loglevel", "warning", "-hide_banner",
@@ -2630,7 +2576,7 @@ def transcribe_video(video_path: Path, language_code: str, model: str, whisper_o
             log_callback(f"Error: Video file not found: {video_path}")
         return False
 
-    if not check_command_exists("ffmpeg"):
+    if not ffmpeg_installed():
         if log_callback:
             log_callback("Error: FFmpeg not found. Please install it and add to PATH.")
         return False
@@ -2664,9 +2610,10 @@ def transcribe_video(video_path: Path, language_code: str, model: str, whisper_o
 
         if log_callback:
             log_callback("Extracting and normalizing audio...")
+        ffmpeg_exe = get_ffmpeg_command()
         ffmpeg_result = subprocess.run(
             [
-                "ffmpeg", "-y", "-i", str(video_path),
+                ffmpeg_exe, "-y", "-i", str(video_path),
                 "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", "-af", "dynaudnorm",
                 str(audio_path), "-loglevel", "warning", "-hide_banner",
             ],
@@ -2792,9 +2739,10 @@ def transcribe_video_vad(
     try:
         if log_callback:
             log_callback("Extracting audio...")
+        ffmpeg_exe = get_ffmpeg_command()
         subprocess.run(
             [
-                "ffmpeg", "-y",
+                ffmpeg_exe, "-y",
                 "-i", str(video_path),
                 "-ac", "1",
                 "-ar", str(SAMPLE_RATE),
@@ -2862,7 +2810,7 @@ def transcribe_video_vad(
 
             subprocess.run(
                 [
-                    "ffmpeg", "-y",
+                    ffmpeg_exe, "-y",
                     "-ss", str(start),
                     "-t", str(duration),
                     "-i", str(audio_path),
@@ -3073,6 +3021,240 @@ class PipInstallWorker(QThread):
             self.finished.emit(False)
 
 
+class BinaryInstallWorker(QThread):
+    """Worker thread for downloading and installing FFmpeg or N_m3u8DL-RE."""
+    finished = pyqtSignal(bool)
+    log_message = pyqtSignal(str)
+
+    def __init__(self, tool: str, add_to_path: bool = False, parent=None):
+        super().__init__(parent)
+        self.tool = tool  # "ffmpeg" or "n_m3u8dl"
+        self.add_to_path = add_to_path
+
+    def run(self):
+        try:
+            if self.tool == "ffmpeg":
+                ok = self._install_ffmpeg()
+            elif self.tool == "n_m3u8dl":
+                ok = self._install_n_m3u8dl()
+            else:
+                self.log_message.emit(f"Unknown tool: {self.tool}")
+                ok = False
+            if ok and self.add_to_path:
+                self._add_tools_to_path()
+            self.finished.emit(ok)
+        except Exception as e:
+            self.log_message.emit(f"Error: {e}")
+            import traceback
+            self.log_message.emit(traceback.format_exc())
+            self.finished.emit(False)
+
+    def _install_ffmpeg(self) -> bool:
+        if sys.platform == "win32":
+            return self._install_ffmpeg_windows()
+        elif sys.platform == "darwin":
+            return self._install_ffmpeg_macos()
+        else:
+            self.log_message.emit("FFmpeg auto-install is not supported on this platform. Install manually.")
+            return False
+
+    def _install_ffmpeg_windows(self) -> bool:
+        url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+        self.log_message.emit("Downloading FFmpeg (essentials build, ~70 MB)...")
+        tools_dir = _get_tools_dir() / "ffmpeg"
+        tools_dir.mkdir(parents=True, exist_ok=True)
+        archive = tools_dir / "ffmpeg.zip"
+        try:
+            last_pct = [-1]
+            def _reporthook(block_num, block_size, total_size):
+                if total_size and total_size > 0:
+                    pct = min(100, block_num * block_size * 100 // total_size)
+                    if pct >= last_pct[0] + 10 or pct == 100:
+                        last_pct[0] = pct
+                        self.log_message.emit(f"Downloading: {pct}%")
+            urlretrieve(url, archive, reporthook=_reporthook)
+            self.log_message.emit("Extracting...")
+            with zipfile.ZipFile(archive, "r") as zf:
+                for name in zf.namelist():
+                    if "/bin/" in name or "\\bin\\" in name:
+                        zf.extract(name, tools_dir)
+            archive.unlink(missing_ok=True)
+            extracted = list(tools_dir.iterdir())
+            bin_src = None
+            for d in extracted:
+                if d.is_dir():
+                    inner_bin = d / "bin"
+                    if inner_bin.exists():
+                        bin_src = inner_bin
+                        break
+            if bin_src and (bin_src / "ffmpeg.exe").exists():
+                dest_bin = tools_dir / "bin"
+                dest_bin.mkdir(exist_ok=True)
+                for exe in ["ffmpeg.exe", "ffprobe.exe", "ffplay.exe"]:
+                    src = bin_src / exe
+                    if src.exists():
+                        shutil.copy2(src, dest_bin / exe)
+                for d in extracted:
+                    if d.is_dir() and d != dest_bin:
+                        shutil.rmtree(d, ignore_errors=True)
+                config = load_config()
+                config["ffmpeg_path"] = str((dest_bin / "ffmpeg.exe").resolve())
+                save_config(config)
+                self.log_message.emit("✓ FFmpeg installed")
+                return True
+            self.log_message.emit("Extraction did not produce expected bin/ffmpeg.exe")
+            return False
+        except Exception as e:
+            self.log_message.emit(f"Failed: {e}")
+            if archive.exists():
+                archive.unlink(missing_ok=True)
+            return False
+
+    def _install_ffmpeg_macos(self) -> bool:
+        brew = shutil.which("brew")
+        if not brew:
+            self.log_message.emit("Homebrew not found. Install from https://brew.sh then retry.")
+            return False
+        self.log_message.emit("Running: brew install ffmpeg")
+        result = subprocess.run(
+            [brew, "install", "ffmpeg"],
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+        if result.returncode != 0:
+            err = (result.stderr or result.stdout or "").strip()
+            self.log_message.emit(f"brew install failed: {err}")
+            return False
+        prefix_result = subprocess.run(
+            [brew, "--prefix", "ffmpeg"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if prefix_result.returncode == 0 and prefix_result.stdout:
+            ffmpeg_dir = Path(prefix_result.stdout.strip()) / "bin"
+            ffmpeg_exe = ffmpeg_dir / "ffmpeg"
+            if ffmpeg_exe.exists():
+                config = load_config()
+                config["ffmpeg_path"] = str(ffmpeg_exe.resolve())
+                save_config(config)
+                self.log_message.emit("✓ FFmpeg installed")
+                return True
+        self.log_message.emit("✓ FFmpeg installed (brew)")
+        return True
+
+    def _install_n_m3u8dl(self) -> bool:
+        if sys.platform not in ("win32", "darwin"):
+            self.log_message.emit("N_m3u8DL-RE auto-install is not supported on this platform.")
+            return False
+        machine = platform.machine().lower()
+        if sys.platform == "win32":
+            if "arm" in machine or "aarch" in machine:
+                asset_pattern = "win-arm64"
+            else:
+                asset_pattern = "win-x64"
+            ext = ".zip"
+        else:
+            if "arm" in machine or "aarch" in machine:
+                asset_pattern = "osx-arm64"
+            else:
+                asset_pattern = "osx-x64"
+            ext = ".tar.gz"
+        self.log_message.emit(f"Fetching N_m3u8DL-RE releases (platform: {asset_pattern})...")
+        try:
+            with urlopen("https://api.github.com/repos/nilaoda/N_m3u8DL-RE/releases/latest", timeout=10) as r:
+                data = json.loads(r.read().decode())
+        except Exception as e:
+            self.log_message.emit(f"Failed to fetch releases: {e}")
+            return False
+        assets = data.get("assets", [])
+        download_url = None
+        for a in assets:
+            name = a.get("name", "")
+            if asset_pattern in name and name.endswith(ext):
+                download_url = a.get("browser_download_url")
+                break
+        if not download_url:
+            self.log_message.emit(f"No asset found for {asset_pattern}")
+            return False
+        tools_dir = _get_tools_dir() / "n_m3u8dl-re"
+        tools_dir.mkdir(parents=True, exist_ok=True)
+        archive = tools_dir / ("n_m3u8dl.zip" if ext == ".zip" else "n_m3u8dl.tar.gz")
+        try:
+            self.log_message.emit("Downloading N_m3u8DL-RE...")
+            last_pct = [-1]
+            def _reporthook(block_num, block_size, total_size):
+                if total_size and total_size > 0:
+                    pct = min(100, block_num * block_size * 100 // total_size)
+                    if pct >= last_pct[0] + 10 or pct == 100:
+                        last_pct[0] = pct
+                        self.log_message.emit(f"Downloading: {pct}%")
+            urlretrieve(download_url, archive, reporthook=_reporthook)
+            self.log_message.emit("Extracting...")
+            if ext == ".zip":
+                with zipfile.ZipFile(archive, "r") as zf:
+                    zf.extractall(tools_dir)
+            else:
+                with tarfile.open(archive, "r:gz") as tf:
+                    tf.extractall(tools_dir)
+            archive.unlink(missing_ok=True)
+            exe_name = "N_m3u8DL-RE.exe" if sys.platform == "win32" else "N_m3u8DL-RE"
+            found = None
+            for p in tools_dir.rglob(exe_name):
+                if p.is_file():
+                    found = p
+                    break
+            if found:
+                if found.parent != tools_dir:
+                    dest = tools_dir / exe_name
+                    shutil.move(str(found), str(dest))
+                config = load_config()
+                config["n_m3u8dl_path"] = str((tools_dir / exe_name).resolve())
+                save_config(config)
+                self.log_message.emit("✓ N_m3u8DL-RE installed")
+                return True
+            self.log_message.emit("Extraction did not produce expected executable")
+            return False
+        except Exception as e:
+            self.log_message.emit(f"Failed: {e}")
+            if archive.exists():
+                archive.unlink(missing_ok=True)
+            return False
+
+    def _add_tools_to_path(self):
+        tools_dir = _get_tools_dir()
+        dirs_to_add = []
+        ff_bin = tools_dir / "ffmpeg" / "bin"
+        if ff_bin.exists():
+            dirs_to_add.append(str(ff_bin))
+        nm_dir = tools_dir / "n_m3u8dl-re"
+        if nm_dir.exists():
+            dirs_to_add.append(str(nm_dir))
+        if not dirs_to_add:
+            return
+        if sys.platform == "win32":
+            for d in dirs_to_add:
+                try:
+                    current = os.environ.get("PATH", "")
+                    new_path = d + os.pathsep + current
+                    subprocess.run(["setx", "PATH", new_path], capture_output=True, timeout=5)
+                    self.log_message.emit(f"Added to PATH (restart terminal to use): {d}")
+                except Exception as e:
+                    self.log_message.emit(f"Could not add to PATH: {e}")
+        else:
+            export = '\n'.join(f'export PATH="{d}:$PATH"' for d in dirs_to_add)
+            shell_rc = Path.home() / ".zshrc"
+            if not shell_rc.exists():
+                shell_rc = Path.home() / ".bash_profile"
+            try:
+                with open(shell_rc, "a") as f:
+                    f.write(f"\n# Added by Video Processing Studio\n{export}\n")
+                self.log_message.emit(f"Added to {shell_rc}. Restart terminal or run: source {shell_rc}")
+            except Exception as e:
+                self.log_message.emit(f"Could not add to PATH: {e}")
+
+
 # ============================================================================
 # Setup Checking Functions
 # ============================================================================
@@ -3097,6 +3279,82 @@ def check_command_exists(command: str) -> bool:
         return result.returncode == 0
     except Exception:
         return False
+
+
+def _get_tools_dir() -> Path:
+    """Return the tools installation directory."""
+    return Path.home() / "VideoProcessing" / "tools"
+
+
+def get_ffmpeg_command(config: Optional[Dict] = None) -> str:
+    """Return the ffmpeg executable path. Config path overrides; else check PATH."""
+    if config is None:
+        config = load_config()
+    user_path = (config.get("ffmpeg_path") or "").strip()
+    if user_path:
+        p = Path(user_path).expanduser()
+        if p.is_file() and p.exists():
+            return str(p.resolve())
+        if p.is_dir() and (p / "ffmpeg.exe").exists():
+            return str((p / "ffmpeg.exe").resolve())
+        if p.is_dir() and (p / "ffmpeg").exists():
+            return str((p / "ffmpeg").resolve())
+    if sys.platform == "win32":
+        tools_bin = _get_tools_dir() / "ffmpeg" / "bin"
+        exe = tools_bin / "ffmpeg.exe"
+        if exe.exists():
+            return str(exe.resolve())
+    return shutil.which("ffmpeg") or "ffmpeg"
+
+
+def get_ffprobe_command(config: Optional[Dict] = None) -> str:
+    """Return the ffprobe executable path (same dir as ffmpeg)."""
+    ffmpeg = get_ffmpeg_command(config)
+    if ffmpeg in ("ffmpeg", "ffmpeg.exe"):
+        return "ffprobe" if sys.platform != "win32" else "ffprobe.exe"
+    ffmpeg_path = Path(ffmpeg)
+    ffprobe_name = "ffprobe.exe" if sys.platform == "win32" else "ffprobe"
+    ffprobe_path = ffmpeg_path.parent / ffprobe_name
+    return str(ffprobe_path) if ffprobe_path.exists() else ("ffprobe" if sys.platform != "win32" else "ffprobe.exe")
+
+
+def get_n_m3u8dl_command(config: Optional[Dict] = None) -> str:
+    """Return the N_m3u8DL-RE executable path. Config path overrides; else check PATH."""
+    if config is None:
+        config = load_config()
+    user_path = (config.get("n_m3u8dl_path") or "").strip()
+    if user_path:
+        p = Path(user_path).expanduser()
+        if p.is_file() and p.exists():
+            return str(p.resolve())
+        if p.is_dir():
+            exe = p / ("N_m3u8DL-RE.exe" if sys.platform == "win32" else "N_m3u8DL-RE")
+            if exe.exists():
+                return str(exe.resolve())
+    tools_dir = _get_tools_dir() / "n_m3u8dl-re"
+    if sys.platform == "win32":
+        exe = tools_dir / "N_m3u8DL-RE.exe"
+    else:
+        exe = tools_dir / "N_m3u8DL-RE"
+    if exe.exists():
+        return str(exe.resolve())
+    return shutil.which("N_m3u8DL-RE") or "N_m3u8DL-RE"
+
+
+def ffmpeg_installed(config: Optional[Dict] = None) -> bool:
+    """Check if ffmpeg is available (config path or PATH)."""
+    cmd = get_ffmpeg_command(config)
+    if cmd == "ffmpeg":
+        return check_command_exists("ffmpeg")
+    return Path(cmd).exists() if cmd else False
+
+
+def n_m3u8dl_installed(config: Optional[Dict] = None) -> bool:
+    """Check if N_m3u8DL-RE is available (config path or PATH)."""
+    cmd = get_n_m3u8dl_command(config)
+    if cmd == "N_m3u8DL-RE":
+        return check_command_exists("N_m3u8DL-RE")
+    return Path(cmd).exists() if cmd else False
 
 
 def find_gst_command() -> Optional[str]:
@@ -3265,8 +3523,8 @@ class SetupWizard(QDialog):
         # Check installation status
         self.pyqt5_installed = check_python_package("PyQt5")
         self.gst_installed = find_gst_command() is not None  # Check for gst command, not Python package (pipx support)
-        self.ffmpeg_installed = check_command_exists("ffmpeg")
-        self.n_m3u8_installed = check_command_exists("N_m3u8DL-RE")
+        self.ffmpeg_installed = ffmpeg_installed(self.config)
+        self.n_m3u8_installed = n_m3u8dl_installed(self.config)
         self.vlc_installed = check_app_exists("VLC")
         self.lossless_installed = check_app_exists("LosslessCut")
         self.subtitle_edit_installed = check_app_exists("SubtitleEdit")
@@ -3380,6 +3638,7 @@ class SetupWizard(QDialog):
                 "download_resolution": "1080",
                 "ffmpeg_preset": "medium",
                 "ffmpeg_path": "",
+                "n_m3u8dl_path": "",
                 "setup_complete": False,
                 "use_watermarks": True,
                 "whisper_output_format": "srt",
@@ -3495,8 +3754,11 @@ class SetupWizard(QDialog):
         return widget
     
     def _refresh_status_after_install(self):
-        """Re-check installation status after pip install."""
+        """Re-check installation status after pip or binary install."""
+        self.config = load_config()
         self.gst_installed = find_gst_command() is not None
+        self.ffmpeg_installed = ffmpeg_installed(self.config)
+        self.n_m3u8_installed = n_m3u8dl_installed(self.config)
         self.transcribe_long_installed = all(
             check_python_package(p) for p in ("torch", "torchaudio", "torchcodec", "pysrt")
         )
@@ -3506,11 +3768,19 @@ class SetupWizard(QDialog):
         self._refresh_install_buttons()
     
     def _refresh_install_buttons(self):
-        """Populate install buttons for missing pip packages."""
+        """Populate install buttons for missing pip packages and binaries."""
         while self.install_buttons_layout.count():
             item = self.install_buttons_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
+        if not self.ffmpeg_installed and sys.platform in ("win32", "darwin"):
+            btn = QPushButton("Install FFmpeg")
+            btn.clicked.connect(lambda: self._do_binary_install("ffmpeg"))
+            self.install_buttons_layout.addWidget(btn)
+        if self.want_batch_download and not self.n_m3u8_installed and sys.platform in ("win32", "darwin"):
+            btn = QPushButton("Install N_m3u8DL-RE")
+            btn.clicked.connect(lambda: self._do_binary_install("n_m3u8dl"))
+            self.install_buttons_layout.addWidget(btn)
         if self.want_translator and not self.gst_installed:
             btn = QPushButton("Install gemini-srt-translator")
             btn.clicked.connect(lambda: self._do_pip_install(["gemini-srt-translator"]))
@@ -3561,6 +3831,46 @@ class SetupWizard(QDialog):
         close_btn.clicked.connect(dlg.accept)
         worker.finished.connect(on_finished)
         worker.start()
+        dlg.exec_()
+    
+    def _do_binary_install(self, tool: str):
+        """Run binary install (FFmpeg or N_m3u8DL-RE) in a worker and show progress."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Install " + ("FFmpeg" if tool == "ffmpeg" else "N_m3u8DL-RE"))
+        dlg.setMinimumWidth(450)
+        layout = QVBoxLayout()
+        add_to_path_cb = QCheckBox("Add to PATH so you can use from terminal")
+        add_to_path_cb.setChecked(False)
+        layout.addWidget(add_to_path_cb)
+        log = QTextEdit()
+        log.setReadOnly(True)
+        layout.addWidget(log)
+        install_btn = QPushButton("Install")
+        close_btn = QPushButton("Close")
+        close_btn.setEnabled(True)
+        btn_layout = QHBoxLayout()
+        btn_layout.addWidget(install_btn)
+        btn_layout.addWidget(close_btn)
+        layout.addLayout(btn_layout)
+        dlg.setLayout(layout)
+
+        def start_install():
+            install_btn.setEnabled(False)
+            close_btn.setEnabled(False)
+            worker = BinaryInstallWorker(tool, add_to_path=add_to_path_cb.isChecked())
+            worker.log_message.connect(lambda m: log.append(m))
+            def on_finished(ok):
+                if ok:
+                    dlg.accept()
+                    self._refresh_status_after_install()
+                else:
+                    log.append("\nInstallation failed. Try manual install (see links above).")
+                    close_btn.setEnabled(True)
+            worker.finished.connect(on_finished)
+            worker.start()
+
+        install_btn.clicked.connect(start_install)
+        close_btn.clicked.connect(dlg.accept)
         dlg.exec_()
     
     def create_optional_step(self) -> QWidget:
@@ -4153,8 +4463,9 @@ class MediaInfoDialog(QDialog):
             
             # Try to get more detailed info using ffprobe
             try:
+                ffprobe_exe = get_ffprobe_command(self.config)
                 result = subprocess.run(
-                    ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", str(video_path)],
+                    [ffprobe_exe, "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", str(video_path)],
                     capture_output=True, text=True, timeout=10
                 )
                 if result.returncode == 0:
@@ -4316,6 +4627,24 @@ class SettingsDialog(QDialog):
         ffmpeg_group.setLayout(ffmpeg_form)
         content_layout.addWidget(ffmpeg_group)
 
+        # --- N_m3u8DL-RE (optional path for batch downloads) ---
+        nm3u8_group = QGroupBox("N_m3u8DL-RE")
+        nm3u8_group.setStyleSheet("QGroupBox { font-weight: bold; }")
+        nm3u8_form = QFormLayout()
+        nm3u8_help = QLabel(
+            "Leave empty to use N_m3u8DL-RE from PATH. Set path to executable or folder containing it "
+            "if installed in a custom location (e.g. for batch downloads)."
+        )
+        nm3u8_help.setWordWrap(True)
+        nm3u8_help.setStyleSheet("color: #666; font-size: 10px;")
+        nm3u8_form.addRow("", nm3u8_help)
+        self.n_m3u8dl_path_input = QLineEdit()
+        self.n_m3u8dl_path_input.setText(self.config.get("n_m3u8dl_path", ""))
+        self.n_m3u8dl_path_input.setPlaceholderText("e.g. /usr/local/bin/N_m3u8DL-RE or C:\\Tools\\N_m3u8DL-RE.exe")
+        nm3u8_form.addRow("N_m3u8DL-RE path (optional):", self.n_m3u8dl_path_input)
+        nm3u8_group.setLayout(nm3u8_form)
+        content_layout.addWidget(nm3u8_group)
+
         # --- Watermarks ---
         watermark_group = QGroupBox("Watermarks")
         watermark_group.setStyleSheet("QGroupBox { font-weight: bold; }")
@@ -4473,6 +4802,7 @@ class SettingsDialog(QDialog):
         api_keys = [le.text().strip() for le, row, btn in self.api_key_inputs if le.text().strip()]
         self.config["api_keys"] = api_keys
         self.config["ffmpeg_path"] = self.ffmpeg_path_input.text().strip()
+        self.config["n_m3u8dl_path"] = self.n_m3u8dl_path_input.text().strip()
         self.config["watermark_720p"] = self.watermark_720p_input.text()
         self.config["watermark_1080p"] = self.watermark_1080p_input.text()
         self.config["use_watermarks"] = self.use_watermarks_checkbox.isChecked()
@@ -5769,7 +6099,8 @@ class VideoProcessingApp(QMainWindow):
             return True  # Already exists
         
         # Build FFmpeg command with track selection
-        cmd = ["ffmpeg", "-y", "-i", str(video_path)]
+        ffmpeg_exe = get_ffmpeg_command(self.config)
+        cmd = [ffmpeg_exe, "-y", "-i", str(video_path)]
         
         # Map selected tracks (track_id from analyze_tracks is the stream index)
         for vid_track in video_tracks:
@@ -5796,7 +6127,7 @@ class VideoProcessingApp(QMainWindow):
         # If no tracks explicitly selected, include all tracks (default)
         if not video_tracks and not audio_tracks and not subtitle_tracks:
             # Rebuild command to include all tracks
-            cmd = ["ffmpeg", "-y", "-i", str(video_path)]
+            cmd = [ffmpeg_exe, "-y", "-i", str(video_path)]
             
             # Add external subtitle if provided
             if external_subtitle and external_subtitle.exists():
