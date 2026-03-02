@@ -142,6 +142,8 @@ By default, SP Workshop creates:
 
 All paths can be changed in **Settings**.
 
+---
+
 ### Configuration:
 Click *Settings* to configure:
 
@@ -151,6 +153,8 @@ Click *Settings* to configure:
   - **1080p watermark:** transparent PNG at 1920×1080, same idea
   - Watermarks can be toggled on or off in Settings
 - **Directory paths**: choose where downloads, subtitles, and output files are stored.
+
+---
 
 ### Workflows
 
@@ -167,6 +171,8 @@ SP Workshop supports three main workflows depending on your starting material.
 | **[1] Remux** | Video files with separate subtitle tracks |
 | **[2] Batch Download** | Downloading full episodes or series |
 | **[3] Transcribe** | Creating subtitles when none exist |
+
+---
 
 ### License
 
