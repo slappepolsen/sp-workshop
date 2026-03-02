@@ -43,10 +43,10 @@ Download SP Workshop from:
 
 Select **Source code (zip)** under Assets.
 
----
+**Choose your platform:**
 
 <details>
-<summary><strong>macOS</strong></summary>
+<summary>🍎 <strong>macOS</strong></summary>
 
 1. Open **Terminal**
 2. Navigate to the project folder
@@ -79,7 +79,7 @@ Select **Source code (zip)** under Assets.
 </details>
 
 <details>
-<summary><strong>Windows</strong></summary>
+<summary>🪟 <strong>Windows</strong></summary>
 
 1. Open **Command Prompt**
 2. Navigate to the project folder
@@ -107,7 +107,7 @@ Select **Source code (zip)** under Assets.
 </details>
 
 <details>
-<summary><strong>Linux</strong></summary>
+<summary>🐧 <strong>Linux</strong></summary>
 
 1. Create and activate a virtual environment
    ```bash
@@ -134,7 +134,8 @@ Select **Source code (zip)** under Assets.
 
 ---
 
-## Getting Started
+<details>
+<summary>📁 <strong>Getting Started</strong> — first launch, directories, config</summary>
 
 On first launch, a setup wizard checks whether required tools are installed and points out anything missing. You can skip this and configure everything later in **Settings**.
 
@@ -163,6 +164,8 @@ Click *Settings* to configure:
   - Watermarks can be toggled on or off in Settings
 - **Directory paths**: choose where downloads, subtitles, and output files are stored.
 
+</details>
+
 ## Workflows
 
 The whole point of this is to make WLW/sapphic/lesbian content accessible for everyone in the world. You know, extracting subtitles, translating them, processing videos with burned-in subtitles and watermarks. All that good stuff, but with way fewer clicks.
@@ -178,20 +181,6 @@ SP Workshop supports three main workflows depending on your starting material.
 | **[1] Remux** | Video files with separate subtitle tracks |
 | **[2] Batch Download** | Downloading full episodes or series |
 | **[3] Transcribe** | Creating subtitles when none exist |
-
-
-## Troubleshooting
-
-- **App won't start** (Qt platform plugin / "cocoa"): Run `python -m pip install --force-reinstall PyQt5` in your venv. If it works once then fails on the next run, try a fresh terminal or `python -m pip install --force-reinstall PyQt5` again. Python 3.14 is incompatible with PyQt5; use Python 3.12.
-- **PyQt5 not found**: `pip install PyQt5`
-- **FFmpeg not found**: Install FFmpeg and ensure it is in PATH
-- **N_m3u8DL-RE not found**: Download and add to PATH
-- **Translation fails**: Check API key and internet connection
-- **Whisper issues**: The app uses a Python venv (~/whisper-env) for transcription. Ensure FFmpeg is installed.
-- **Transcribe longer video fails** (torch/torchaudio/torchcodec/pysrt): The anti-hallucination option needs extra packages. In your project venv, run: `pip install torch torchaudio torchcodec pysrt openai-whisper`
-
-Check the app log window for detailed error messages.
-
 
 ## System Requirements
 
