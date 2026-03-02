@@ -168,24 +168,6 @@ SP Workshop supports three main workflows depending on your starting material.
 | **[2] Batch Download** | Downloading full episodes or series |
 | **[3] Transcribe** | Creating subtitles when none exist |
 
-## System Requirements
-
-- **macOS 10.14+** (primary platform - fully tested)
-- Or **Windows/Linux** - The app should work, but these platforms haven't been as extensively tested. If you're on Windows or Linux and manage to get it working (or run into issues), please let me know! I'd love to hear about your experience and can help troubleshoot.
-- Python 3.9 or higher
-- FFmpeg (latest version recommended)
-- N_m3u8DL-RE (for downloads, if you plan to use the batch downloader)
-- Internet connection (only for translation and downloading, the rest is local)
-
-## Documentation
-
-- [CHANGELOG.md](CHANGELOG.md) - Version history
-- [README.md](README.md) - This file
-
-## Support
-
-I've received messages asking about donations - thank you, but I don't want any money! The best way to support this project is to try it out and let me know what you think. Your feedback is all I need :)
-
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
