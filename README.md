@@ -1,4 +1,4 @@
-# SP Workshop
+# SP-workshop
 
 ![Developer Banner 13](https://ishan-rest.vercel.app/svg/banner/dev13/slappepolsen)
 
@@ -9,7 +9,7 @@
 
 ## Video processing studio GUI 🎬 
 
-🌐 SP Workshop is a desktop GUI for extracting, translating, transcribing, and burning subtitles into videos.
+🌐 SP-workshop is a desktop GUI for extracting, translating, transcribing, and burning subtitles into videos.
 
 🏳️‍🌈 It was created to make international WLW / sapphic content more accessible, but it works for any audiovisual media.
 
@@ -33,7 +33,7 @@ SP Workshop is built for:
 
 ## Installation
 
-### Prerequisites
+#### Prerequisites
 
 - **Python 3.9 or higher**
   Download from [python.org](https://www.python.org/downloads/) and make sure it is added to PATH during installation.
@@ -43,7 +43,7 @@ Download SP Workshop from:
 
 Select **Source code (zip)** under Assets.
 
-## macOS
+### macOS
 
 1. Open **Terminal**
 2. Navigate to the project folder
@@ -73,7 +73,7 @@ Select **Source code (zip)** under Assets.
    ```
    For older versions (before 10.0.0), the main file is called  `video_app_v8.py`. Use `python3 video_app_v8.py` or rename it to `app.py`.
 
-## Windows
+### Windows
 
 1. Open **Command Prompt**
 2. Navigate to the project folder
@@ -98,7 +98,7 @@ Select **Source code (zip)** under Assets.
    ```
    For older versions (before 10.0.0), the main file is called  `video_app_v8.py`. Use `python3 video_app_v8.py` or rename it to `app.py`.
 
-## Linux
+### Linux
 
 1. Create and activate a virtual environment
    ```bash
@@ -152,7 +152,7 @@ Click *Settings* to configure:
   - Watermarks can be toggled on or off in Settings
 - **Directory paths**: choose where downloads, subtitles, and output files are stored.
 
-## Workflows
+### Workflows
 
 The whole point of this is to make WLW/sapphic/lesbian content accessible for everyone in the world. You know, extracting subtitles, translating them, processing videos with burned-in subtitles and watermarks. All that good stuff, but with way fewer clicks.
 
@@ -168,7 +168,7 @@ SP Workshop supports three main workflows depending on your starting material.
 | **[2] Batch Download** | Downloading full episodes or series |
 | **[3] Transcribe** | Creating subtitles when none exist |
 
-## License
+### License
 
 This project is licensed under the [MIT License](LICENSE).
 
