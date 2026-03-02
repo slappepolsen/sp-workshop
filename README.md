@@ -144,6 +144,10 @@ All paths can be changed in **Settings**.
 
 ---
 
+## More details
+
+Just some extra information, nice to know.
+
 ### Configuration:
 Click *Settings* to configure:
 
