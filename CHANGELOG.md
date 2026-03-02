@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 - ...
 
+## [10.4.0-alpha.2] - 2026-03-02
+
+### Fixed
+- Whisper CPP: stop downloading broken ggml-metal.metal (caused ggml-common.h errors); use Metal only when ggml-metal.metal exists next to the binary
+
 ## [10.4.0-alpha.1] - 2025-03-01
 
 ### Added
