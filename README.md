@@ -45,7 +45,8 @@ Select **Source code (zip)** under Assets.
 
 ---
 
-## macOS
+<details>
+<summary><strong>macOS</strong></summary>
 
 1. Open **Terminal**
 2. Navigate to the project folder
@@ -75,9 +76,10 @@ Select **Source code (zip)** under Assets.
    ```
    For older versions (before 10.0.0), the main file is called  `video_app_v8.py`. Use `python3 video_app_v8.py` or rename it to `app.py`.
 
----
+</details>
 
-## Windows
+<details>
+<summary><strong>Windows</strong></summary>
 
 1. Open **Command Prompt**
 2. Navigate to the project folder
@@ -102,9 +104,10 @@ Select **Source code (zip)** under Assets.
    ```
    For older versions (before 10.0.0), the main file is called  `video_app_v8.py`. Use `python3 video_app_v8.py` or rename it to `app.py`.
 
----
+</details>
 
-## Linux
+<details>
+<summary><strong>Linux</strong></summary>
 
 1. Create and activate a virtual environment
    ```bash
@@ -126,6 +129,8 @@ Select **Source code (zip)** under Assets.
    python3 app.py
    ```
    For older versions (before 10.0.0), the main file is called  `video_app_v8.py`. Use `python3 video_app_v8.py` or rename it to `app.py`.
+
+</details>
 
 ---
 
