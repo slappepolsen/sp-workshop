@@ -43,10 +43,7 @@ Download SP Workshop from:
 
 Select **Source code (zip)** under Assets.
 
-**Choose your platform:**
-
-<details>
-<summary>🍎 <strong>macOS</strong></summary>
+## macOS
 
 1. Open **Terminal**
 2. Navigate to the project folder
@@ -76,10 +73,7 @@ Select **Source code (zip)** under Assets.
    ```
    For older versions (before 10.0.0), the main file is called  `video_app_v8.py`. Use `python3 video_app_v8.py` or rename it to `app.py`.
 
-</details>
-
-<details>
-<summary>🪟 <strong>Windows</strong></summary>
+## Windows
 
 1. Open **Command Prompt**
 2. Navigate to the project folder
@@ -104,10 +98,7 @@ Select **Source code (zip)** under Assets.
    ```
    For older versions (before 10.0.0), the main file is called  `video_app_v8.py`. Use `python3 video_app_v8.py` or rename it to `app.py`.
 
-</details>
-
-<details>
-<summary>🐧 <strong>Linux</strong></summary>
+## Linux
 
 1. Create and activate a virtual environment
    ```bash
@@ -130,12 +121,9 @@ Select **Source code (zip)** under Assets.
    ```
    For older versions (before 10.0.0), the main file is called  `video_app_v8.py`. Use `python3 video_app_v8.py` or rename it to `app.py`.
 
-</details>
-
 ---
 
-<details>
-<summary>📁 <strong>Getting Started</strong> — first launch, directories, config</summary>
+## Getting Started
 
 On first launch, a setup wizard checks whether required tools are installed and points out anything missing. You can skip this and configure everything later in **Settings**.
 
@@ -164,10 +152,7 @@ Click *Settings* to configure:
   - Watermarks can be toggled on or off in Settings
 - **Directory paths**: choose where downloads, subtitles, and output files are stored.
 
-</details>
-
-<details>
-<summary>🔄 <strong>Workflows</strong> — Remux, Batch Download, Transcribe</summary>
+## Workflows
 
 The whole point of this is to make WLW/sapphic/lesbian content accessible for everyone in the world. You know, extracting subtitles, translating them, processing videos with burned-in subtitles and watermarks. All that good stuff, but with way fewer clicks.
 
@@ -183,10 +168,7 @@ SP Workshop supports three main workflows depending on your starting material.
 | **[2] Batch Download** | Downloading full episodes or series |
 | **[3] Transcribe** | Creating subtitles when none exist |
 
-</details>
-
-<details>
-<summary>💻 <strong>System Requirements</strong></summary>
+## System Requirements
 
 - **macOS 10.14+** (primary platform - fully tested)
 - Or **Windows/Linux** - The app should work, but these platforms haven't been as extensively tested. If you're on Windows or Linux and manage to get it working (or run into issues), please let me know! I'd love to hear about your experience and can help troubleshoot.
@@ -195,22 +177,14 @@ SP Workshop supports three main workflows depending on your starting material.
 - N_m3u8DL-RE (for downloads, if you plan to use the batch downloader)
 - Internet connection (only for translation and downloading, the rest is local)
 
-</details>
-
-<details>
-<summary>📄 <strong>Documentation</strong></summary>
+## Documentation
 
 - [CHANGELOG.md](CHANGELOG.md) - Version history
 - [README.md](README.md) - This file
 
-</details>
-
-<details>
-<summary>💬 <strong>Support</strong></summary>
+## Support
 
 I've received messages asking about donations - thank you, but I don't want any money! The best way to support this project is to try it out and let me know what you think. Your feedback is all I need :)
-
-</details>
 
 ## License
 
