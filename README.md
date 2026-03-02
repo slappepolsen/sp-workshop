@@ -166,7 +166,8 @@ Click *Settings* to configure:
 
 </details>
 
-## Workflows
+<details>
+<summary>🔄 <strong>Workflows</strong> — Remux, Batch Download, Transcribe</summary>
 
 The whole point of this is to make WLW/sapphic/lesbian content accessible for everyone in the world. You know, extracting subtitles, translating them, processing videos with burned-in subtitles and watermarks. All that good stuff, but with way fewer clicks.
 
@@ -182,7 +183,10 @@ SP Workshop supports three main workflows depending on your starting material.
 | **[2] Batch Download** | Downloading full episodes or series |
 | **[3] Transcribe** | Creating subtitles when none exist |
 
-## System Requirements
+</details>
+
+<details>
+<summary>💻 <strong>System Requirements</strong></summary>
 
 - **macOS 10.14+** (primary platform - fully tested)
 - Or **Windows/Linux** - The app should work, but these platforms haven't been as extensively tested. If you're on Windows or Linux and manage to get it working (or run into issues), please let me know! I'd love to hear about your experience and can help troubleshoot.
@@ -191,13 +195,22 @@ SP Workshop supports three main workflows depending on your starting material.
 - N_m3u8DL-RE (for downloads, if you plan to use the batch downloader)
 - Internet connection (only for translation and downloading, the rest is local)
 
-## Documentation
+</details>
+
+<details>
+<summary>📄 <strong>Documentation</strong></summary>
+
 - [CHANGELOG.md](CHANGELOG.md) - Version history
 - [README.md](README.md) - This file
 
-## Support
+</details>
+
+<details>
+<summary>💬 <strong>Support</strong></summary>
 
 I've received messages asking about donations - thank you, but I don't want any money! The best way to support this project is to try it out and let me know what you think. Your feedback is all I need :)
+
+</details>
 
 ## License
 
