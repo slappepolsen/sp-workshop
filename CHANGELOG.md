@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 - ...
 
+## [10.4.0-alpha.3] - 2026-03-02
+
+### Added
+- Setup Wizard Step 1: introductory QLabel before status
+- Setup Wizard Step 3: collapsible "Show technical details" block for pip commands; get_technical_details_html() added
+- Install modal: QProgressBar indeterminate (setRange(0,0)), QTimer.singleShot(1500) to auto-close on success
+- Settings: QTabWidget with API, Tools, Processing, Appearance
+
+### Changed
+- Setup Wizard Step 1: warning copy updated in create_welcome_step()
+- Setup Wizard Step 2: feature labels simplified in create_features_step(); helper QLabels in grey; package names removed from UI
+- Setup Wizard Step 3: get_required_html() uses black headings, shorter status text; pip commands only in technical block
+- Setup Wizard Step 5: api_key_checkbox label; env var detection in create_final_step()
+- Settings: FFmpeg / N_m3u8DL-RE help text and placeholders shortened
+- Settings: Subtitle Translation helper QLabel added
+
+### Fixed
+- _refresh_status_after_install() updates summary_text.setHtml() so final step reflects installed components
+
 ## [10.4.0-alpha.2] - 2026-03-02
 
 ### Fixed

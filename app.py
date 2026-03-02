@@ -4,7 +4,7 @@ Video Processing GUI Application
 A PyQt5 desktop app that provides a button-based interface for all video processing scripts.
 """
 
-__version__ = "10.3.3"
+__version__ = "10.4.0-alpha.3"
 VERSION_CODENAME = "Hallucination"
 
 import sys
@@ -3637,39 +3637,44 @@ class SetupWizard(QDialog):
             if hasattr(self, "install_buttons_layout"):
                 self._refresh_install_buttons()
         
-        self.batch_cb = QCheckBox("Batch download episodes (needs N_m3u8DL-RE)")
+        self.batch_cb = QCheckBox("Batch download episodes")
         self.batch_cb.setChecked(self.want_batch_download)
         self.batch_cb.stateChanged.connect(lambda: on_feature_changed())
         layout.addWidget(self.batch_cb)
         
-        self.translator_cb = QCheckBox("Translate subtitles (needs gemini-srt-translator / gst)")
+        translator_row = QWidget()
+        translator_layout = QVBoxLayout(translator_row)
+        translator_layout.setContentsMargins(0, 0, 0, 0)
+        translator_layout.setSpacing(2)
+        self.translator_cb = QCheckBox("Translate subtitles")
         self.translator_cb.setChecked(self.want_translator)
         self.translator_cb.stateChanged.connect(lambda: on_feature_changed())
-        layout.addWidget(self.translator_cb)
+        translator_layout.addWidget(self.translator_cb)
+        trans_helper = QLabel("Uses Google Gemini API")
+        trans_helper.setStyleSheet("color: #666; font-size: 10px;")
+        trans_helper.setWordWrap(True)
+        translator_layout.addWidget(trans_helper)
+        layout.addWidget(translator_row)
         
         # QCheckBox doesn't support setWordWrap (Qt bug QTBUG-5370). Use checkbox + label combo.
         transcribe_row = QWidget()
-        transcribe_row_layout = QHBoxLayout(transcribe_row)
+        transcribe_row_layout = QVBoxLayout(transcribe_row)
         transcribe_row_layout.setContentsMargins(0, 0, 0, 0)
-        transcribe_row_layout.setSpacing(8)
+        transcribe_row_layout.setSpacing(2)
+        transcribe_inner = QHBoxLayout()
+        transcribe_inner.setSpacing(8)
 
-        self.transcribe_long_cb = QCheckBox()
+        self.transcribe_long_cb = QCheckBox("Transcribe audio/video")
         self.transcribe_long_cb.setChecked(self.want_transcribe_long)
         self.transcribe_long_cb.stateChanged.connect(lambda: on_feature_changed())
 
-        transcribe_label = QLabel(
-            "Transcribe long videos (files over ~5 min; needs torch, torchaudio, torchcodec, pysrt, openai-whisper — ~2–3 GB download)"
-        )
-        transcribe_label.setWordWrap(True)
-        transcribe_label.setCursor(Qt.PointingHandCursor)
-
-        def _on_transcribe_label_clicked(event):
-            if event.button() == Qt.LeftButton:
-                self.transcribe_long_cb.toggle()
-        transcribe_label.mousePressEvent = _on_transcribe_label_clicked
-
-        transcribe_row_layout.addWidget(self.transcribe_long_cb)
-        transcribe_row_layout.addWidget(transcribe_label, 1)
+        transcribe_inner.addWidget(self.transcribe_long_cb)
+        transcribe_inner.addStretch()
+        transcribe_row_layout.addLayout(transcribe_inner)
+        transcribe_helper = QLabel("Requires additional download (~2–3 GB). Uses local AI model.")
+        transcribe_helper.setStyleSheet("color: #666; font-size: 10px;")
+        transcribe_helper.setWordWrap(True)
+        transcribe_row_layout.addWidget(transcribe_helper)
         layout.addWidget(transcribe_row)
         
         layout.addStretch()
@@ -3682,6 +3687,10 @@ class SetupWizard(QDialog):
         layout = QVBoxLayout()
         layout.setSpacing(15)
         
+        summary = QLabel("We'll check your system and install what's missing.")
+        summary.setWordWrap(True)
+        layout.addWidget(summary)
+        
         info = QLabel("This wizard will help you check if everything is set up correctly.")
         info.setWordWrap(True)
         layout.addWidget(info)
@@ -3691,8 +3700,8 @@ class SetupWizard(QDialog):
             status.setStyleSheet("color: #00aa00; font-weight: bold; font-size: 12pt; padding: 10px;")
             layout.addWidget(status)
         else:
-            status = QLabel("⚠ Some required components need to be installed.")
-            status.setStyleSheet("color: #aa0000; font-weight: bold; font-size: 12pt; padding: 10px;")
+            status = QLabel("Some features need additional components. You can install them now or skip.")
+            status.setStyleSheet("color: #666; font-size: 11pt; padding: 10px;")
             layout.addWidget(status)
         
         layout.addStretch()
@@ -3719,6 +3728,33 @@ class SetupWizard(QDialog):
         self._refresh_install_buttons()
         layout.addLayout(self.install_buttons_layout)
         
+        # Expandable technical details
+        self.technical_details_visible = False
+        self.technical_details_btn = QPushButton("Show technical details")
+        self.technical_details_btn.setStyleSheet("color: #666; text-decoration: underline;")
+        self.technical_details_btn.setFlat(True)
+        self.technical_details_btn.setCursor(Qt.PointingHandCursor)
+        self.technical_details_widget = QTextBrowser()
+        self.technical_details_widget.setOpenExternalLinks(True)
+        self.technical_details_widget.setHtml(self.get_technical_details_html())
+        self.technical_details_widget.setMaximumHeight(0)
+        self.technical_details_widget.setVisible(False)
+
+        def toggle_technical():
+            self.technical_details_visible = not self.technical_details_visible
+            if self.technical_details_visible:
+                self.technical_details_btn.setText("Hide technical details")
+                self.technical_details_widget.setMaximumHeight(400)
+                self.technical_details_widget.setVisible(True)
+            else:
+                self.technical_details_btn.setText("Show technical details")
+                self.technical_details_widget.setMaximumHeight(0)
+                self.technical_details_widget.setVisible(False)
+
+        self.technical_details_btn.clicked.connect(toggle_technical)
+        layout.addWidget(self.technical_details_btn)
+        layout.addWidget(self.technical_details_widget)
+        
         widget.setLayout(layout)
         return widget
     
@@ -3734,6 +3770,10 @@ class SetupWizard(QDialog):
         self.whisper_cpp_installed = _get_whisper_cpp_binary(self.config) is not None
         self.all_required_installed = self._compute_all_required_installed()
         self.required_content.setHtml(self.get_required_html())
+        if hasattr(self, "technical_details_widget") and self.technical_details_widget:
+            self.technical_details_widget.setHtml(self.get_technical_details_html())
+        if hasattr(self, "summary_text") and self.summary_text:
+            self.summary_text.setHtml(self.get_summary_html())
         self._refresh_install_buttons()
     
     def _refresh_install_buttons(self):
@@ -3780,7 +3820,11 @@ class SetupWizard(QDialog):
         dlg = QDialog(self)
         dlg.setWindowTitle("Installing...")
         dlg.setMinimumWidth(400)
+        dlg.setWindowModality(Qt.ApplicationModal)
         layout = QVBoxLayout()
+        progress_bar = QProgressBar()
+        progress_bar.setRange(0, 0)
+        layout.addWidget(progress_bar)
         log = QTextEdit()
         log.setReadOnly(True)
         layout.addWidget(log)
@@ -3792,8 +3836,15 @@ class SetupWizard(QDialog):
         worker.log_message.connect(lambda m: log.append(m))
         def on_finished(ok):
             if ok:
-                dlg.accept()
-                self._refresh_status_after_install()
+                log.append("\nInstalled successfully")
+                progress_bar.setVisible(False)
+                close_btn.setEnabled(True)
+                close_btn.setText("Installed successfully")
+
+                def auto_close():
+                    self._refresh_status_after_install()
+                    dlg.accept()
+                QTimer.singleShot(1500, auto_close)
             else:
                 log.append("\nInstallation failed. Click Close, then run: python -m pip install " + " ".join(packages))
                 close_btn.setEnabled(True)
@@ -3807,10 +3858,15 @@ class SetupWizard(QDialog):
         dlg = QDialog(self)
         dlg.setWindowTitle("Install " + ("FFmpeg" if tool == "ffmpeg" else "N_m3u8DL-RE"))
         dlg.setMinimumWidth(450)
+        dlg.setWindowModality(Qt.ApplicationModal)
         layout = QVBoxLayout()
         add_to_path_cb = QCheckBox("Add to PATH so you can use from terminal")
         add_to_path_cb.setChecked(False)
         layout.addWidget(add_to_path_cb)
+        progress_bar = QProgressBar()
+        progress_bar.setRange(0, 0)
+        progress_bar.setVisible(False)
+        layout.addWidget(progress_bar)
         log = QTextEdit()
         log.setReadOnly(True)
         layout.addWidget(log)
@@ -3826,12 +3882,20 @@ class SetupWizard(QDialog):
         def start_install():
             install_btn.setEnabled(False)
             close_btn.setEnabled(False)
+            progress_bar.setVisible(True)
             worker = BinaryInstallWorker(tool, add_to_path=add_to_path_cb.isChecked())
             worker.log_message.connect(lambda m: log.append(m))
             def on_finished(ok):
                 if ok:
-                    dlg.accept()
-                    self._refresh_status_after_install()
+                    log.append("\nInstalled successfully")
+                    progress_bar.setVisible(False)
+                    close_btn.setEnabled(True)
+                    close_btn.setText("Installed successfully")
+
+                    def auto_close():
+                        self._refresh_status_after_install()
+                        dlg.accept()
+                    QTimer.singleShot(1500, auto_close)
                 else:
                     log.append("\nInstallation failed. Try manual install (see links above).")
                     close_btn.setEnabled(True)
@@ -3890,15 +3954,28 @@ class SetupWizard(QDialog):
         api_info.setStyleSheet("color: #666;")
         layout.addWidget(api_info)
         
-        # Check if environment variable is already set
+        # API key configured: checked = configured, unchecked = configure later
         has_env_key = bool(os.getenv("GEMINI_API_KEY") or os.getenv("GST_API_KEY"))
-        checkbox_text = "I already have an API key set (or I'll set it up later)"
-        if has_env_key:
-            checkbox_text += " ✓ Environment variable detected"
+        has_config_key = bool(self.config.get("api_key", "")) or bool(self.config.get("api_keys"))
+        api_configured = has_env_key or has_config_key
         
-        self.api_key_checkbox = QCheckBox(checkbox_text)
-        self.api_key_checkbox.setChecked(has_env_key or bool(self.config.get("api_key", "")) or bool(self.config.get("api_keys")))
-        layout.addWidget(self.api_key_checkbox)
+        api_row = QWidget()
+        api_row_layout = QHBoxLayout(api_row)
+        api_row_layout.setContentsMargins(0, 0, 0, 0)
+        api_row_layout.setSpacing(8)
+        self.api_key_checkbox = QCheckBox("API key configured")
+        self.api_key_checkbox.setChecked(api_configured)
+        api_row_layout.addWidget(self.api_key_checkbox)
+        if has_env_key:
+            env_label = QLabel("✓ Environment variable detected")
+            env_label.setStyleSheet("color: #666; font-size: 10px;")
+            api_row_layout.addWidget(env_label)
+        api_row_layout.addStretch()
+        layout.addWidget(api_row)
+        
+        configure_help = QLabel("Uncheck to configure later in Settings")
+        configure_help.setStyleSheet("color: #666; font-size: 10px;")
+        layout.addWidget(configure_help)
         
         layout.addSpacing(10)
         
@@ -3907,62 +3984,70 @@ class SetupWizard(QDialog):
         summary_label.setFont(QFont("Arial", 11, QFont.Bold))
         layout.addWidget(summary_label)
         
-        summary_text = QTextBrowser()
-        summary_text.setOpenExternalLinks(True)
-        summary_text.setHtml(self.get_summary_html())
-        summary_text.setMaximumHeight(150)
-        layout.addWidget(summary_text)
+        self.summary_text = QTextBrowser()
+        self.summary_text.setOpenExternalLinks(True)
+        self.summary_text.setHtml(self.get_summary_html())
+        self.summary_text.setMaximumHeight(150)
+        layout.addWidget(self.summary_text)
         
         layout.addStretch()
         widget.setLayout(layout)
         return widget
     
     def get_required_html(self) -> str:
-        """Generate HTML for required components (feature-aware)."""
+        """Generate HTML for required components (feature-aware). No pip commands here — those go in technical details."""
         html = "<div style='line-height: 1.6;'>"
         
-        html += "<h4 style='color: #df4300; margin-top: 10px;'>Core (always required):</h4>"
-        html += f"<p><b>{'✓ INSTALLED' if self.pyqt5_installed else '✗ NOT FOUND'}</b> - PyQt5</p>"
-        if not self.pyqt5_installed:
-            html += "<p style='margin-left: 20px; color: #666;'>Install: <code>python -m pip install PyQt5</code></p>"
+        html += "<h4 style='margin-top: 10px; color: #333;'>Core</h4>"
+        html += f"<p><b>{'✓ Installed' if self.pyqt5_installed else '✗ Not installed'}</b> — PyQt5</p>"
+        html += f"<p><b>{'✓ Installed' if self.ffmpeg_installed else '✗ Not installed'}</b> — FFmpeg</p>"
         
-        html += f"<p><b>{'✓ INSTALLED' if self.ffmpeg_installed else '✗ NOT FOUND'}</b> - FFmpeg</p>"
+        if self.want_batch_download:
+            html += "<h4 style='margin-top: 15px; color: #333;'>Batch Download</h4>"
+            html += f"<p><b>{'✓ Installed' if self.n_m3u8_installed else '✗ Not installed'}</b> — N_m3u8DL-RE</p>"
+        
+        if self.want_translator:
+            html += "<h4 style='margin-top: 15px; color: #333;'>Translator</h4>"
+            html += f"<p><b>{'✓ Installed' if self.gst_installed else '✗ Not installed'}</b> — gemini-srt-translator</p>"
+        
+        if self.want_transcribe_long:
+            html += "<h4 style='margin-top: 15px; color: #333;'>Transcription (Local AI)</h4>"
+            status = "✓ Installed" if self.transcribe_long_installed else "✗ Not installed — Requires ~2–3 GB download"
+            html += f"<p><b>{status}</b></p>"
+        
+        html += "<h4 style='margin-top: 15px; color: #333;'>Whisper CPP (Faster alternative)</h4>"
+        html += f"<p><b>{'✓ Installed' if self.whisper_cpp_installed else '✗ Not installed'}</b> — whisper.cpp-cli</p>"
+        
+        html += "</div>"
+        return html
+
+    def get_technical_details_html(self) -> str:
+        """Generate HTML for expandable technical details (pip commands, etc.)."""
+        html = "<div style='line-height: 1.6; font-size: 11px; color: #555;'>"
+        parts = []
+        if not self.pyqt5_installed:
+            parts.append(("<b>PyQt5</b>", "<code>python -m pip install PyQt5</code>"))
         if not self.ffmpeg_installed:
             system = platform.system()
             if system == "Darwin":
-                html += "<p style='margin-left: 20px; color: #666;'>Install: <code>brew install ffmpeg</code><br>"
-                html += "If you don't have Homebrew: <a href='https://brew.sh'>Install Homebrew</a></p>"
+                parts.append(("<b>FFmpeg</b>", "<code>brew install ffmpeg</code> — <a href='https://brew.sh'>Install Homebrew</a> if needed"))
             elif system == "Windows":
-                html += "<p style='margin-left: 20px; color: #666;'>Download: <a href='https://www.gyan.dev/ffmpeg/builds/'>gyan.dev/ffmpeg</a><br>"
-                html += "Extract and add the <code>bin</code> folder to your PATH</p>"
+                parts.append(("<b>FFmpeg</b>", "<a href='https://www.gyan.dev/ffmpeg/builds/'>Download from gyan.dev</a>, extract and add bin to PATH"))
             else:
-                html += "<p style='margin-left: 20px; color: #666;'>Install: <code>sudo apt install ffmpeg</code> (Debian/Ubuntu)<br>"
-                html += "or <code>sudo dnf install ffmpeg</code> (Fedora)</p>"
-        
-        if self.want_batch_download:
-            html += "<h4 style='color: #f48a32; margin-top: 15px;'>Batch Download:</h4>"
-            html += f"<p><b>{'✓ INSTALLED' if self.n_m3u8_installed else '✗ NOT FOUND'}</b> - N_m3u8DL-RE</p>"
-            if not self.n_m3u8_installed:
-                html += "<p style='margin-left: 20px; color: #666;'>Download: <a href='https://github.com/nilaoda/N_m3u8DL-RE/releases'>GitHub Releases</a><br>"
-                html += "Extract and add to PATH</p>"
-        
-        if self.want_translator:
-            html += "<h4 style='color: #f48a32; margin-top: 15px;'>Translator:</h4>"
-            html += f"<p><b>{'✓ INSTALLED' if self.gst_installed else '✗ NOT FOUND'}</b> - gemini-srt-translator</p>"
-            if not self.gst_installed:
-                html += "<p style='margin-left: 20px; color: #666;'>Install: <code>python -m pip install gemini-srt-translator</code></p>"
-        
-        if self.want_transcribe_long:
-            html += "<h4 style='color: #f48a32; margin-top: 15px;'>Transcribe long videos (~2–3 GB download):</h4>"
-            html += f"<p><b>{'✓ INSTALLED' if self.transcribe_long_installed else '✗ NOT FOUND'}</b> - torch, torchaudio, torchcodec, pysrt, openai-whisper</p>"
-            if not self.transcribe_long_installed:
-                html += "<p style='margin-left: 20px; color: #666;'>Install: <code>python -m pip install torch torchaudio torchcodec pysrt openai-whisper</code></p>"
-        
-        html += "<h4 style='color: #f48a32; margin-top: 15px;'>Transcribe (Whisper CPP, faster):</h4>"
-        html += f"<p><b>{'✓ INSTALLED' if self.whisper_cpp_installed else '✗ NOT FOUND'}</b> - whisper.cpp-cli</p>"
+                parts.append(("<b>FFmpeg</b>", "<code>sudo apt install ffmpeg</code> (Debian/Ubuntu) or <code>sudo dnf install ffmpeg</code> (Fedora)"))
+        if self.want_batch_download and not self.n_m3u8_installed:
+            parts.append(("<b>N_m3u8DL-RE</b>", "<a href='https://github.com/nilaoda/N_m3u8DL-RE/releases'>GitHub Releases</a>, extract and add to PATH"))
+        if self.want_translator and not self.gst_installed:
+            parts.append(("<b>gemini-srt-translator</b>", "<code>python -m pip install gemini-srt-translator</code>"))
+        if self.want_transcribe_long and not self.transcribe_long_installed:
+            parts.append(("<b>Transcription (Local AI)</b>", "<code>python -m pip install torch torchaudio torchcodec pysrt openai-whisper</code>"))
         if not self.whisper_cpp_installed:
-            html += "<p style='margin-left: 20px; color: #666;'>Install: <code>python -m pip install whisper.cpp-cli</code></p>"
-        
+            parts.append(("<b>Whisper CPP</b>", "<code>python -m pip install whisper.cpp-cli</code>"))
+        if not parts:
+            html += "<p>All components installed.</p>"
+        else:
+            for name, detail in parts:
+                html += f"<p>{name}: {detail}</p>"
         html += "</div>"
         return html
     
@@ -4540,14 +4625,11 @@ class SettingsDialog(QDialog):
         self.config = load_config()
         
         main_layout = QVBoxLayout()
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        content = QWidget()
-        content_layout = QVBoxLayout()
-        content_layout.setSpacing(16)
+        tabs = QTabWidget()
         
-        # --- API Keys ---
+        # --- API tab ---
+        api_tab = QWidget()
+        api_layout = QVBoxLayout(api_tab)
         api_group = QGroupBox("API Keys")
         api_group.setStyleSheet("QGroupBox { font-weight: bold; }")
         api_form = QFormLayout()
@@ -4576,45 +4658,49 @@ class SettingsDialog(QDialog):
         self.api_keys_layout.addWidget(add_btn)
         api_form.addRow("", keys_container)
         api_group.setLayout(api_form)
-        content_layout.addWidget(api_group)
+        api_layout.addWidget(api_group)
+        tabs.addTab(api_tab, "API")
         
-        # --- FFmpeg (optional path for older version) ---
+        # --- Tools tab ---
+        tools_tab = QWidget()
+        tools_layout = QVBoxLayout(tools_tab)
         ffmpeg_group = QGroupBox("FFmpeg")
         ffmpeg_group.setStyleSheet("QGroupBox { font-weight: bold; }")
         ffmpeg_form = QFormLayout()
         ffmpeg_help = QLabel(
-            "Leave empty to use FFmpeg from PATH. Set a path (e.g. /opt/homebrew/opt/ffmpeg@6/bin/ffmpeg) "
-            "to use a specific version if FFmpeg 7.x gives filter errors with burn-in subtitles."
+            "Leave empty to use system default. Set a path to use a specific version "
+            "if FFmpeg 7.x gives filter errors with burn-in subtitles."
         )
         ffmpeg_help.setWordWrap(True)
         ffmpeg_help.setStyleSheet("color: #666; font-size: 10px;")
         ffmpeg_form.addRow("", ffmpeg_help)
         self.ffmpeg_path_input = QLineEdit()
         self.ffmpeg_path_input.setText(self.config.get("ffmpeg_path", ""))
-        self.ffmpeg_path_input.setPlaceholderText("e.g. /opt/homebrew/opt/ffmpeg@6/bin/ffmpeg")
+        self.ffmpeg_path_input.setPlaceholderText("e.g. /opt/homebrew/bin/ffmpeg")
         ffmpeg_form.addRow("FFmpeg path (optional):", self.ffmpeg_path_input)
         ffmpeg_group.setLayout(ffmpeg_form)
-        content_layout.addWidget(ffmpeg_group)
+        tools_layout.addWidget(ffmpeg_group)
 
-        # --- N_m3u8DL-RE (optional path for batch downloads) ---
         nm3u8_group = QGroupBox("N_m3u8DL-RE")
         nm3u8_group.setStyleSheet("QGroupBox { font-weight: bold; }")
         nm3u8_form = QFormLayout()
         nm3u8_help = QLabel(
-            "Leave empty to use N_m3u8DL-RE from PATH. Set path to executable or folder containing it "
-            "if installed in a custom location (e.g. for batch downloads)."
+            "Leave empty to use system default. Set path if installed in a custom location."
         )
         nm3u8_help.setWordWrap(True)
         nm3u8_help.setStyleSheet("color: #666; font-size: 10px;")
         nm3u8_form.addRow("", nm3u8_help)
         self.n_m3u8dl_path_input = QLineEdit()
         self.n_m3u8dl_path_input.setText(self.config.get("n_m3u8dl_path", ""))
-        self.n_m3u8dl_path_input.setPlaceholderText("e.g. /usr/local/bin/N_m3u8DL-RE or C:\\Tools\\N_m3u8DL-RE.exe")
+        self.n_m3u8dl_path_input.setPlaceholderText("e.g. /usr/local/bin/N_m3u8DL-RE")
         nm3u8_form.addRow("N_m3u8DL-RE path (optional):", self.n_m3u8dl_path_input)
         nm3u8_group.setLayout(nm3u8_form)
-        content_layout.addWidget(nm3u8_group)
-
-        # --- Watermarks ---
+        tools_layout.addWidget(nm3u8_group)
+        tabs.addTab(tools_tab, "Tools")
+        
+        # --- Processing tab ---
+        processing_tab = QWidget()
+        processing_layout = QVBoxLayout(processing_tab)
         watermark_group = QGroupBox("Watermarks")
         watermark_group.setStyleSheet("QGroupBox { font-weight: bold; }")
         wm_form = QFormLayout()
@@ -4639,9 +4725,8 @@ class SettingsDialog(QDialog):
         wm1080_layout.addWidget(self.wm1080_browse)
         wm_form.addRow("Watermark 1080p:", wm1080_layout)
         watermark_group.setLayout(wm_form)
-        content_layout.addWidget(watermark_group)
-        
-        # --- Subtitle Translation ---
+        processing_layout.addWidget(watermark_group)
+
         translation_group = QGroupBox("Subtitle Translation")
         translation_group.setStyleSheet("QGroupBox { font-weight: bold; }")
         trans_form = QFormLayout()
@@ -4652,6 +4737,9 @@ class SettingsDialog(QDialog):
         translation_info.setWordWrap(True)
         translation_info.setStyleSheet("color: #666;")
         trans_form.addRow("", translation_info)
+        translation_helper = QLabel("Used when clicking \"Translate subtitles\".")
+        translation_helper.setStyleSheet("color: #666; font-size: 10px;")
+        trans_form.addRow("", translation_helper)
         self.translation_target_combo = QComboBox()
         for lang in TRANSLATION_TARGET_LANGUAGES:
             self.translation_target_combo.addItem(lang)
@@ -4671,23 +4759,24 @@ class SettingsDialog(QDialog):
         trans_form.addRow("", self.iso639_checkbox)
         trans_form.addRow("", iso639_help)
         translation_group.setLayout(trans_form)
-        content_layout.addWidget(translation_group)
+        processing_layout.addWidget(translation_group)
+        tabs.addTab(processing_tab, "Processing")
         
-        # --- Appearance ---
+        # --- Appearance tab ---
+        appearance_tab = QWidget()
+        appearance_layout = QVBoxLayout(appearance_tab)
         appearance_group = QGroupBox("Appearance")
         appearance_group.setStyleSheet("QGroupBox { font-weight: bold; }")
         app_form = QFormLayout()
-        self.lesbian_flag_checkbox = QCheckBox("Lesbian flag theme (always on)")
-        self.lesbian_flag_checkbox.setChecked(False)
-        self.lesbian_flag_checkbox.setToolTip("The app uses lesbian flag colors. Try checking this for a surprise.")
+        self.lesbian_flag_checkbox = QCheckBox("Lesbian flag theme")
+        self.lesbian_flag_checkbox.setChecked(True)
         self.lesbian_flag_checkbox.stateChanged.connect(self.toggle_lesbian_flag_theme)
         app_form.addRow("", self.lesbian_flag_checkbox)
         appearance_group.setLayout(app_form)
-        content_layout.addWidget(appearance_group)
+        appearance_layout.addWidget(appearance_group)
+        tabs.addTab(appearance_tab, "Appearance")
         
-        content.setLayout(content_layout)
-        scroll.setWidget(content)
-        main_layout.addWidget(scroll)
+        main_layout.addWidget(tabs)
         
         self.toggle_watermark_fields()
         
@@ -4745,17 +4834,15 @@ class SettingsDialog(QDialog):
         self.wm1080_browse.setEnabled(enabled)
     
     def toggle_lesbian_flag_theme(self, state):
-        """Joke feature - shows a message and keeps the theme ON."""
-        if state == Qt.Checked:  # User tried to check it (turn theme OFF)
-            # Show the message
+        """Joke feature - shows a message when user tries to turn theme OFF; keeps theme ON."""
+        if state == Qt.Unchecked:  # User tried to uncheck it (turn theme off)
             QMessageBox.warning(
-                self, 
+                self,
                 "Wait a minute...",
                 "That kinda homophobic, isn't it?"
             )
-            # Immediately uncheck it (keep theme ON)
             self.lesbian_flag_checkbox.blockSignals(True)
-            self.lesbian_flag_checkbox.setChecked(False)
+            self.lesbian_flag_checkbox.setChecked(True)
             self.lesbian_flag_checkbox.blockSignals(False)
     
     def browse_file(self, line_edit, title):
@@ -4765,7 +4852,7 @@ class SettingsDialog(QDialog):
         )
         if file_path:
             line_edit.setText(file_path)
-    
+
     def save_settings(self):
         """Save settings and close dialog."""
         api_keys = [le.text().strip() for le, row, btn in self.api_key_inputs if le.text().strip()]
