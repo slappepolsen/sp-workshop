@@ -2410,32 +2410,14 @@ def transcribe_video_whisper_cpp(
 
         output_stem = str(video_dir / base_name)
 
-        # On macOS, pip whisper.cpp-cli lacks ggml-metal.metal; download it to enable Metal/GPU
+        # On macOS, Metal/GPU only works when ggml-metal.metal is next to the binary (built from source).
+        # The standalone .metal file requires ggml-common.h etc.; downloading it alone fails at runtime.
         metal_dir = None
         if sys.platform == "darwin":
             binary_dir = Path(binary).parent
             metal_in_cwd = binary_dir / "ggml-metal.metal"
-            cache_metal = Path.home() / ".cache" / "whisper.cpp" / "ggml-metal.metal"
             if metal_in_cwd.exists():
                 metal_dir = str(binary_dir)
-            elif cache_metal.exists():
-                metal_dir = str(cache_metal.parent)
-            else:
-                # Pip package doesn't bundle it; download from whisper.cpp repo
-                if log_callback:
-                    log_callback("Downloading ggml-metal.metal for Metal/GPU support (~400 KB)...")
-                try:
-                    cache_metal.parent.mkdir(parents=True, exist_ok=True)
-                    urlretrieve(
-                        "https://raw.githubusercontent.com/ggml-org/whisper.cpp/master/ggml/src/ggml-metal/ggml-metal.metal",
-                        cache_metal,
-                    )
-                    metal_dir = str(cache_metal.parent)
-                    if log_callback:
-                        log_callback("ggml-metal.metal ready for Metal acceleration.")
-                except Exception as e:
-                    if log_callback:
-                        log_callback(f"Could not download ggml-metal.metal: {e} (will fall back to CPU)")
 
         vad_args = []
         try:
