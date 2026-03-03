@@ -34,6 +34,15 @@ from pathlib import Path
 from typing import Optional, Dict, List
 
 
+# Enforce Python 3.9–3.12 (PyQt5 + 3.13+ causes Qt plugin errors on macOS)
+if sys.version_info >= (3, 13):
+    print("SP Workshop requires Python 3.9–3.12.")
+    print("Python 3.13+ causes Qt failures on macOS. Use Python 3.12:")
+    print("  brew install python@3.12")
+    print("  python3.12 -m venv .venv && source .venv/bin/activate")
+    sys.exit(1)
+
+
 def quote_path(path: str) -> str:
     """Quote a path for shell commands in a cross-platform way.
     

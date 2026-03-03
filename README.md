@@ -1,15 +1,20 @@
-# SP Workshop 
+# SP Workshop
+<<<<<<< Updated upstream
+=======
+
+![Developer Banner 13](https://ishan-rest.vercel.app/svg/banner/dev13/slappepolsen)
+>>>>>>> Stashed changes
 
 [![Release](https://img.shields.io/github/v/release/slappepolsen/sp-workshop)](../../releases)
 [![License](https://img.shields.io/github/license/slappepolsen/sp-workshop)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.9+-blue)](https://www.python.org)
+[![Python](https://img.shields.io/badge/python-3.9--3.12-blue)](https://www.python.org)
 [![Platform](https://img.shields.io/badge/platform-macOS%20|%20Windows%20|%20Linux-lightgrey)](#installation)
 
 <img src="media/icon.png" width="80" height="80" alt="icon"/>
 
 ## Video processing studio GUI 🎬 
 
-🌐 SP-workshop is a desktop GUI for extracting, translating, transcribing, and burning subtitles into videos.
+🌐 SP Workshop is a desktop GUI for extracting, translating, transcribing, and burning subtitles into videos.
 
 🏳️‍🌈 It was created to make international WLW / sapphic content more accessible, but it works for any audiovisual media.
 
@@ -33,9 +38,9 @@ SP Workshop is built for:
 
 ## Installation
 
-#### Prerequisites
+### Prerequisites
 
-- **Python 3.9 or higher**
+- **Python 3.9–3.12** (3.12 recommended; 3.13+ causes Qt errors on macOS)
   Download from [python.org](https://www.python.org/downloads/) and make sure it is added to PATH during installation.
 
 Download SP Workshop from:
@@ -43,16 +48,17 @@ Download SP Workshop from:
 
 Select **Source code (zip)** under Assets.
 
-### macOS
+## macOS
 
 1. Open **Terminal**
 2. Navigate to the project folder
    ```bash
    cd path/to/sp-workshop
    ```
-3. Create and activate a virtual environment
+3. Create and activate a virtual environment  
+   Use Python 3.12 to avoid Qt issues on macOS (`brew install python@3.12`).
    ```bash
-   python3 -m venv .venv
+   python3.12 -m venv .venv   # or python3 if 3.12 is default
    source .venv/bin/activate
    ```
 4. Install dependencies
@@ -73,14 +79,15 @@ Select **Source code (zip)** under Assets.
    ```
    For older versions (before 10.0.0), the main file is called  `video_app_v8.py`. Use `python3 video_app_v8.py` or rename it to `app.py`.
 
-### Windows
+## Windows
 
 1. Open **Command Prompt**
 2. Navigate to the project folder
    ```bash
    cd path\to\sp-workshop
    ```
-3. Create and activate a virtual environment
+3. Create and activate a virtual environment  
+   Python 3.12 recommended.
    ```bash
    python -m venv .venv
    .venv\Scripts\activate
@@ -98,9 +105,10 @@ Select **Source code (zip)** under Assets.
    ```
    For older versions (before 10.0.0), the main file is called  `video_app_v8.py`. Use `python3 video_app_v8.py` or rename it to `app.py`.
 
-### Linux
+## Linux
 
-1. Create and activate a virtual environment
+1. Create and activate a virtual environment  
+   Python 3.12 recommended.
    ```bash
    python3 -m venv .venv
    source .venv/bin/activate
@@ -120,7 +128,6 @@ Select **Source code (zip)** under Assets.
    python3 app.py
    ```
    For older versions (before 10.0.0), the main file is called  `video_app_v8.py`. Use `python3 video_app_v8.py` or rename it to `app.py`.
-
 
 ---
 
@@ -143,12 +150,6 @@ By default, SP Workshop creates:
 
 All paths can be changed in **Settings**.
 
----
-
-## More details
-
-Just some extra information, nice to know.
-
 ### Configuration:
 Click *Settings* to configure:
 
@@ -159,9 +160,7 @@ Click *Settings* to configure:
   - Watermarks can be toggled on or off in Settings
 - **Directory paths**: choose where downloads, subtitles, and output files are stored.
 
----
-
-### Workflows
+## Workflows
 
 The whole point of this is to make WLW/sapphic/lesbian content accessible for everyone in the world. You know, extracting subtitles, translating them, processing videos with burned-in subtitles and watermarks. All that good stuff, but with way fewer clicks.
 
@@ -177,9 +176,7 @@ SP Workshop supports three main workflows depending on your starting material.
 | **[2] Batch Download** | Downloading full episodes or series |
 | **[3] Transcribe** | Creating subtitles when none exist |
 
----
-
-### License
+## License
 
 This project is licensed under the [MIT License](LICENSE).
 
