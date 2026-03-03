@@ -9,7 +9,7 @@ A PyQt5 desktop app that provides a button-based interface for all video process
 """
 
 
-__version__ = "10.4.0-alpha.3"
+__version__ = "10.4.0-alpha.5"
 VERSION_CODENAME = "Hallucination"
 
 import sys
@@ -72,14 +72,21 @@ if platform.system() == "Darwin":
     if os.environ.get("QT_QPA_PLATFORM_PLUGIN_PATH", "x") == "":
         os.environ.pop("QT_QPA_PLATFORM_PLUGIN_PATH", None)
 
-from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QTextEdit, QFileDialog, QDialog,
-    QLineEdit, QFormLayout, QMessageBox, QProgressBar, QGroupBox, QStyleFactory, QCheckBox, QStackedWidget, QTextBrowser, QComboBox,
-    QGraphicsDropShadowEffect, QTabWidget, QSpinBox, QDoubleSpinBox, QScrollArea, QListWidget, QListWidgetItem, QTreeWidget, QTreeWidgetItem, QHeaderView, QMenu
-)
-from PyQt5.QtCore import QThread, pyqtSignal, Qt, QProcess, QUrl, QTimer
-from PyQt5.QtGui import QFont, QIcon, QPainter, QPen, QDesktopServices
+try:
+    from PyQt5.QtWidgets import (
+        QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+        QPushButton, QLabel, QTextEdit, QFileDialog, QDialog,
+        QLineEdit, QFormLayout, QMessageBox, QProgressBar, QGroupBox, QStyleFactory, QCheckBox, QStackedWidget, QTextBrowser, QComboBox,
+        QGraphicsDropShadowEffect, QTabWidget, QSpinBox, QDoubleSpinBox, QScrollArea, QListWidget, QListWidgetItem, QTreeWidget, QTreeWidgetItem, QHeaderView, QMenu
+    )
+    from PyQt5.QtCore import QThread, pyqtSignal, Qt, QProcess, QUrl, QTimer
+    from PyQt5.QtGui import QFont, QIcon, QPainter, QPen, QDesktopServices
+except ImportError as e:
+    print("SP Workshop needs PyQt5.")
+    print("Activate your virtual environment, then run: pip install PyQt5")
+    print("Or: python -m pip install -r requirements.txt")
+    print(f"(Error: {e})")
+    sys.exit(1)
 
 
 # ============================================================================
@@ -1530,7 +1537,7 @@ def translate_subtitles(selected_srt_files: List[Path], target_language: str = "
 
 def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_dir: Path,
                  watermark_path: str, resolution: str, use_watermarks: bool = True,
-                 ffmpeg_path: str = "", use_iso639: bool = False, target_language: str = "English",
+                 config: Optional[Dict] = None, use_iso639: bool = False, target_language: str = "English",
                  downloads_dir: Path = None, progress_callback=None, log_callback=None) -> bool:
     """Process selected video files: burn subtitles, add watermark (if enabled), resize.
     
@@ -1655,7 +1662,7 @@ def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_
             s = s.replace(":", "\\:")
             return s
         srt_path = escape_subtitle_path_for_filter(srt_file)
-        ffmpeg_exe = (ffmpeg_path.strip() or "ffmpeg")
+        ffmpeg_exe = get_ffmpeg_command(config)
         if use_watermarks:
             if resolution == "720":
                 filter_complex = (
@@ -1934,12 +1941,13 @@ def split_audio_channels(video_path: Path, output_dir: Path,
     success_count = 0
     
     try:
+        ffmpeg_exe = get_ffmpeg_command()
         # Extract audio first, then split channels
         temp_audio = output_dir / f"{base_name}_temp_audio.wav"
         
         # First extract audio to WAV
         cmd_extract = [
-            'ffmpeg', '-i', str(video_path),
+            ffmpeg_exe, '-i', str(video_path),
             '-vn', '-acodec', 'pcm_s16le', '-ar', '48000',
             '-y', str(temp_audio)
         ]
@@ -1958,7 +1966,7 @@ def split_audio_channels(video_path: Path, output_dir: Path,
             # Extract individual channel using pan filter
             # pan=mono|c0=c{channel} extracts channel {channel} to mono output
             cmd_split = [
-                'ffmpeg', '-i', str(temp_audio),
+                ffmpeg_exe, '-i', str(temp_audio),
                 '-af', f'pan=mono|c0=c{channel}',
                 '-y', str(output_file)
             ]
@@ -2007,15 +2015,16 @@ def convert_audio_format(video_path: Path, output_path: Path,
         return False
     
     try:
+        ffmpeg_exe = get_ffmpeg_command()
         if target_format == 'mp3':
             cmd = [
-                'ffmpeg', '-i', str(video_path),
+                ffmpeg_exe, '-i', str(video_path),
                 '-vn', '-acodec', 'libmp3lame', '-b:a', '192k',
                 '-ar', '44100', '-y', str(output_path)
             ]
         elif target_format == 'aac':
             cmd = [
-                'ffmpeg', '-i', str(video_path),
+                ffmpeg_exe, '-i', str(video_path),
                 '-vn', '-acodec', 'aac', '-b:a', '192k',
                 '-ar', '48000', '-y', str(output_path)
             ]
@@ -2440,8 +2449,8 @@ def transcribe_video_whisper_cpp(
 
         output_stem = str(video_dir / base_name)
 
-        # On macOS, Metal/GPU only works when ggml-metal.metal is next to the binary.
-        # The pip whisper.cpp-cli package does not include it; auto-download when missing.
+        # On macOS, Metal/GPU only works when ggml-metal.metal exists next to the binary.
+        # Do not auto-download: incompatible versions can cause ggml-common.h errors.
         metal_dir = None
         no_gpu_args = []
         if sys.platform == "darwin":
@@ -2450,24 +2459,10 @@ def transcribe_video_whisper_cpp(
             if metal_path.exists():
                 metal_dir = str(binary_dir)
             else:
-                # Auto-download ggml-metal.metal so Metal works for pip-installed whisper.cpp-cli
-                metal_url = "https://raw.githubusercontent.com/ggml-org/ggml/master/src/ggml-metal/ggml-metal.metal"
-                try:
-                    if log_callback:
-                        log_callback("Downloading ggml-metal.metal for Metal GPU support...")
-                    with urlopen(metal_url, timeout=30) as r:
-                        metal_path.write_bytes(r.read())
-                    if metal_path.exists() and metal_path.stat().st_size > 10000:
-                        metal_dir = str(binary_dir)
-                        if log_callback:
-                            log_callback("Metal shader downloaded. Using GPU acceleration.")
-                    else:
-                        metal_path.unlink(missing_ok=True)
-                        raise OSError("Downloaded file invalid or too small")
-                except Exception as e:
-                    if log_callback:
-                        log_callback(f"Could not download ggml-metal.metal ({e}); using CPU.")
-                    no_gpu_args = ["-ng"]
+                if log_callback:
+                    log_callback("ggml-metal.metal not found next to whisper binary. Using CPU.")
+                    log_callback("For Metal GPU: build whisper.cpp from source with Metal, or use a distribution that includes ggml-metal.metal.")
+                no_gpu_args = ["-ng"]
 
         vad_args = []
         try:
@@ -7203,11 +7198,11 @@ class VideoProcessingApp(QMainWindow):
         self.log(f"Starting video processing ({resolution}p) for {len(file_paths)} file(s)...")
         if use_iso639:
             self.log(f"ISO 639 mode enabled - looking for .{ISO_639_CODES.get(target_language, 'eng')}.srt files")
-        ffmpeg_path = self.config.get("ffmpeg_path", "").strip()
+        config = load_config()
         downloads_dir = get_downloads_dir()
         self.run_script(
             process_video, file_paths, subtitles_dir, output_dir,
-            watermark_path, resolution, use_watermarks, ffmpeg_path, use_iso639, target_language,
+            watermark_path, resolution, use_watermarks, config, use_iso639, target_language,
             downloads_dir
         )
     

@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 - ...
 
+## [10.4.0-alpha.5] - 2026-03-03
+
+### Added
+- PyQt5 graceful fail: friendly message and pip instructions when PyQt5 is missing (instead of raw ImportError traceback)
+
+### Changed
+- FFmpeg resolver used everywhere: process_video, split_audio_channels, and convert_audio_format now use get_ffmpeg_command() (config → tools dir → PATH)
+- Whisper CPP Metal: remove auto-download of ggml-metal.metal; use CPU when file absent, log clear message for Metal setup
+
 ## [10.4.0-alpha.4] - 2026-03-03
 
 ### Added
