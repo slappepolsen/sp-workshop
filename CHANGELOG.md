@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 - ...
 
+## [10.4.0-alpha.4] - 2026-03-03
+
+### Added
+- Python 3.12 version enforcement: runtime check in app.py, .python-version for pyenv/rtx/asdf, README updates (3.13+ causes Qt cocoa plugin errors on macOS)
+
+### Changed
+- Improved app.py section headers for readability
+- README: Python 3.9–3.12 prerequisite, macOS venv uses python3.12, app icon in README, relocate dev-banner
+
 ## [10.4.0-alpha.3] - 2026-03-02
 
 ### Added
