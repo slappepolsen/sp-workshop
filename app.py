@@ -1,8 +1,13 @@
+# ============================================================================
+# Version, imports, widgets
+# ============================================================================
+
 #!/usr/bin/env python3
 """
 Video Processing GUI Application
 A PyQt5 desktop app that provides a button-based interface for all video processing scripts.
 """
+
 
 __version__ = "10.4.0-alpha.3"
 VERSION_CODENAME = "Hallucination"
@@ -48,6 +53,16 @@ def get_temp_dir() -> str:
     return tempfile.gettempdir()
 
 
+# ============================================================================
+# Qt widgets
+# ============================================================================
+# Fix Qt "cocoa" plugin not found on macOS (often works first run, fails on second).
+# An empty QT_QPA_PLATFORM_PLUGIN_PATH makes Qt look nowhere; unset it so Qt uses defaults.
+# Must run before any PyQt5 QtWidgets/QtGui imports.
+if platform.system() == "Darwin":
+    if os.environ.get("QT_QPA_PLATFORM_PLUGIN_PATH", "x") == "":
+        os.environ.pop("QT_QPA_PLATFORM_PLUGIN_PATH", None)
+
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QTextEdit, QFileDialog, QDialog,
@@ -57,6 +72,10 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import QThread, pyqtSignal, Qt, QProcess, QUrl, QTimer
 from PyQt5.QtGui import QFont, QIcon, QPainter, QPen, QDesktopServices
 
+
+# ============================================================================
+# Constants
+# ============================================================================  
 
 # Download instructions URL
 DOWNLOAD_INSTRUCTIONS_URL = "https://rentry.co/sp-workshop"
@@ -141,7 +160,7 @@ def _whisper_cpp_model_size(filename: str) -> str:
 
 
 # ============================================================================
-# Custom Widgets
+# Custom widgets
 # ============================================================================
 
 class OutlinedLabel(QLabel):
@@ -172,7 +191,7 @@ class OutlinedLabel(QLabel):
 
 
 # ============================================================================
-# Configuration Management
+# Configuration management
 # ============================================================================
 
 def get_config_path() -> Path:
@@ -249,7 +268,7 @@ def _has_existing_setup() -> bool:
 
 
 # ============================================================================
-# Directory Management (Fixed Structure)
+# Directory & file system management
 # ============================================================================
 
 def get_base_dir() -> Path:
@@ -403,11 +422,6 @@ def check_whisper_model_exists(model_name: str) -> bool:
     model_path = cache_dir / model_file
     return model_path.exists()
 
-
-# ============================================================================
-# ISO 639-2/T Language Codes for Subtitle Suffixes
-# ============================================================================
-
 # Target languages for gst
 TRANSLATION_TARGET_LANGUAGES = [
     "Catalan", "Dutch", "English", "French", "German", "Greek",
@@ -427,7 +441,7 @@ ISO_639_CODES = {
 
 
 # ============================================================================
-# Video Analysis Functions
+# Video & media analysis
 # ============================================================================
 
 def get_video_duration(video_path: Path) -> Optional[float]:
@@ -688,7 +702,7 @@ def open_in_lossless_cut(video_paths: List[Path], log_callback=None) -> bool:
 
 
 # ============================================================================
-# Episode Range Parser
+# Downloader helper functions
 # ============================================================================
 
 def parse_episode_range(range_str: str) -> List[int]:
@@ -857,7 +871,7 @@ def _strip_ansi(text: str) -> str:
 
 
 # ============================================================================
-# Script Wrappers
+# Download & subtitle pipeline
 # ============================================================================
 
 def download_episodes(
@@ -1501,6 +1515,9 @@ def translate_subtitles(selected_srt_files: List[Path], target_language: str = "
 
     return success_count > 0
 
+# ============================================================================
+# Video processing pipeline
+# ============================================================================
 
 def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_dir: Path,
                  watermark_path: str, resolution: str, use_watermarks: bool = True,
@@ -2216,6 +2233,10 @@ def _get_whisper_python(log_callback=None) -> Optional[Path]:
     return python_exe
 
 
+# ============================================================================
+# Transcription engines
+# ============================================================================
+
 def _get_whisper_cpp_binary(config: Dict) -> Optional[Path]:
     """Resolve Whisper CPP executable. Config whisper_cpp_path overrides; else check PATH."""
     user_path = (config.get("whisper_cpp_path") or "").strip()
@@ -2410,14 +2431,34 @@ def transcribe_video_whisper_cpp(
 
         output_stem = str(video_dir / base_name)
 
-        # On macOS, Metal/GPU only works when ggml-metal.metal is next to the binary (built from source).
-        # The standalone .metal file requires ggml-common.h etc.; downloading it alone fails at runtime.
+        # On macOS, Metal/GPU only works when ggml-metal.metal is next to the binary.
+        # The pip whisper.cpp-cli package does not include it; auto-download when missing.
         metal_dir = None
+        no_gpu_args = []
         if sys.platform == "darwin":
             binary_dir = Path(binary).parent
-            metal_in_cwd = binary_dir / "ggml-metal.metal"
-            if metal_in_cwd.exists():
+            metal_path = binary_dir / "ggml-metal.metal"
+            if metal_path.exists():
                 metal_dir = str(binary_dir)
+            else:
+                # Auto-download ggml-metal.metal so Metal works for pip-installed whisper.cpp-cli
+                metal_url = "https://raw.githubusercontent.com/ggml-org/ggml/master/src/ggml-metal/ggml-metal.metal"
+                try:
+                    if log_callback:
+                        log_callback("Downloading ggml-metal.metal for Metal GPU support...")
+                    with urlopen(metal_url, timeout=30) as r:
+                        metal_path.write_bytes(r.read())
+                    if metal_path.exists() and metal_path.stat().st_size > 10000:
+                        metal_dir = str(binary_dir)
+                        if log_callback:
+                            log_callback("Metal shader downloaded. Using GPU acceleration.")
+                    else:
+                        metal_path.unlink(missing_ok=True)
+                        raise OSError("Downloaded file invalid or too small")
+                except Exception as e:
+                    if log_callback:
+                        log_callback(f"Could not download ggml-metal.metal ({e}); using CPU.")
+                    no_gpu_args = ["-ng"]
 
         vad_args = []
         try:
@@ -2430,7 +2471,7 @@ def transcribe_video_whisper_cpp(
         cmd = [
             str(binary), "-m", str(model_path), "-f", str(audio_path),
             "-l", language_code if language_code != "auto" else "auto",
-        ] + vad_args + subtitle_edit_args + ["--print-progress", "-osrt", "-of", output_stem]
+        ] + vad_args + no_gpu_args + subtitle_edit_args + ["--print-progress", "-osrt", "-of", output_stem]
         extra_args = (config.get("whisper_cpp_extra_args") or "").strip()
         if extra_args:
             cmd.extend(extra_args.split())
@@ -2906,7 +2947,7 @@ def adjust_srt_timestamps(srt_path: Path, offset_seconds: int) -> bool:
 
 
 # ============================================================================
-# Worker Thread for Script Execution
+# Worker threads
 # ============================================================================
 
 class ScriptWorker(QThread):
@@ -3225,7 +3266,7 @@ class BinaryInstallWorker(QThread):
 
 
 # ============================================================================
-# Setup Checking Functions
+# Tool detection and installation
 # ============================================================================
 
 def check_python_package(package_name: str) -> bool:
@@ -3474,7 +3515,7 @@ def check_app_exists(app_name: str) -> bool:
 
 
 # ============================================================================
-# Setup Wizard Dialog
+# Setup wizard & dialogs
 # ============================================================================
 
 class SetupWizard(QDialog):
@@ -4135,10 +4176,7 @@ class SetupWizard(QDialog):
         self.accept()
 
 
-# ============================================================================
-# FAQ Dialog
-# ============================================================================
-
+# FAQ dialog
 class FAQDialog(QDialog):
     """FAQ dialog."""
     
@@ -4293,10 +4331,7 @@ class FAQDialog(QDialog):
         """
 
 
-# ============================================================================
-# About Dialog
-# ============================================================================
-
+# About dialog
 class AboutDialog(QDialog):
     """About dialog."""
     
@@ -4384,10 +4419,7 @@ class AboutDialog(QDialog):
         """
 
 
-# ============================================================================
-# Language Selection Dialog
-# ============================================================================
-
+# Language selection dialog
 class LanguageDialog(QDialog):
     """Dialog for selecting language code for transcription."""
     
@@ -4610,10 +4642,7 @@ class WhisperModelDialog(QDialog):
         return self.result if self.result is not None else False
 
 
-# ============================================================================
-# Settings Dialog
-# ============================================================================
-
+# Settings dialog
 class SettingsDialog(QDialog):
     """Settings configuration dialog."""
     
@@ -4868,10 +4897,7 @@ class SettingsDialog(QDialog):
         self.accept()
 
 
-# ============================================================================
-# Whisper Options Dialog (Standalone)
-# ============================================================================
-
+# Whisper options dialog
 class WhisperOptionsDialog(QDialog):
     """Simplified dialog for Whisper advanced options - manual parameter entry."""
     
@@ -5028,7 +5054,7 @@ Note: --language and --task translate are handled by the main tab and should not
 
 
 # ============================================================================
-# Main Window
+# Main application window
 # ============================================================================
 
 class VideoProcessingApp(QMainWindow):
@@ -7267,7 +7293,7 @@ class VideoProcessingApp(QMainWindow):
             self.run_script(transcribe_with_params, video_path, language_code, model, whisper_options)
     
 # ============================================================================
-# Main Entry Point
+# Application entry point
 # ============================================================================
 
 def main():
