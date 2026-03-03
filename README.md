@@ -1,6 +1,4 @@
-# SP-workshop
-
-![SP Workshop icon](media/icon.png)
+# SP Workshop <img src="media/icon.png" width="32" height="32" alt="icon" />
 
 [![Release](https://img.shields.io/github/v/release/slappepolsen/sp-workshop)](../../releases)
 [![License](https://img.shields.io/github/license/slappepolsen/sp-workshop)](LICENSE)
