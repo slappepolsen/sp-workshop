@@ -1,9 +1,11 @@
-# SP Workshop <img src="media/icon.png" width="32" height="32" alt="icon" />
+# SP Workshop 
 
 [![Release](https://img.shields.io/github/v/release/slappepolsen/sp-workshop)](../../releases)
 [![License](https://img.shields.io/github/license/slappepolsen/sp-workshop)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.9+-blue)](https://www.python.org)
 [![Platform](https://img.shields.io/badge/platform-macOS%20|%20Windows%20|%20Linux-lightgrey)](#installation)
+
+<img src="media/icon.png" width="80" height="80" alt="icon"/>
 
 ## Video processing studio GUI 🎬 
 
