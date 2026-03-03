@@ -1,6 +1,6 @@
 # SP-workshop
 
-![Developer Banner 13](https://ishan-rest.vercel.app/svg/banner/dev13/slappepolsen)
+![SP Workshop icon](media/icon.png)
 
 [![Release](https://img.shields.io/github/v/release/slappepolsen/sp-workshop)](../../releases)
 [![License](https://img.shields.io/github/license/slappepolsen/sp-workshop)](LICENSE)
@@ -187,4 +187,4 @@ Made with ❤️ by [@slappepolsen](https://x.com/slappepolsen)
 
 [![Follow](https://img.shields.io/twitter/follow/slappepolsen?style=social)](https://x.com/slappepolsen)
 
-
+![Developer Banner 13](https://ishan-rest.vercel.app/svg/banner/dev13/slappepolsen)
