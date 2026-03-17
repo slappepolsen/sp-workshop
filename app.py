@@ -2986,6 +2986,28 @@ def adjust_srt_timestamps(srt_path: Path, offset_seconds: int) -> bool:
 # Worker threads
 # ============================================================================
 
+def run_batch_transcribe(transcribe_func, video_paths, *args, **kwargs) -> bool:
+    """Run transcribe_func on each path. Logs [i/N] filename, respects check_stop. Returns True only if all succeed."""
+    paths = [Path(p) for p in video_paths]
+    total = len(paths)
+    # Strip check_stop before passing to transcribe_func (it doesn't accept it)
+    call_kwargs = {k: v for k, v in kwargs.items() if k != "check_stop"}
+    for i, path in enumerate(paths):
+        check_stop = kwargs.get("check_stop")
+        if check_stop and check_stop():
+            return False
+        log_cb = kwargs.get("log_callback")
+        if log_cb:
+            log_cb(f"[{i + 1}/{total}] {path.name}")
+        prog_cb = kwargs.get("progress_callback")
+        if prog_cb:
+            prog_cb(i + 1, total, path.name)
+        ok = transcribe_func(path, *args, **call_kwargs)
+        if not ok:
+            return False
+    return True
+
+
 class ScriptWorker(QThread):
     """Worker thread for running scripts without blocking UI."""
     finished = pyqtSignal(bool)
@@ -3018,8 +3040,11 @@ class ScriptWorker(QThread):
             if not self._stop_requested:
                 self.progress_update.emit(current, total, filename)
         
-        self.kwargs['log_callback'] = log_callback
-        self.kwargs['progress_callback'] = progress_callback
+        self.kwargs["log_callback"] = log_callback
+        self.kwargs["progress_callback"] = progress_callback
+        # Only add check_stop for batch wrappers that support it
+        if self.script_func is run_batch_transcribe:
+            self.kwargs["check_stop"] = lambda: self._stop_requested
         try:
             result = self.script_func(*self.args, **self.kwargs)
             if self._stop_requested:
@@ -5258,13 +5283,13 @@ Note: --language and --task translate are handled by the main tab and should not
 
 class VideoProcessingApp(QMainWindow):
     """Main application window."""
-    
+
     def __init__(self):
         super().__init__()
         self.config = load_config()
         self.worker = None
         self.remux_selected_files = []  # Initialize selected files list
-        
+     
         # Set window icon
         self.setWindowIcon(get_app_icon())
         
@@ -5275,7 +5300,7 @@ class VideoProcessingApp(QMainWindow):
             wizard.exec_()
         
         self.init_ui()
-    
+    # color functions
     def darken_color(self, hex_color: str, percent: float = 0.15) -> str:
         """Darken a hex color by a percentage."""
         # Strip #
@@ -5290,7 +5315,7 @@ class VideoProcessingApp(QMainWindow):
         b = max(0, int(b * (1 - percent)))
         # To hex
         return f"#{r:02x}{g:02x}{b:02x}"
-    
+    # button style functions
     def apply_button_style(self, button: QPushButton, color: str):
         """Apply solid color style to a button with 15% darker hover."""
         hover_color = self.darken_color(color, 0.15)
@@ -5317,7 +5342,7 @@ class VideoProcessingApp(QMainWindow):
         }}
         """
         button.setStyleSheet(stylesheet)
-    
+    # lesbian flag style functions (slay)
     def apply_lesbian_flag_styles(self):
         """Apply lesbian flag color scheme to buttons."""
         # Flag colors
@@ -5333,7 +5358,7 @@ class VideoProcessingApp(QMainWindow):
         # Find buttons by section
         buttons = self.findChildren(QPushButton)
         
-        # Group by QGroupBox
+        # bunch of buttons
         download_buttons = []
         subtitle_buttons = []
         process_buttons = []
@@ -5343,9 +5368,10 @@ class VideoProcessingApp(QMainWindow):
         faq_button = None
         about_button = None
         
+        # find button by section 
         for btn in buttons:
             parent = btn.parent()
-            # Find QGroupBox
+            # find group box
             while parent:
                 if isinstance(parent, QGroupBox):
                     group_title = parent.title()
@@ -5370,7 +5396,7 @@ class VideoProcessingApp(QMainWindow):
             elif btn.text() == "About":
                 about_button = btn
         
-        # Apply colors
+        # make buttons lesbian
         for btn in download_buttons:
             self.apply_button_style(btn, colors[0])
         
@@ -5393,6 +5419,7 @@ class VideoProcessingApp(QMainWindow):
         if about_button:
             self.apply_button_style(about_button, colors[5])
     
+    # time to transcribe
     def create_transcription_tab(self):
         """Create the dedicated transcription tab."""
         tab = QWidget()
@@ -5404,16 +5431,18 @@ class VideoProcessingApp(QMainWindow):
         header_label.setFont(QFont("Arial", 14, QFont.Bold))
         layout.addWidget(header_label)
         
-        desc_label = QLabel("Use OpenAI Whisper to generate subtitles from audio/video")
+        # Description
+        desc_label = QLabel("Use local Whisper model to generate subtitles from audio/video")
         desc_label.setStyleSheet("color: #666;")
         layout.addWidget(desc_label)
         
         # File selection
         file_group = QGroupBox("File Selection")
         file_layout = QVBoxLayout()
-        
+        self.transcribe_file_paths = []
+
         file_row = QHBoxLayout()
-        file_label = QLabel("Select file:")
+        file_label = QLabel("Select file(s):")
         self.transcribe_file_input = QLineEdit()
         self.transcribe_file_input.setReadOnly(True)
         self.transcribe_file_input.setPlaceholderText("No file selected")
@@ -5460,7 +5489,7 @@ class VideoProcessingApp(QMainWindow):
         format_row.addStretch()
         file_layout.addLayout(format_row)
         
-        # Whisper Model selector
+        # Whisper model selector
         model_row = QHBoxLayout()
         model_label = QLabel("Whisper Model:")
         model_label.setFixedWidth(120)
@@ -5649,25 +5678,38 @@ class VideoProcessingApp(QMainWindow):
         self.config["whisper_model"] = model
     
     def browse_transcribe_file(self):
-        """Browse for file to transcribe."""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "Select Video or Audio File to Transcribe",
+        """Browse for file(s) to transcribe."""
+        file_paths, _ = QFileDialog.getOpenFileNames(
+            self, "Select Video or Audio File(s) to Transcribe",
             str(get_downloads_dir()),
             "Media Files (*.mkv *.mp4 *.mov *.mp3 *.wav *.m4a);;All Files (*)"
         )
-        if file_path:
-            self.transcribe_file_input.setText(file_path)
+        if file_paths:
+            self.transcribe_file_paths = file_paths
+            if len(file_paths) == 1:
+                self.transcribe_file_input.setText(file_paths[0])
+            else:
+                self.transcribe_file_input.setText(f"{len(file_paths)} files selected")
+    
+    def _get_transcribe_paths(self) -> List[Path]:
+        """Resolve selected file path(s) from transcribe tab. Returns list of Paths (may be empty)."""
+        if self.transcribe_file_paths:
+            return [Path(p) for p in self.transcribe_file_paths]
+        text = self.transcribe_file_input.text().strip()
+        if not text or text == "No file selected" or re.match(r"^\d+ files selected$", text):
+            return []
+        p = Path(text)
+        return [p] if p.exists() else []
     
     def transcribe_from_tab(self):
         """Transcribe video from the dedicated tab."""
-        file_path = self.transcribe_file_input.text()
-        if not file_path or file_path == "No file selected":
+        video_paths = self._get_transcribe_paths()
+        if not video_paths:
             QMessageBox.warning(self, "No File", "Please select a video or audio file to transcribe.")
             return
-        
-        video_path = Path(file_path)
-        if not video_path.exists():
-            QMessageBox.warning(self, "File Not Found", f"The selected file does not exist:\n{file_path}")
+        missing = [p for p in video_paths if not p.exists()]
+        if missing:
+            QMessageBox.warning(self, "File Not Found", f"File(s) do not exist:\n{missing[0]}")
             return
         
         # Get language from combo
@@ -5717,24 +5759,31 @@ class VideoProcessingApp(QMainWindow):
         # Get output format from combo
         output_format = self.transcribe_format_combo.currentData()
         
-        self.transcribe_log(f"Starting transcription of: {video_path.name}")
+        n = len(video_paths)
+        self.transcribe_log(f"Starting transcription of {n} file(s)")
         self.transcribe_log(f"Language: {language_code}, Model: {model}, Format: {output_format}")
         
         # Show progress bar and stop button
         self.transcribe_progress_bar.setVisible(True)
         self.transcribe_stop_btn.setVisible(True)
         self.transcribe_stop_btn.setEnabled(True)
-        self.transcribe_progress_bar.setRange(0, 0)  # Indeterminate
+        self.transcribe_progress_bar.setRange(0, n) if n > 1 else self.transcribe_progress_bar.setRange(0, 0)
         
-        # Run transcription with language, model, whisper options, and output format
         def transcribe_with_params(video_path, language_code, model, whisper_options, output_format, progress_callback=None, log_callback=None):
             return transcribe_video(video_path, language_code, model, whisper_options, output_format, progress_callback, log_callback)
         
-        # Use custom callbacks for the tab
         def tab_log_callback(msg):
             self.transcribe_log(msg)
         
-        self.worker = ScriptWorker(transcribe_with_params, video_path, language_code, model, whisper_options, output_format)
+        self.worker = ScriptWorker(
+            run_batch_transcribe,
+            transcribe_with_params,
+            video_paths,
+            language_code,
+            model,
+            whisper_options,
+            output_format,
+        )
         self.worker.log_message.connect(tab_log_callback)
         self.worker.finished.connect(self.on_transcribe_finished)
         self.worker.start()
@@ -5751,6 +5800,11 @@ class VideoProcessingApp(QMainWindow):
         """Handle transcription completion."""
         self.transcribe_progress_bar.setVisible(False)
         self.transcribe_stop_btn.setVisible(False)
+        # Reset both stop buttons
+        self.stop_btn.setEnabled(False)
+        self.stop_btn.setText("Stop")
+        self.transcribe_stop_btn.setEnabled(False)
+        self.transcribe_stop_btn.setText("Stop")
         if success:
             self.transcribe_log("✓ Transcription completed successfully!")
         else:
@@ -5759,13 +5813,13 @@ class VideoProcessingApp(QMainWindow):
 
     def transcribe_long_from_tab(self):
         """Transcribe long video using VAD + Whisper (for files over ~5 min)."""
-        file_path = self.transcribe_file_input.text()
-        if not file_path or file_path == "No file selected":
+        video_paths = self._get_transcribe_paths()
+        if not video_paths:
             QMessageBox.warning(self, "No File", "Please select a video or audio file to transcribe.")
             return
-        video_path = Path(file_path)
-        if not video_path.exists():
-            QMessageBox.warning(self, "File Not Found", f"The selected file does not exist:\n{file_path}")
+        missing = [p for p in video_paths if not p.exists()]
+        if missing:
+            QMessageBox.warning(self, "File Not Found", f"File(s) do not exist:\n{missing[0]}")
             return
         try:
             import torch  # noqa: F401
@@ -5829,25 +5883,32 @@ class VideoProcessingApp(QMainWindow):
             config["whisper_model_asked"] = True
             config["whisper_has_existing_model"] = model_dialog.get_result()
             save_config(config)
-        self.transcribe_log(f"Starting VAD-assisted transcription of: {video_path.name}")
+        n = len(video_paths)
+        self.transcribe_log(f"Starting VAD-assisted transcription of {n} file(s)")
         self.transcribe_log(f"Language: {language_code}, Model: {model}")
-        self.transcribe_progress_bar.setVisible(True)
-        self.transcribe_stop_btn.setVisible(True)
-        self.transcribe_stop_btn.setEnabled(True)
+        self.transcribe_progress_bar.setVisible(True) 
+        self.transcribe_stop_btn.setVisible(True) 
+        self.transcribe_stop_btn.setEnabled(True) 
         self.transcribe_progress_bar.setRange(0, 0)
-        def tab_log_callback(msg):
+        def tab_log_callback(msg): 
             self.transcribe_log(msg)
-        self.worker = ScriptWorker(transcribe_video_vad, video_path, language_code, model)
-        self.worker.log_message.connect(tab_log_callback)
-        self.worker.finished.connect(self.on_transcribe_finished)
-        self.worker.start()
-
-    def _do_whisper_cpp_install(self, on_success_after_install=None):
+        self.worker = ScriptWorker( 
+            run_batch_transcribe,
+            transcribe_video_vad, 
+            video_paths,
+            language_code, 
+            model, 
+        )
+        self.worker.log_message.connect(tab_log_callback) 
+        self.worker.finished.connect(self.on_transcribe_finished) 
+        self.worker.start() 
+    
+    def _do_whisper_cpp_install(self, on_success_after_install=None): 
         """Install Whisper CPP. On macOS with Homebrew: Metal-enabled; otherwise pip (CPU)."""
-        dlg = QDialog(self)
+        dlg = QDialog(self) 
         dlg.setWindowTitle("Installing Whisper CPP...")
-        dlg.setMinimumWidth(400)
-        dlg.setWindowModality(Qt.ApplicationModal)
+        dlg.setMinimumWidth(400) 
+        dlg.setWindowModality(Qt.ApplicationModal) 
         layout = QVBoxLayout()
         progress_bar = QProgressBar()
         progress_bar.setRange(0, 0)
@@ -5859,45 +5920,45 @@ class VideoProcessingApp(QMainWindow):
         close_btn.setEnabled(False)
         layout.addWidget(close_btn)
         dlg.setLayout(layout)
-        worker = WhisperCppInstallWorker(parent=dlg)
-        worker.log_message.connect(lambda m: log.append(m))
+        worker = WhisperCppInstallWorker(parent=dlg)        
+        worker.log_message.connect(lambda m: log.append(m)) 
         def on_finished(ok):
-            worker.wait()
+            worker.wait() 
             if ok:
-                log.append("\nInstalled successfully")
+                log.append("\nInstalled successfully") 
                 progress_bar.setVisible(False)
-                close_btn.setEnabled(True)
+                close_btn.setEnabled(True) 
                 close_btn.setText("Installed successfully")
                 def auto_close():
-                    if on_success_after_install:
+                    if on_success_after_install: 
                         on_success_after_install()
-                    dlg.accept()
+                    dlg.accept() 
                 QTimer.singleShot(1500, auto_close)
             else:
-                log.append("\nInstallation failed. Click Close, then run: python -m pip install whisper.cpp-cli")
-                close_btn.setEnabled(True)
-        close_btn.clicked.connect(dlg.accept)
-        worker.finished.connect(on_finished)
-        worker.start()
-        dlg.exec_()
+                log.append("\nInstallation failed. Click Close, then run: python -m pip install whisper.cpp-cli") 
+                close_btn.setEnabled(True) 
+        close_btn.clicked.connect(dlg.accept) 
+        worker.finished.connect(on_finished) 
+        worker.start() 
+        dlg.exec_()         
 
     def transcribe_whisper_cpp_from_tab(self):
-        """Transcribe using Whisper CPP. Faster, built-in VAD."""
-        file_path = self.transcribe_file_input.text()
-        if not file_path or file_path == "No file selected":
-            QMessageBox.warning(self, "No File", "Please select a video or audio file to transcribe.")
+        """Transcribe using Whisper CPP. Faster, built-in VAD.""" 
+        video_paths = self._get_transcribe_paths() 
+        if not video_paths:
+            QMessageBox.warning(self, "No File", "Please select a video or audio file to transcribe.") 
             return
-        video_path = Path(file_path)
-        if not video_path.exists():
-            QMessageBox.warning(self, "File Not Found", f"The selected file does not exist:\n{file_path}")
+        missing = [p for p in video_paths if not p.exists()] 
+        if missing:
+            QMessageBox.warning(self, "File Not Found", f"File(s) do not exist:\n{missing[0]}") 
             return
         language_code = self.transcribe_language_combo.currentData()
         if not language_code:
-            language_code = "auto"
-        config = load_config()
-        binary = _get_whisper_cpp_binary(config)
+            language_code = "auto" # set language code to auto
+        config = load_config() # load config
+        binary = _get_whisper_cpp_binary(config) # get whisper cpp binary
         if not binary or not Path(binary).exists():
-            reply = QMessageBox.question(
+            reply = QMessageBox.question( # show question dialog    
                 self,
                 "Whisper CPP Not Installed",
                 "Whisper CPP is not installed. Would you like us to install it for you?\n\n"
@@ -5906,6 +5967,7 @@ class VideoProcessingApp(QMainWindow):
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.Yes,
             )
+            # if yes, install whisper cpp
             if reply == QMessageBox.Yes:
                 self._do_whisper_cpp_install(on_success_after_install=self.transcribe_whisper_cpp_from_tab)
                 return
@@ -5917,10 +5979,11 @@ class VideoProcessingApp(QMainWindow):
                 "in settings.json, or use the install option when prompted."
             )
             return
-        # Use same model as UI selector (turbo -> large-v3-turbo for Whisper CPP)
+        # Use same model as UI selector
         ui_model = self.transcribe_model_combo.currentText()
         model_name = "large-v3-turbo" if ui_model == "turbo" else ui_model
-        self.transcribe_log(f"Starting Whisper CPP transcription of: {video_path.name}")
+        n = len(video_paths)
+        self.transcribe_log(f"Starting Whisper CPP transcription of {n} file(s)")
         self.transcribe_log(f"Language: {language_code}, Model: {model_name}")
         self.transcribe_progress_bar.setVisible(True)
         self.transcribe_stop_btn.setVisible(True)
@@ -5930,7 +5993,13 @@ class VideoProcessingApp(QMainWindow):
         def tab_log_callback(msg):
             self.transcribe_log(msg)
 
-        self.worker = ScriptWorker(transcribe_video_whisper_cpp, video_path, language_code, model_name)
+        self.worker = ScriptWorker(
+            run_batch_transcribe,
+            transcribe_video_whisper_cpp,
+            video_paths,
+            language_code,
+            model_name,
+        )
         self.worker.log_message.connect(tab_log_callback)
         self.worker.finished.connect(self.on_transcribe_finished)
         self.worker.start()
@@ -5941,7 +6010,7 @@ class VideoProcessingApp(QMainWindow):
         layout = QVBoxLayout()
         layout.setSpacing(12)
         
-        # Header - compact
+        # Header
         header_row = QHBoxLayout()
         header_label = QLabel("Remux")
         header_label.setFont(QFont("Arial", 14, QFont.Bold))
@@ -5949,6 +6018,7 @@ class VideoProcessingApp(QMainWindow):
         header_row.addStretch()
         layout.addLayout(header_row)
         
+        # Description
         desc_label = QLabel("Add subtitles to videos or pick which tracks to keep. Expand a file to see track details.")
         desc_label.setWordWrap(True)
         desc_label.setStyleSheet("color: #666; font-size: 11px;")
@@ -6126,12 +6196,12 @@ class VideoProcessingApp(QMainWindow):
         config = self.remux_file_configs.get(video_path, {})
         sub_path = config.get('subtitle_file')
         
-        # Create file item - collapsed by default for cleaner view
+        # Create file item collapsed by default
         file_item = QTreeWidgetItem(self.remux_files_tree)
         file_item.setText(0, video_path.name)
         file_item.setText(1, "File")
-        file_item.setExpanded(False)  # Tracks hidden until user expands
-        file_item.setData(0, 256, str(video_path))  # Store path in data
+        file_item.setExpanded(False)  
+        file_item.setData(0, 256, str(video_path))  
         
         # Per-file controls on the file row
         format_combo = QComboBox()
@@ -6146,9 +6216,9 @@ class VideoProcessingApp(QMainWindow):
         format_combo.setMaximumWidth(70)
         self.remux_files_tree.setItemWidget(file_item, 2, format_combo)
         
-        # Col 3 (Language): lang + default - matches column header
+        # Col 3 (Language): lang + default
         opts_row = QWidget()
-        opts_row.setMaximumWidth(130)  # Keep within Language column
+        opts_row.setMaximumWidth(130) 
         opts_layout = QHBoxLayout(opts_row)
         opts_layout.setContentsMargins(0, 0, 0, 0)
         opts_layout.setSpacing(6)
@@ -6338,7 +6408,7 @@ class VideoProcessingApp(QMainWindow):
         
         for i in range(file_item.childCount()):
             track_item = file_item.child(i)
-            if track_item.checkState(0) == 2:  # Checked
+            if track_item.checkState(0) == 2:
                 track_data = track_item.data(0, 256)
                 if track_data:
                     track_type, track_id = track_data.split(':')
@@ -6593,7 +6663,8 @@ class VideoProcessingApp(QMainWindow):
     
     def modify_track_properties(self, file_path: Path, track_type: str, track_id: int, tree_item: QTreeWidgetItem):
         """Open dialog to modify track properties (language, default flags, etc.)."""
-        # For now, show a simple dialog - can be enhanced later
+        # for now we'll show a simple dialog because the remux window makes me mad
+        # it's just really not looking good but i also don't know how to fix it for the better
         dialog = QDialog(self)
         dialog.setWindowTitle(f"Modify Track {track_id} - {file_path.name}")
         dialog.setMinimumWidth(300)
@@ -7095,6 +7166,7 @@ class VideoProcessingApp(QMainWindow):
             return
         
         # Operation from func name
+        # These are all the operations that can be run
         func_name = script_func.__name__
         operation_names = {
             "download_episodes": "Downloading episodes",
@@ -7122,7 +7194,7 @@ class VideoProcessingApp(QMainWindow):
             self.progress_file_label.setText("")
             self.progress_counter_label.setText("")
             self.update_progress_bar_color()
-            # Enable stop
+            # enable stop button even tho it doesn't work half of the time
             self.stop_btn.setEnabled(True)
         
         self.statusBar().showMessage("Running...")
@@ -7143,7 +7215,7 @@ class VideoProcessingApp(QMainWindow):
             "Processing videos": "#dc7bb3",  # Pink
             "Remuxing videos": "#c46ea1",  # Purple
             "Transcribing video": "#b42075",  # Dark Pink
-        }
+        } # = lesbian world domination
         
         color = colors.get(self.current_operation, "#df4300")
         hover_color = self.darken_color(color, 0.15)
@@ -7183,7 +7255,7 @@ class VideoProcessingApp(QMainWindow):
                 combined_percent = completed_files_progress + current_file_progress
                 percent = int(min(100, max(0, combined_percent)))
             else:
-                # Fallback progress
+                # fallback progress
                 percent = int((current / total) * 100)
             
             self.progress_bar.setValue(percent)
@@ -7215,9 +7287,11 @@ class VideoProcessingApp(QMainWindow):
         self.progress_counter_label.setText("")
         self.current_operation = None
         self.statusBar().showMessage("Ready" if success else "Error occurred")
-        # Disable stop button and reset text
+        # Reset both stop buttons
         self.stop_btn.setEnabled(False)
         self.stop_btn.setText("Stop")
+        self.transcribe_stop_btn.setEnabled(False)
+        self.transcribe_stop_btn.setText("Stop")
         if success:
             self.log("✓ Operation completed successfully.")
         else:
@@ -7229,9 +7303,11 @@ class VideoProcessingApp(QMainWindow):
         if self.worker and self.worker.isRunning():
             # Request the worker to stop
             self.worker.stop()
-            # Disable the button to prevent multiple clicks
+            # Disable both stop buttons to prevent multiple clicks
             self.stop_btn.setEnabled(False)
             self.stop_btn.setText("Stopping...")
+            self.transcribe_stop_btn.setEnabled(False)
+            self.transcribe_stop_btn.setText("Stopping...")
             self.statusBar().showMessage("Stopping operation...")
             
             # Wait a moment for graceful shutdown, then terminate if needed
@@ -7245,9 +7321,15 @@ class VideoProcessingApp(QMainWindow):
             self.log("⚠ Force terminating operation...")
             self.worker.terminate()
             self.worker.wait()
-            self.on_script_finished(False)
-        # Reset button text
+            if self.transcribe_stop_btn.isVisible():
+                self.on_transcribe_finished(False)
+            else:
+                self.on_script_finished(False)
+        # Reset both stop buttons
+        self.stop_btn.setEnabled(False)
         self.stop_btn.setText("Stop")
+        self.transcribe_stop_btn.setEnabled(False)
+        self.transcribe_stop_btn.setText("Stop")
     
     def download_episodes(self, select_video: str = "best"):
         """Download episodes or movies."""
