@@ -92,9 +92,10 @@ Select **Source code (zip)** under Assets.
    ```bash
    pip install -r requirements.txt
    ```
-
-5. Install FFmpeg and add it to PATH
+5. Install FFmpeg and add it to PATH ([ffmpeg-full](https://www.gyan.dev/ffmpeg/builds/#:~:text=latest%20git%20master%20branch%20build%20version%3A%202026%2D03%2D15%2Dgit%2D6ba0b59d8b))
 6. Install N_m3u8DL-RE (optional, for downloads)
+   - Download from https://github.com/nilaoda/N_m3u8DL-RE/releases
+   - Add the executable to your PATH
 7. Run the app
    ```bash
    python app.py
@@ -118,7 +119,9 @@ Select **Source code (zip)** under Assets.
    ```bash
    sudo apt install ffmpeg
    ```
-4. Install N_m3u8DL-RE (optional)
+4. Install N_m3u8DL-RE (optional, for downloads)
+   - Download from https://github.com/nilaoda/N_m3u8DL-RE/releases
+   - Add the executable to your PATH
 5. Run the app
    ```bash
    python3 app.py
