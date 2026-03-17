@@ -127,50 +127,6 @@ Select **Source code (zip)** under Assets.
 
 ---
 
-## Getting Started
-
-On first launch, a setup wizard checks whether required tools are installed and points out anything missing. You can skip this and configure everything later in **Settings**.
-
-### Directory Structure
-
-By default, SP Workshop creates:
-
-- `~/VideoProcessing/downloads/`  
-  Raw video files and transcribed subtitles
-
-- `~/VideoProcessing/subtitles/`  
-  Extracted, cleaned, and translated subtitle files
-
-- `~/VideoProcessing/output/`  
-  Final processed videos
-
-All paths can be changed in **Settings**.
-
-### Configuration:
-Click *Settings* to configure:
-
-- **Google Gemini API Key**: required for subtitle translation. Get one from [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey) and paste it into Settings.
-- **Watermark files** (optional): PNG files for 720p and 1080p output.
-  - **720p watermark:** it's *just* a transparent PNG at 1280×720, with your text or logo at about 20% opacity
-  - **1080p watermark:** transparent PNG at 1920×1080, same idea
-  - Watermarks can be toggled on or off in Settings
-- **Directory paths**: choose where downloads, subtitles, and output files are stored.
-
-## Workflows
-
-The whole point of this is to make WLW/sapphic/lesbian content accessible for everyone in the world. You know, extracting subtitles, translating them, processing videos with burned-in subtitles and watermarks. All that good stuff, but with way fewer clicks.
-
-SP Workshop supports three main workflows depending on your starting material.
-
-![Workflow Diagrams](media/flowcharts.png)
-
-*From left to right: Workflow 1 (External Video + Separate SRT), Workflow 2 (Batch Downloader), Workflow 3 (Whisper Transcription)*
-
-| Workflow | Best For |
-|--------|----------|
-| **[1] Remux** | Video files with separate subtitle tracks |
-| **[2] Batch Download** | Downloading full episodes or series |
-| **[3] Transcribe** | Creating subtitles when none exist |
 
 ## License
 
