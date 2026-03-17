@@ -1,15 +1,14 @@
+#!/usr/bin/env python3
 # ============================================================================
 # Version, imports, widgets
 # ============================================================================
-
-#!/usr/bin/env python3
 """
 Video Processing GUI Application
 A PyQt5 desktop app that provides a button-based interface for all video processing scripts.
 """
 
 
-__version__ = "10.4.0-alpha.5"
+__version__ = "10.4.0-alpha.6"
 VERSION_CODENAME = "Hallucination"
 
 import sys
@@ -41,7 +40,6 @@ if sys.version_info >= (3, 13):
     print("  brew install python@3.12")
     print("  python3.12 -m venv .venv && source .venv/bin/activate")
     sys.exit(1)
-
 
 def quote_path(path: str) -> str:
     """Quote a path for shell commands in a cross-platform way.
@@ -242,7 +240,8 @@ def load_config() -> Dict:
         "whisper_cpp_path": "",
         "whisper_cpp_model_dir": "",
         "whisper_cpp_model": "base",
-        "whisper_cpp_extra_args": ""
+        "whisper_cpp_extra_args": "",
+        "whisper_cpp_vad_model": ""
     }
     
     if config_path.exists():
@@ -1662,7 +1661,7 @@ def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_
             s = s.replace(":", "\\:")
             return s
         srt_path = escape_subtitle_path_for_filter(srt_file)
-        ffmpeg_exe = get_ffmpeg_command(config)
+        ffmpeg_exe = get_ffmpeg_command(config, require_libass=True)
         if use_watermarks:
             if resolution == "720":
                 filter_complex = (
@@ -1831,6 +1830,13 @@ def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_
                         log_callback(f"    FFmpeg errors:")
                         for err_line in error_lines[-10:]:  # Show last 10 error lines
                             log_callback(f"      {err_line}")
+                        # Detect missing subtitles filter (FFmpeg without libass)
+                        err_text = " ".join(error_lines).lower()
+                        if "no such filter" in err_text and "subtitles" in err_text:
+                            log_callback("")
+                            log_callback("    FFmpeg lacks the subtitles filter (needs libass).")
+                            log_callback("    Run: brew install ffmpeg-full")
+                            log_callback("    The app will use it automatically. Or set path in Settings > Tools.")
         
         except Exception as e:
             if log_callback:
@@ -2263,12 +2269,10 @@ def _get_whisper_cpp_binary(config: Dict) -> Optional[Path]:
         if p.is_file():
             return p.resolve()
         if p.is_dir():
-            exe = p / ("whisper-cli.exe" if os.name == "nt" else "whisper-cli")
-            if exe.exists():
-                return exe.resolve()
-            main_exe = p / ("main.exe" if os.name == "nt" else "main")
-            if main_exe.exists():
-                return main_exe.resolve()
+            for name in ("whisper-cli", "whisper-cpp", "main"):
+                exe = p / (name + (".exe" if os.name == "nt" else ""))
+                if exe.exists():
+                    return exe.resolve()
     def _is_whisper_cpp(bin_path: Path) -> bool:
         """Check if binary is whisper.cpp (not Python openai-whisper)."""
         try:
@@ -2449,26 +2453,64 @@ def transcribe_video_whisper_cpp(
 
         output_stem = str(video_dir / base_name)
 
-        # On macOS, Metal/GPU only works when ggml-metal.metal exists next to the binary.
-        # Do not auto-download: incompatible versions can cause ggml-common.h errors.
+        # On macOS: Homebrew/build-from-source often embeds Metal (GGML_METAL_EMBED_LIBRARY=ON),
+        # so ggml-metal.metal may not exist on disk. Try Metal first; fallback to -ng if init fails.
         metal_dir = None
         no_gpu_args = []
         if sys.platform == "darwin":
             binary_dir = Path(binary).parent
             metal_path = binary_dir / "ggml-metal.metal"
             if metal_path.exists():
-                metal_dir = str(binary_dir)
-            else:
-                if log_callback:
-                    log_callback("ggml-metal.metal not found next to whisper binary. Using CPU.")
-                    log_callback("For Metal GPU: build whisper.cpp from source with Metal, or use a distribution that includes ggml-metal.metal.")
-                no_gpu_args = ["-ng"]
+                metal_dir = str(binary_dir)  # External file: point GGML_METAL_PATH_RESOURCES at it
+            # Do NOT add -ng when file is missing: embedded Metal builds (Homebrew) work without it.
 
+        # VAD: whisper.cpp uses ggml-silero-v6.2.0.bin (ggml format) from ggml-org/whisper-vad.
+        # See https://huggingface.co/ggml-org/whisper-vad/discussions/1
+        VAD_MODEL_FILENAME = "ggml-silero-v6.2.0.bin"
         vad_args = []
+        vad_model_path = (config.get("whisper_cpp_vad_model") or "").strip()
+        if vad_model_path:
+            vad_model_path = str(Path(vad_model_path).expanduser())
+        if not vad_model_path or not Path(vad_model_path).exists():
+            home = Path.home()
+            vad_cache = home / ".cache" / "whisper.cpp"
+            for candidate in (
+                vad_cache / VAD_MODEL_FILENAME,
+                vad_cache / "models" / VAD_MODEL_FILENAME,
+                Path(binary).parent / VAD_MODEL_FILENAME,
+                vad_cache / "silero_vad.onnx",  # legacy
+            ):
+                if candidate.exists():
+                    vad_model_path = str(candidate)
+                    break
+            else:
+                # Auto-download VAD model from ggml-org/whisper-vad
+                vad_model_path = vad_cache / VAD_MODEL_FILENAME
+                vad_model_path.parent.mkdir(parents=True, exist_ok=True)
+                if not vad_model_path.exists():
+                    if log_callback:
+                        log_callback(f"Downloading VAD model {VAD_MODEL_FILENAME} (~1 MB)...")
+                    try:
+                        urlretrieve(
+                            "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin",
+                            vad_model_path,
+                        )
+                        vad_model_path = str(vad_model_path)
+                        if log_callback:
+                            log_callback("VAD model downloaded.")
+                    except Exception as e:
+                        if log_callback:
+                            log_callback(f"VAD model download failed: {e}. Running without VAD.")
+                        vad_model_path = None
+                else:
+                    vad_model_path = str(vad_model_path)
+        else:
+            vad_model_path = str(vad_model_path) if Path(vad_model_path).exists() else None
         try:
             r = subprocess.run([str(binary), "-h"], capture_output=True, text=True, timeout=5)
-            if "--vad" in ((r.stdout or "") + (r.stderr or "")):
-                vad_args = ["--vad"]  # Pip whisper.cpp-cli doesn't support --vad; original does
+            help_out = (r.stdout or "") + (r.stderr or "")
+            if vad_model_path and "--vad" in help_out and "--vad-model" in help_out:
+                vad_args = ["--vad", "-vm", vad_model_path]
         except Exception:
             pass
         subtitle_edit_args = ["-sow", "-bo", "3", "-bs", "2", "-nf"]
@@ -2549,11 +2591,6 @@ def transcribe_video_whisper_cpp(
                 returncode, _ = _run_whisper_streaming(cmd_fallback, cwd, extra_env)
 
         final_srt = video_dir / f"{base_name}.srt"
-        if final_srt.exists():
-            n = 1
-            while (video_dir / f"{base_name}_{n}.srt").exists():
-                n += 1
-            final_srt = video_dir / f"{base_name}_{n}.srt"
 
         whisper_srt = Path(output_stem + ".srt")
         if whisper_srt.exists():
@@ -2679,11 +2716,6 @@ def transcribe_video(video_path: Path, language_code: str, model: str, whisper_o
 
         whisper_srt = video_dir / f"{audio_stem}.srt"
         final_srt = video_dir / f"{base_name}.srt"
-        if final_srt.exists():
-            n = 1
-            while (video_dir / f"{base_name}_{n}.srt").exists():
-                n += 1
-            final_srt = video_dir / f"{base_name}_{n}.srt"
 
         if whisper_srt.exists():
             shutil.move(str(whisper_srt), str(final_srt))
@@ -3269,6 +3301,97 @@ class BinaryInstallWorker(QThread):
                 self.log_message.emit(f"Could not add to PATH: {e}")
 
 
+class WhisperCppInstallWorker(QThread):  # pyright: ignore [reportUnreachable]
+    """Worker thread for installing Whisper CPP. On macOS with Homebrew, installs Metal-enabled build; otherwise pip."""
+    finished = pyqtSignal(bool)
+    log_message = pyqtSignal(str)
+
+    def run(self):
+        try:
+            if sys.platform == "darwin" and shutil.which("brew"):
+                ok = self._install_whisper_cpp_macos_metal()
+                if not ok:
+                    self.log_message.emit("Metal install failed. Falling back to pip (CPU-only)...")
+                    ok = self._install_whisper_cpp_pip()
+            elif sys.platform == "darwin":
+                self.log_message.emit("Homebrew not found. Installing CPU-only version. For Metal, install from brew.sh and retry.")
+                ok = self._install_whisper_cpp_pip()
+            else:
+                ok = self._install_whisper_cpp_pip()
+            self.finished.emit(ok)
+        except Exception as e:
+            self.log_message.emit(f"Error: {e}")
+            self.log_message.emit(traceback.format_exc())
+            self.finished.emit(False)
+
+    def _install_whisper_cpp_macos_metal(self) -> bool:
+        brew = shutil.which("brew")
+        if not brew:
+            return False
+        self.log_message.emit("Running: brew install whisper-cpp")
+        result = subprocess.run(
+            [brew, "install", "whisper-cpp"],
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+        if result.returncode != 0:
+            err = (result.stderr or result.stdout or "").strip()
+            self.log_message.emit(f"brew install failed: {err}")
+            return False
+        prefix_result = subprocess.run(
+            [brew, "--prefix", "whisper-cpp"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if prefix_result.returncode != 0 or not prefix_result.stdout:
+            self.log_message.emit("Could not get whisper-cpp install path")
+            return False
+        prefix = prefix_result.stdout.strip()
+        bin_dir = Path(prefix) / "bin"
+        # Homebrew installs whisper-cli (not whisper-cpp); build-from-source may use main
+        exe = None
+        for name in ("whisper-cli", "whisper-cpp", "main"):
+            candidate = bin_dir / name
+            if candidate.exists():
+                exe = candidate
+                break
+        if not exe:
+            self.log_message.emit(f"whisper binary not found in {bin_dir} (expected whisper-cli, whisper-cpp, or main)")
+            return False
+        # Homebrew builds with GGML_METAL_EMBED_LIBRARY=ON: Metal is embedded, no ggml-metal.metal file needed.
+        # Do NOT download ggml-metal.metal: version mismatch with binary can cause ggml-common.h errors.
+        config = load_config()
+        config["whisper_cpp_path"] = str(bin_dir.resolve())
+        save_config(config)
+        self.log_message.emit("✓ Whisper CPP (Metal) installed")
+        return True
+
+    def _install_whisper_cpp_pip(self) -> bool:
+        self.log_message.emit("Installing: whisper.cpp-cli")
+        try:
+            result = subprocess.run(
+                [sys.executable, "-m", "pip", "install", "whisper.cpp-cli"],
+                capture_output=True,
+                text=True,
+                timeout=600,
+            )
+            if result.returncode != 0:
+                err = (result.stderr or result.stdout or "").strip()
+                self.log_message.emit(f"pip install failed: {err}")
+                self.log_message.emit("Try manually: python -m pip install whisper.cpp-cli")
+                return False
+            self.log_message.emit("✓ Whisper CPP (CPU) installed")
+            return True
+        except subprocess.TimeoutExpired:
+            self.log_message.emit("Installation timed out")
+            return False
+        except Exception as e:
+            self.log_message.emit(f"Error: {e}")
+            return False
+
+
 # ============================================================================
 # Tool detection and installation
 # ============================================================================
@@ -3300,10 +3423,16 @@ def _get_tools_dir() -> Path:
     return Path.home() / "VideoProcessing" / "tools"
 
 
-def get_ffmpeg_command(config: Optional[Dict] = None) -> str:
-    """Return the ffmpeg executable path. Config path overrides; else check PATH."""
+def get_ffmpeg_command(config: Optional[Dict] = None, require_libass: bool = False) -> str:
+    """Return the ffmpeg executable path. When require_libass=True (subtitle burning), forces ffmpeg-full on macOS."""
     if config is None:
         config = load_config()
+    # For subtitle burning, always prefer ffmpeg-full on macOS (overrides user config)
+    if require_libass and sys.platform == "darwin":
+        for prefix in (Path("/opt/homebrew/opt/ffmpeg-full"), Path("/usr/local/opt/ffmpeg-full")):
+            exe = prefix / "bin" / "ffmpeg"
+            if exe.exists():
+                return str(exe.resolve())
     user_path = (config.get("ffmpeg_path") or "").strip()
     if user_path:
         p = Path(user_path).expanduser()
@@ -3318,6 +3447,12 @@ def get_ffmpeg_command(config: Optional[Dict] = None) -> str:
         exe = tools_bin / "ffmpeg.exe"
         if exe.exists():
             return str(exe.resolve())
+    # Prefer ffmpeg-full on macOS when not require_libass (has libass for subtitles filter)
+    if sys.platform == "darwin":
+        for prefix in (Path("/opt/homebrew/opt/ffmpeg-full"), Path("/usr/local/opt/ffmpeg-full")):
+            exe = prefix / "bin" / "ffmpeg"
+            if exe.exists():
+                return str(exe.resolve())
     return shutil.which("ffmpeg") or "ffmpeg"
 
 
@@ -3847,9 +3982,49 @@ class SetupWizard(QDialog):
             self.install_buttons_layout.addWidget(btn)
         if not self.whisper_cpp_installed:
             btn = QPushButton("Install Whisper CPP")
-            btn.clicked.connect(lambda: self._do_pip_install(["whisper.cpp-cli"]))
+            btn.clicked.connect(self._do_whisper_cpp_install)
             self.install_buttons_layout.addWidget(btn)
     
+    def _do_whisper_cpp_install(self, on_success_after_install=None):
+        """Install Whisper CPP. On macOS with Homebrew: Metal-enabled; otherwise pip (CPU)."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Installing Whisper CPP...")
+        dlg.setMinimumWidth(400)
+        dlg.setWindowModality(Qt.ApplicationModal)
+        layout = QVBoxLayout()
+        progress_bar = QProgressBar()
+        progress_bar.setRange(0, 0)
+        layout.addWidget(progress_bar)
+        log = QTextEdit()
+        log.setReadOnly(True)
+        layout.addWidget(log)
+        close_btn = QPushButton("Close")
+        close_btn.setEnabled(False)
+        layout.addWidget(close_btn)
+        dlg.setLayout(layout)
+        worker = WhisperCppInstallWorker(parent=dlg)
+        worker.log_message.connect(lambda m: log.append(m))
+        def on_finished(ok):
+            worker.wait()
+            if ok:
+                log.append("\nInstalled successfully")
+                progress_bar.setVisible(False)
+                close_btn.setEnabled(True)
+                close_btn.setText("Installed successfully")
+                def auto_close():
+                    self._refresh_status_after_install()
+                    if on_success_after_install:
+                        on_success_after_install()
+                    dlg.accept()
+                QTimer.singleShot(1500, auto_close)
+            else:
+                log.append("\nInstallation failed. Click Close, then run: python -m pip install whisper.cpp-cli")
+                close_btn.setEnabled(True)
+        close_btn.clicked.connect(dlg.accept)
+        worker.finished.connect(on_finished)
+        worker.start()
+        dlg.exec_()
+
     def _do_pip_install(self, packages: List[str]):
         """Run pip install in a worker and show progress."""
         if "torch" in packages:
@@ -3877,9 +4052,10 @@ class SetupWizard(QDialog):
         close_btn.setEnabled(False)
         layout.addWidget(close_btn)
         dlg.setLayout(layout)
-        worker = PipInstallWorker(packages)
+        worker = PipInstallWorker(packages, parent=dlg)
         worker.log_message.connect(lambda m: log.append(m))
         def on_finished(ok):
+            worker.wait()
             if ok:
                 log.append("\nInstalled successfully")
                 progress_bar.setVisible(False)
@@ -3928,9 +4104,10 @@ class SetupWizard(QDialog):
             install_btn.setEnabled(False)
             close_btn.setEnabled(False)
             progress_bar.setVisible(True)
-            worker = BinaryInstallWorker(tool, add_to_path=add_to_path_cb.isChecked())
+            worker = BinaryInstallWorker(tool, add_to_path=add_to_path_cb.isChecked(), parent=dlg)
             worker.log_message.connect(lambda m: log.append(m))
             def on_finished(ok):
+                worker.wait()  # Ensure thread has fully exited before any cleanup (prevents QThread crash)
                 if ok:
                     log.append("\nInstalled successfully")
                     progress_bar.setVisible(False)
@@ -4701,15 +4878,15 @@ class SettingsDialog(QDialog):
         ffmpeg_group.setStyleSheet("QGroupBox { font-weight: bold; }")
         ffmpeg_form = QFormLayout()
         ffmpeg_help = QLabel(
-            "Leave empty to use system default. Set a path to use a specific version "
-            "if FFmpeg 7.x gives filter errors with burn-in subtitles."
+            "Leave empty to auto-detect (on macOS, prefers ffmpeg-full for libass/subtitles). "
+            "For burn-in subtitles, FFmpeg must include libass (brew install ffmpeg-full)."
         )
         ffmpeg_help.setWordWrap(True)
         ffmpeg_help.setStyleSheet("color: #666; font-size: 10px;")
         ffmpeg_form.addRow("", ffmpeg_help)
         self.ffmpeg_path_input = QLineEdit()
         self.ffmpeg_path_input.setText(self.config.get("ffmpeg_path", ""))
-        self.ffmpeg_path_input.setPlaceholderText("e.g. /opt/homebrew/bin/ffmpeg")
+        self.ffmpeg_path_input.setPlaceholderText("Leave empty to auto-detect ffmpeg-full on macOS")
         ffmpeg_form.addRow("FFmpeg path (optional):", self.ffmpeg_path_input)
         ffmpeg_group.setLayout(ffmpeg_form)
         tools_layout.addWidget(ffmpeg_group)
@@ -4729,6 +4906,23 @@ class SettingsDialog(QDialog):
         nm3u8_form.addRow("N_m3u8DL-RE path (optional):", self.n_m3u8dl_path_input)
         nm3u8_group.setLayout(nm3u8_form)
         tools_layout.addWidget(nm3u8_group)
+
+        whisper_cpp_group = QGroupBox("Whisper CPP")
+        whisper_cpp_group.setStyleSheet("QGroupBox { font-weight: bold; }")
+        whisper_cpp_form = QFormLayout()
+        whisper_cpp_help = QLabel(
+            "For Metal GPU on macOS: use Homebrew (brew install whisper-cpp) – Metal is embedded. "
+            "Or set path to a build from source with Metal. Leave empty to use pip whisper.cpp-cli (CPU)."
+        )
+        whisper_cpp_help.setWordWrap(True)
+        whisper_cpp_help.setStyleSheet("color: #666; font-size: 10px;")
+        whisper_cpp_form.addRow("", whisper_cpp_help)
+        self.whisper_cpp_path_input = QLineEdit()
+        self.whisper_cpp_path_input.setText(self.config.get("whisper_cpp_path", ""))
+        self.whisper_cpp_path_input.setPlaceholderText("e.g. /opt/homebrew/opt/whisper-cpp/bin")
+        whisper_cpp_form.addRow("Whisper CPP path (optional):", self.whisper_cpp_path_input)
+        whisper_cpp_group.setLayout(whisper_cpp_form)
+        tools_layout.addWidget(whisper_cpp_group)
         tabs.addTab(tools_tab, "Tools")
         
         # --- Processing tab ---
@@ -4892,6 +5086,7 @@ class SettingsDialog(QDialog):
         self.config["api_keys"] = api_keys
         self.config["ffmpeg_path"] = self.ffmpeg_path_input.text().strip()
         self.config["n_m3u8dl_path"] = self.n_m3u8dl_path_input.text().strip()
+        self.config["whisper_cpp_path"] = self.whisper_cpp_path_input.text().strip()
         self.config["watermark_720p"] = self.watermark_720p_input.text()
         self.config["watermark_1080p"] = self.watermark_1080p_input.text()
         self.config["use_watermarks"] = self.use_watermarks_checkbox.isChecked()
@@ -5599,10 +5794,12 @@ class VideoProcessingApp(QMainWindow):
                 layout.addWidget(close_btn)
                 dlg.setLayout(layout)
                 worker = PipInstallWorker(
-                    ["torch", "torchaudio", "torchcodec", "pysrt", "openai-whisper"]
+                    ["torch", "torchaudio", "torchcodec", "pysrt", "openai-whisper"],
+                    parent=dlg,
                 )
                 worker.log_message.connect(lambda m: log.append(m))
                 def on_finished(ok):
+                    worker.wait()
                     if ok:
                         dlg.accept()
                         self.transcribe_long_from_tab()  # Retry
@@ -5645,6 +5842,45 @@ class VideoProcessingApp(QMainWindow):
         self.worker.finished.connect(self.on_transcribe_finished)
         self.worker.start()
 
+    def _do_whisper_cpp_install(self, on_success_after_install=None):
+        """Install Whisper CPP. On macOS with Homebrew: Metal-enabled; otherwise pip (CPU)."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Installing Whisper CPP...")
+        dlg.setMinimumWidth(400)
+        dlg.setWindowModality(Qt.ApplicationModal)
+        layout = QVBoxLayout()
+        progress_bar = QProgressBar()
+        progress_bar.setRange(0, 0)
+        layout.addWidget(progress_bar)
+        log = QTextEdit()
+        log.setReadOnly(True)
+        layout.addWidget(log)
+        close_btn = QPushButton("Close")
+        close_btn.setEnabled(False)
+        layout.addWidget(close_btn)
+        dlg.setLayout(layout)
+        worker = WhisperCppInstallWorker(parent=dlg)
+        worker.log_message.connect(lambda m: log.append(m))
+        def on_finished(ok):
+            worker.wait()
+            if ok:
+                log.append("\nInstalled successfully")
+                progress_bar.setVisible(False)
+                close_btn.setEnabled(True)
+                close_btn.setText("Installed successfully")
+                def auto_close():
+                    if on_success_after_install:
+                        on_success_after_install()
+                    dlg.accept()
+                QTimer.singleShot(1500, auto_close)
+            else:
+                log.append("\nInstallation failed. Click Close, then run: python -m pip install whisper.cpp-cli")
+                close_btn.setEnabled(True)
+        close_btn.clicked.connect(dlg.accept)
+        worker.finished.connect(on_finished)
+        worker.start()
+        dlg.exec_()
+
     def transcribe_whisper_cpp_from_tab(self):
         """Transcribe using Whisper CPP. Faster, built-in VAD."""
         file_path = self.transcribe_file_input.text()
@@ -5671,30 +5907,7 @@ class VideoProcessingApp(QMainWindow):
                 QMessageBox.Yes,
             )
             if reply == QMessageBox.Yes:
-                dlg = QDialog(self)
-                dlg.setWindowTitle("Installing Whisper CPP...")
-                dlg.setMinimumWidth(400)
-                layout = QVBoxLayout()
-                log = QTextEdit()
-                log.setReadOnly(True)
-                layout.addWidget(log)
-                close_btn = QPushButton("Close")
-                close_btn.setEnabled(False)
-                layout.addWidget(close_btn)
-                dlg.setLayout(layout)
-                worker = PipInstallWorker(["whisper.cpp-cli"])
-                worker.log_message.connect(lambda m: log.append(m))
-                def on_finished(ok):
-                    if ok:
-                        dlg.accept()
-                        self.transcribe_whisper_cpp_from_tab()  # Retry
-                    else:
-                        log.append("\nInstallation failed. Click Close, then run in terminal:\n  python -m pip install whisper.cpp-cli")
-                        close_btn.setEnabled(True)
-                close_btn.clicked.connect(dlg.accept)
-                worker.finished.connect(on_finished)
-                worker.start()
-                dlg.exec_()
+                self._do_whisper_cpp_install(on_success_after_install=self.transcribe_whisper_cpp_from_tab)
                 return
             QMessageBox.warning(
                 self,
@@ -7141,9 +7354,10 @@ class VideoProcessingApp(QMainWindow):
                 close_btn.setEnabled(False)
                 layout.addWidget(close_btn)
                 dlg.setLayout(layout)
-                worker = PipInstallWorker(["gemini-srt-translator"])
+                worker = PipInstallWorker(["gemini-srt-translator"], parent=dlg)
                 worker.log_message.connect(lambda m: log.append(m))
                 def on_finished(ok):
+                    worker.wait()
                     if ok:
                         dlg.accept()
                     else:

@@ -1,9 +1,4 @@
 # SP Workshop
-<<<<<<< Updated upstream
-=======
-
-![Developer Banner 13](https://ishan-rest.vercel.app/svg/banner/dev13/slappepolsen)
->>>>>>> Stashed changes
 
 [![Release](https://img.shields.io/github/v/release/slappepolsen/sp-workshop)](../../releases)
 [![License](https://img.shields.io/github/license/slappepolsen/sp-workshop)](LICENSE)
@@ -66,10 +61,11 @@ Select **Source code (zip)** under Assets.
    pip install -r requirements.txt
    ```
 
-5. Install FFmpeg (required)
+5. Install FFmpeg (required; use ffmpeg-full for burn-in subtitles)
    ```bash
-   brew install ffmpeg
+   brew install ffmpeg-full
    ```
+   If using ffmpeg-full, set path in Settings > Tools to `/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg` (keg-only).
 6. Install N_m3u8DL-RE (optional, for downloads)
    - Download from https://github.com/nilaoda/N_m3u8DL-RE/releases
    - Add the executable to your PATH
