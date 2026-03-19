@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [10.4.0-alpha.7] - 2026-03-19
+
+### Added
+- Download tab with batch download section (mode, name, commands, quality selector, Clear, Open in LosslessCut, Open Downloads folder).
+- Download tab LOG OUTPUT section (synced with Subtitles tab log).
+- Subtitles tab description block at top with headers for Extract, Clean, Translate, Burn subtitles and file-location details.
+- Transcription tab description block with legacy disclaimer (Transcribe / Transcribe longer video marked legacy; Transcribe Whisper CPP marked actively maintained).
+
+### Changed
+- Tab order set to Download, Subtitles, Transcription, Remux. "Remuxing" tab renamed to "Remux".
+- Log output standardized across all four tabs (QGroupBox, Monaco 9pt, 180px min height, shared styling).
+- Remux tab log changed from single-line QLineEdit to multi-line QTextEdit with `_remux_log()` append and scroll.
+
+
 ## [10.4.0-alpha.6] - 2026-03-17
 
 ### Fixed
