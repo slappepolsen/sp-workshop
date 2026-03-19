@@ -23,6 +23,7 @@ import subprocess
 import shutil
 import threading
 import time
+import inspect
 import traceback
 import platform
 import tarfile
@@ -3042,11 +3043,18 @@ class ScriptWorker(QThread):
         
         self.kwargs["log_callback"] = log_callback
         self.kwargs["progress_callback"] = progress_callback
-        # Only add check_stop for batch wrappers that support it
-        if self.script_func is run_batch_transcribe:
-            self.kwargs["check_stop"] = lambda: self._stop_requested
+        self.kwargs["check_stop"] = lambda: self._stop_requested
+        # Filter kwargs to only what script_func accepts (avoids passing check_stop to functions that don't support it)
+        sig = inspect.signature(self.script_func)
+        params = sig.parameters
+        accepts_var_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+        if accepts_var_kwargs:
+            call_kwargs = dict(self.kwargs)
+        else:
+            param_names = set(params.keys())
+            call_kwargs = {k: v for k, v in self.kwargs.items() if k in param_names}
         try:
-            result = self.script_func(*self.args, **self.kwargs)
+            result = self.script_func(*self.args, **call_kwargs)
             if self._stop_requested:
                 self.log_message.emit("✗ Operation cancelled by user")
                 self.finished.emit(False)
