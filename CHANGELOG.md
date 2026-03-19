@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [10.4.0-alpha.6] - 2026-03-17
 
 ### Fixed
-- Whisper CPP: fix VAD failure when no model path. Use ggml-silero-v6.2.0.bin from [ggml-org/whisper-vad](https://huggingface.co/ggml-org/whisper-vad/discussions/1); auto-download when missing. Only enable `--vad` when model exists.
+- Whisper CPP: fix VAD failure when no model path. Use ggml-silero-v6.2.0.bin, auto-download when missing. Only enable `--vad` when model exists.
 - QThread crash when Install dialogs close: BinaryInstallWorker and PipInstallWorker now use worker.wait() and parent=dlg so threads exit before cleanup (prevents "Destroyed while thread is still running")
 - FFmpeg "No such filter: subtitles": detect error and show actionable message (brew install ffmpeg-full, set path in Settings). README and requirements now recommend ffmpeg-full for macOS (standard formula lacks libass).
 
