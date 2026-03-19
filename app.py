@@ -8,7 +8,7 @@ A PyQt5 desktop app that provides a button-based interface for all video process
 """
 
 
-__version__ = "10.4.0-alpha.6"
+__version__ = "10.4.0-alpha.7"
 VERSION_CODENAME = "Hallucination"
 
 import sys
@@ -5434,15 +5434,20 @@ class VideoProcessingApp(QMainWindow):
         layout = QVBoxLayout()
         layout.setSpacing(15)
         
-        # Header
-        header_label = QLabel("Transcribe Audio/Video to Subtitles")
-        header_label.setFont(QFont("Arial", 14, QFont.Bold))
-        layout.addWidget(header_label)
-        
-        # Description
-        desc_label = QLabel("Use local Whisper model to generate subtitles from audio/video")
-        desc_label.setStyleSheet("color: #666;")
-        layout.addWidget(desc_label)
+        # Transcription tab description
+        transcribe_desc = QLabel(
+            "<p style='margin: 0 0 12px 0; font-style: italic; color: #666;'>Note: \"Transcribe\" and \"Transcribe longer video\" are legacy and no longer updated or fixed. \"Transcribe (Whisper CPP)\" is the actively maintained option and will be continuously improved.</p>"
+            "<h3 style='margin: 0 0 4px 0; font-size: 13px;'>Transcribe</h3>"
+            "<p style='margin: 0 0 12px 0;'>Select video or audio file(s). For short clips. Outputs subtitle file(s) (SRT, VTT, TXT, etc.) in the same directory as each input file. <em style='color: #888;'>(Legacy)</em></p>"
+            "<h3 style='margin: 0 0 4px 0; font-size: 13px;'>Transcribe longer video</h3>"
+            "<p style='margin: 0 0 12px 0;'>For files over ~5 minutes. Splits audio into short segments via voice detection (VAD), then transcribes each with Whisper. Reduces hallucination from long silences compared to \"Transcribe\". <em style='color: #888;'>(Legacy)</em></p>"
+            "<h3 style='margin: 0 0 4px 0; font-size: 13px;'>Transcribe (Whisper CPP)</h3>"
+            "<p style='margin: 0;'>Uses whisper.cpp. Faster, built-in VAD. Requires whisper.cpp installed. Models auto-download on first use. <em style='color: #555;'>Actively maintained and continuously improved.</em></p>"
+        )
+        transcribe_desc.setWordWrap(True)
+        transcribe_desc.setTextFormat(Qt.RichText)
+        transcribe_desc.setStyleSheet("color: #555; font-size: 11px; padding: 8px 0;")
+        layout.addWidget(transcribe_desc)
         
         # File selection
         file_group = QGroupBox("File Selection")
@@ -5616,24 +5621,18 @@ class VideoProcessingApp(QMainWindow):
         transcribe_hint.setWordWrap(True)
         layout.addWidget(transcribe_hint)
         
-        # Processing logs
-        logs_label = QLabel("Processing Logs:")
-        logs_label.setFont(QFont("Arial", 10, QFont.Bold))
-        layout.addWidget(logs_label)
-        
+        # Log output
+        transcribe_log_group = QGroupBox("LOG OUTPUT")
+        transcribe_log_group.setStyleSheet("QGroupBox { font-weight: bold; }")
+        transcribe_log_layout = QVBoxLayout()
         self.transcribe_log_output = QTextEdit()
         self.transcribe_log_output.setReadOnly(True)
-        self.transcribe_log_output.setMinimumHeight(200)
-        self.transcribe_log_output.setStyleSheet("""
-            QTextEdit {
-                background-color: #f5f5f5;
-                border: 1px solid #ddd;
-                border-radius: 3px;
-                font-family: 'Courier New', 'Menlo',monospace;
-                font-size: 11px;
-            }
-        """)
-        layout.addWidget(self.transcribe_log_output)
+        self.transcribe_log_output.setFont(QFont("Monaco", 9))
+        self.transcribe_log_output.setMinimumHeight(180)
+        self.transcribe_log_output.setStyleSheet("QTextEdit { background-color: #f5f5f5; border: 1px solid #ddd; border-radius: 3px; }")
+        transcribe_log_layout.addWidget(self.transcribe_log_output)
+        transcribe_log_group.setLayout(transcribe_log_layout)
+        layout.addWidget(transcribe_log_group)
         
         # Progress bar for transcription
         progress_layout = QHBoxLayout()
@@ -5801,6 +5800,9 @@ class VideoProcessingApp(QMainWindow):
         from datetime import datetime
         timestamp = datetime.now().strftime("[%H:%M:%S]")
         self.transcribe_log_output.append(f"{timestamp} {message}")
+        self.transcribe_log_output.verticalScrollBar().setValue(
+            self.transcribe_log_output.verticalScrollBar().maximum()
+        )
         # Also log to main log
         self.log(message)
     
@@ -6116,24 +6118,27 @@ class VideoProcessingApp(QMainWindow):
         actions_row.addStretch()
         layout.addLayout(actions_row)
         
-        # Status
-        self.remux_log_output = QLineEdit()
+        # Log output
+        remux_log_group = QGroupBox("LOG OUTPUT")
+        remux_log_group.setStyleSheet("QGroupBox { font-weight: bold; }")
+        remux_log_layout = QVBoxLayout()
+        self.remux_log_output = QTextEdit()
         self.remux_log_output.setReadOnly(True)
-        self.remux_log_output.setPlaceholderText("Remuxing operations will show status here (success and errors)")
-        self.remux_log_output.setStyleSheet("""
-            QLineEdit {
-                background-color: #f5f5f5;
-                border: 1px solid #ddd;
-                border-radius: 3px;
-                padding: 5px;
-                font-size: 11px;
-            }
-        """)
-        layout.addWidget(self.remux_log_output)
-        
-        layout.addStretch()
+        self.remux_log_output.setFont(QFont("Monaco", 9))
+        self.remux_log_output.setMinimumHeight(180)
+        self.remux_log_output.setStyleSheet("QTextEdit { background-color: #f5f5f5; border: 1px solid #ddd; border-radius: 3px; }")
+        remux_log_layout.addWidget(self.remux_log_output)
+        remux_log_group.setLayout(remux_log_layout)
+        layout.addWidget(remux_log_group)
         tab.setLayout(layout)
         return tab
+    
+    def _remux_log(self, message: str):
+        """Append message to remux log and scroll to bottom."""
+        self.remux_log_output.append(message)
+        self.remux_log_output.verticalScrollBar().setValue(
+            self.remux_log_output.verticalScrollBar().maximum()
+        )
     
     def add_remux_files(self):
         """Add video files to the remux selection and analyze tracks."""
@@ -6192,9 +6197,9 @@ class VideoProcessingApp(QMainWindow):
             if self._attach_matching_subtitle_for_file(video_path):
                 matched += 1
         if matched > 0:
-            self.remux_log_output.setText(f"Auto-matched {matched} subtitle(s) (same name as video).")
+            self._remux_log(f"Auto-matched {matched} subtitle(s) (same name as video).")
         else:
-            self.remux_log_output.setText("No matching subtitle files found (look for .srt/.vtt with same name in video folder or Subtitles folder).")
+            self._remux_log("No matching subtitle files found (look for .srt/.vtt with same name in video folder or Subtitles folder).")
     
     def add_file_to_tree(self, video_path: Path):
         """Add a file to the tree widget with its tracks."""
@@ -6389,7 +6394,7 @@ class VideoProcessingApp(QMainWindow):
     def remux_single_file(self, video_path: Path):
         """Remux a single file with its configured tracks and options."""
         if video_path not in self.remux_file_configs:
-            self.remux_log_output.setText(f"Error: Configuration not found for {video_path.name}")
+            self._remux_log(f"Error: Configuration not found for {video_path.name}")
             return
         
         config = self.remux_file_configs[video_path]
@@ -6405,7 +6410,7 @@ class VideoProcessingApp(QMainWindow):
                 break
         
         if not file_item:
-            self.remux_log_output.setText(f"Error: File not found in tree")
+            self._remux_log(f"Error: File not found in tree")
             return
         
         # Collect selected tracks
@@ -6429,7 +6434,7 @@ class VideoProcessingApp(QMainWindow):
                         selected_subtitles.append(track_id)
         
         # Remux the file
-        self.remux_log_output.setText(f"Remuxing {video_path.name}...")
+        self._remux_log(f"Remuxing {video_path.name}...")
         sub_lang = config.get('subtitle_language', 'eng')
         sub_default = config.get('subtitle_default', True)
         success = self.remux_file_with_tracks(
@@ -6441,11 +6446,13 @@ class VideoProcessingApp(QMainWindow):
         if success:
             base = video_path.stem
             out_path = video_path.parent / f"{base}_remuxed.{output_format}"
-            self.remux_log_output.setText(f"✓ Saved: {out_path}")
+            self._remux_log(f"✓ Saved: {out_path}")
         else:
             # Preserve FFmpeg error if already set
-            if not self.remux_log_output.text().startswith("Error:"):
-                self.remux_log_output.setText(f"✗ Failed to remux {video_path.name}")
+            lines = self.remux_log_output.toPlainText().strip().split("\n")
+            last_line = lines[-1] if lines else ""
+            if not last_line.startswith("Error:"):
+                self._remux_log(f"✗ Failed to remux {video_path.name}")
     
     def remux_file_with_tracks(self, video_path: Path, output_format: str,
                                video_tracks: List[int], audio_tracks: List[int],
@@ -6544,10 +6551,10 @@ class VideoProcessingApp(QMainWindow):
             if result.returncode != 0:
                 # Log error to minimal log
                 error_msg = result.stderr.split('\n')[-5:] if result.stderr else ["Unknown error"]
-                self.remux_log_output.setText(f"Error: {'; '.join(error_msg)}")
+                self._remux_log(f"Error: {'; '.join(error_msg)}")
             return result.returncode == 0 and output_file.exists()
         except Exception as e:
-            self.remux_log_output.setText(f"Error: {str(e)}")
+            self._remux_log(f"Error: {str(e)}")
             return False
     
     def remux_selected_files_action(self):
@@ -6573,18 +6580,20 @@ class VideoProcessingApp(QMainWindow):
                     files_to_remux.append(Path(file_path_str))
         
         if not files_to_remux:
-            self.remux_log_output.setText("Error: No files selected")
+            self._remux_log("Error: No files selected")
             return
         
         # Remux each file
         success_count = 0
         for video_path in files_to_remux:
             self.remux_single_file(video_path)
-            if self.remux_log_output.text().startswith("✓"):
+            lines = self.remux_log_output.toPlainText().strip().split("\n")
+            last_line = lines[-1] if lines else ""
+            if last_line.startswith("✓"):
                 success_count += 1
         
         if success_count > 0:
-            self.remux_log_output.setText(f"✓ Remuxed {success_count}/{len(files_to_remux)} files")
+            self._remux_log(f"✓ Remuxed {success_count}/{len(files_to_remux)} files")
     
     def show_track_context_menu(self, position):
         """Show context menu for track items."""
@@ -6772,17 +6781,17 @@ class VideoProcessingApp(QMainWindow):
         # Analyze first file to get channel count
         first_file = self.remux_selected_files[0]
         if not first_file.exists():
-            self.remux_log_output.setText(f"Error: File not found: {first_file.name}")
+            self._remux_log(f"Error: File not found: {first_file.name}")
             return
         
         tracks = analyze_tracks(first_file)
         if not tracks['audio']:
-            self.remux_log_output.setText("Error: No audio tracks found in video files.")
+            self._remux_log("Error: No audio tracks found in video files.")
             return
         
         channel_count = tracks['audio'][0].get('channels', 0)
         if channel_count == 0:
-            self.remux_log_output.setText("Error: Could not determine audio channel count.")
+            self._remux_log("Error: Could not determine audio channel count.")
             return
         
         # Create minimal log callback
@@ -6796,11 +6805,11 @@ class VideoProcessingApp(QMainWindow):
             elif "Error:" in msg or "✗" in msg:
                 errors.append(msg)
                 if len(errors) == 1:
-                    self.remux_log_output.setText(msg)
+                    self._remux_log(msg)
                 else:
-                    self.remux_log_output.setText(f"{len(errors)} error(s) occurred")
+                    self._remux_log(f"{len(errors)} error(s) occurred")
         
-        self.remux_log_output.setText(f"Splitting audio channels ({channel_count} channels)...")
+        self._remux_log(f"Splitting audio channels ({channel_count} channels)...")
         
         # Process files directly (output to same directory as each file)
         for video_file in self.remux_selected_files:
@@ -6809,9 +6818,9 @@ class VideoProcessingApp(QMainWindow):
                 split_audio_channels(video_file, output_dir, channel_count, split_log_callback)
         
         if errors:
-            self.remux_log_output.setText(f"Error: {len(errors)} file(s) failed")
+            self._remux_log(f"Error: {len(errors)} file(s) failed")
         else:
-            self.remux_log_output.setText(f"✓ Split {channel_count} channels for {len(self.remux_selected_files)} file(s)")
+            self._remux_log(f"✓ Split {channel_count} channels for {len(self.remux_selected_files)} file(s)")
     
     def init_ui(self):
         """Initialize the UI."""
@@ -6875,12 +6884,11 @@ class VideoProcessingApp(QMainWindow):
         # Main tabs
         self.main_tabs = QTabWidget()
         
-        # Main tab
-        main_tab = QWidget()
-        layout = QVBoxLayout()
-        main_tab.setLayout(layout)
+        # Download tab
+        download_tab = QWidget()
+        download_tab_layout = QVBoxLayout()
+        download_tab.setLayout(download_tab_layout)
         
-        # Download section
         download_group = QGroupBox("DOWNLOAD")
         download_group.setStyleSheet("QGroupBox { font-weight: bold; }")
         download_layout = QVBoxLayout()
@@ -6985,7 +6993,43 @@ class VideoProcessingApp(QMainWindow):
         download_buttons.addWidget(open_downloads_btn)
         download_layout.addLayout(download_buttons)
         download_group.setLayout(download_layout)
-        layout.addWidget(download_group)
+        download_tab_layout.addWidget(download_group)
+        
+        # Download tab log output
+        download_log_group = QGroupBox("LOG OUTPUT")
+        download_log_group.setStyleSheet("QGroupBox { font-weight: bold; }")
+        download_log_layout = QVBoxLayout()
+        self.download_log_output = QTextEdit()
+        self.download_log_output.setReadOnly(True)
+        self.download_log_output.setFont(QFont("Monaco", 9))
+        self.download_log_output.setMinimumHeight(180)
+        self.download_log_output.setStyleSheet("QTextEdit { background-color: #f5f5f5; border: 1px solid #ddd; border-radius: 3px; }")
+        download_log_layout.addWidget(self.download_log_output)
+        download_log_group.setLayout(download_log_layout)
+        download_tab_layout.addWidget(download_log_group)
+        
+        self.main_tabs.addTab(download_tab, "Download")
+        
+        # Subtitles tab
+        main_tab = QWidget()
+        layout = QVBoxLayout()
+        main_tab.setLayout(layout)
+        
+        # Subtitles tab description
+        subtitles_desc = QLabel(
+            "<h3 style='margin: 0 0 4px 0; font-size: 13px;'>Extract subtitles</h3>"
+            "<p style='margin: 0 0 12px 0;'>Expects MKV files in the downloads folder. Extracts subtitles to the subtitles folder.</p>"
+            "<h3 style='margin: 0 0 4px 0; font-size: 13px;'>Clean subtitles</h3>"
+            "<p style='margin: 0 0 12px 0;'>Works on SRT files in the subtitles folder (e.g. from Extract). Removes color tags in-place.</p>"
+            "<h3 style='margin: 0 0 4px 0; font-size: 13px;'>Translate subtitles</h3>"
+            "<p style='margin: 0 0 12px 0;'>Select SRT files to translate.</p>"
+            "<h3 style='margin: 0 0 4px 0; font-size: 13px;'>Burn subtitles + watermark (720p/1080p)</h3>"
+            "<p style='margin: 0;'>Select video file(s). For each video, looks for a matching SRT in: same directory → subtitles folder → downloads folder. Outputs to the output folder.</p>"
+        )
+        subtitles_desc.setWordWrap(True)
+        subtitles_desc.setTextFormat(Qt.RichText)
+        subtitles_desc.setStyleSheet("color: #555; font-size: 11px; padding: 8px 0;")
+        layout.addWidget(subtitles_desc)
         
         # Subtitles section
         subtitles_group = QGroupBox("SUBTITLES")
@@ -7107,6 +7151,8 @@ class VideoProcessingApp(QMainWindow):
         self.log_output = QTextEdit()
         self.log_output.setReadOnly(True)
         self.log_output.setFont(QFont("Monaco", 9))
+        self.log_output.setMinimumHeight(180)
+        self.log_output.setStyleSheet("QTextEdit { background-color: #f5f5f5; border: 1px solid #ddd; border-radius: 3px; }")
         log_layout.addWidget(self.log_output)
         log_group.setLayout(log_layout)
         layout.addWidget(log_group)
@@ -7118,9 +7164,9 @@ class VideoProcessingApp(QMainWindow):
         transcription_tab = self.create_transcription_tab()
         self.main_tabs.addTab(transcription_tab, "Transcription")
         
-        # Add remuxing tab
+        # Add remux tab
         remuxing_tab = self.create_remuxing_tab()
-        self.main_tabs.addTab(remuxing_tab, "Remuxing")
+        self.main_tabs.addTab(remuxing_tab, "Remux")
         
         # Add tabs to main layout
         main_layout.addWidget(self.main_tabs)
@@ -7136,11 +7182,12 @@ class VideoProcessingApp(QMainWindow):
     
     
     def log(self, message: str):
-        """Add a message to the log output."""
-        self.log_output.append(message)
-        self.log_output.verticalScrollBar().setValue(
-            self.log_output.verticalScrollBar().maximum()
-        )
+        """Add a message to the log output (both Download and Subtitles tabs)."""
+        for widget in (self.log_output, self.download_log_output):
+            widget.append(message)
+            widget.verticalScrollBar().setValue(
+                widget.verticalScrollBar().maximum()
+            )
     
     def open_about(self):
         """Open About dialog."""
