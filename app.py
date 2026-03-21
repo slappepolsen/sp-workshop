@@ -76,7 +76,7 @@ try:
         QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
         QPushButton, QLabel, QTextEdit, QFileDialog, QDialog,
         QLineEdit, QFormLayout, QMessageBox, QProgressBar, QGroupBox, QStyleFactory, QCheckBox, QStackedWidget, QTextBrowser, QComboBox,
-        QGraphicsDropShadowEffect, QTabWidget, QSpinBox, QDoubleSpinBox, QScrollArea, QListWidget, QListWidgetItem, QTreeWidget, QTreeWidgetItem, QHeaderView, QMenu
+        QGraphicsDropShadowEffect, QTabWidget, QSpinBox, QDoubleSpinBox, QScrollArea, QListWidget, QListWidgetItem, QTreeWidget, QTreeWidgetItem, QHeaderView, QMenu, QFrame, QSizePolicy
     )
     from PyQt5.QtCore import QThread, pyqtSignal, Qt, QProcess, QUrl, QTimer
     from PyQt5.QtGui import QFont, QIcon, QPainter, QPen, QDesktopServices
@@ -94,6 +94,11 @@ except ImportError as e:
 
 # Download instructions URL
 DOWNLOAD_INSTRUCTIONS_URL = "https://rentry.co/sp-workshop"
+
+# Layout spacing (used across tabs for consistency)
+LAYOUT_SPACING = 12
+SECTION_SPACING = 8
+LOG_MIN_HEIGHT = 100
 
 # Whisper languages: (display name, code)
 TRANSCRIBE_LANGUAGES = [
@@ -242,7 +247,21 @@ def load_config() -> Dict:
         "whisper_cpp_model_dir": "",
         "whisper_cpp_model": "base",
         "whisper_cpp_extra_args": "",
-        "whisper_cpp_vad_model": ""
+        "whisper_cpp_vad_model": "",
+        "clean_subtitles_fixes": {
+            "remove_empty_lines": True,
+            "fix_invalid_italic_tags": True,
+            "fix_overlapping_display_times": True,
+            "fix_short_display_times": True,
+            "fix_long_display_times": True,
+            "fix_short_gaps": True,
+            "remove_unneeded_spaces": True,
+            "fix_missing_spaces": True,
+            "break_long_lines": True,
+            "split_dialogs_on_one_line": True,
+            "remove_dialog_dashes_single_line": True,
+            "remove_start_dash_non_dialogs": True,
+        }
     }
     
     if config_path.exists():
@@ -253,6 +272,10 @@ def load_config() -> Dict:
                 if "whisper_options" in user_config:
                     default_config["whisper_options"].update(user_config["whisper_options"])
                     del user_config["whisper_options"]
+                # Merge clean_subtitles_fixes with defaults
+                if "clean_subtitles_fixes" in user_config:
+                    default_config["clean_subtitles_fixes"].update(user_config["clean_subtitles_fixes"])
+                    del user_config["clean_subtitles_fixes"]
                 default_config.update(user_config)
         except Exception as e:
             print(f"Error loading config: {e}")
@@ -1201,8 +1224,328 @@ def extract_subtitles(downloads_dir: Path, subtitles_dir: Path, progress_callbac
     return success_count > 0
 
 
-def clean_subtitles(subtitles_dir: Path, progress_callback=None, log_callback=None) -> bool:
-    """Remove color tags from subtitle files."""
+# ============================================================================
+# Fix common errors (SRT parsing + 12 fixes)
+# ============================================================================
+
+# Fix key -> display label for CleanSubtitlesDialog
+CLEAN_SUBTITLES_FIX_ITEMS = [
+    ("remove_empty_lines", "Remove empty lines"),
+    ("fix_invalid_italic_tags", "Fix invalid italic tags"),
+    ("fix_overlapping_display_times", "Fix overlapping display times"),
+    ("fix_short_display_times", "Fix short display times"),
+    ("fix_long_display_times", "Fix long display times"),
+    ("fix_short_gaps", "Fix short gaps"),
+    ("remove_unneeded_spaces", "Remove unneeded spaces"),
+    ("fix_missing_spaces", "Fix missing spaces"),
+    ("break_long_lines", "Break long lines"),
+    ("split_dialogs_on_one_line", "Split dialogs on one line"),
+    ("remove_dialog_dashes_single_line", "Remove dialog dashes in single lines"),
+    ("remove_start_dash_non_dialogs", "Remove start dash in non-dialogs"),
+]
+
+# Default config for fix logic
+FIX_CONFIG_DEFAULTS = {
+    "subtitle_minimum_display_ms": 1000,
+    "subtitle_maximum_display_ms": 8000,
+    "minimum_ms_between_lines": 24,
+    "subtitle_line_max_length": 43,
+    "subtitle_max_chars_per_second": 25,
+}
+
+
+def _parse_srt(content: str) -> List[Dict]:
+    """Parse SRT content into list of {start_ms, end_ms, text} dicts."""
+    entries = []
+    blocks = re.split(r'\n\s*\n', content.strip())
+    for block in blocks:
+        lines = block.strip().split('\n')
+        if len(lines) < 2:
+            continue
+        # First line: index (optional)
+        # Second line: 00:00:00,000 --> 00:00:01,000
+        time_line = lines[1] if lines[0].isdigit() else lines[0]
+        text_lines = lines[2:] if lines[0].isdigit() else lines[1:]
+        m = re.match(r'(\d{2}):(\d{2}):(\d{2})[,.](\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2})[,.](\d{3})', time_line)
+        if not m:
+            continue
+        start_ms = int(m.group(1)) * 3600000 + int(m.group(2)) * 60000 + int(m.group(3)) * 1000 + int(m.group(4))
+        end_ms = int(m.group(5)) * 3600000 + int(m.group(6)) * 60000 + int(m.group(7)) * 1000 + int(m.group(8))
+        text = '\n'.join(text_lines).strip()
+        entries.append({"start_ms": start_ms, "end_ms": end_ms, "text": text})
+    return entries
+
+
+def _format_srt(entries: List[Dict]) -> str:
+    """Serialize entries back to SRT format."""
+    out = []
+    for i, e in enumerate(entries, 1):
+        h1, m1, s1, ms1 = e["start_ms"] // 3600000, (e["start_ms"] % 3600000) // 60000, (e["start_ms"] % 60000) // 1000, e["start_ms"] % 1000
+        h2, m2, s2, ms2 = e["end_ms"] // 3600000, (e["end_ms"] % 3600000) // 60000, (e["end_ms"] % 60000) // 1000, e["end_ms"] % 1000
+        out.append(f"{i}\n{h1:02d}:{m1:02d}:{s1:02d},{ms1:03d} --> {h2:02d}:{m2:02d}:{s2:02d},{ms2:03d}\n{e['text']}\n")
+    return '\n'.join(out)
+
+
+def _fix_empty_lines(entries: List[Dict], config: Dict) -> int:
+    """Remove empty lines and fully empty paragraphs."""
+    count = 0
+    i = len(entries) - 1
+    while i >= 0:
+        e = entries[i]
+        text = e["text"]
+        # Strip HTML for emptiness check
+        stripped = re.sub(r'<[^>]+>', '', text).strip()
+        if not stripped:
+            entries.pop(i)
+            count += 1
+            i -= 1
+            continue
+        # Trim leading/trailing newlines, collapse double newlines
+        new_text = re.sub(r'\n\n+', '\n', text.strip())
+        if new_text != text:
+            e["text"] = new_text
+            count += 1
+        i -= 1
+    return count
+
+
+def _fix_invalid_italic_tags(entries: List[Dict], config: Dict) -> int:
+    """Fix unclosed/swapped italic tags."""
+    count = 0
+    for e in entries:
+        text = e["text"]
+        # Normalize <i/> to </i>
+        text = re.sub(r'<i\s*/>', '</i>', text, flags=re.I)
+        # Fix <i>...<i> -> <i>...</i> (change last <i> to </i>)
+        opens = len(re.findall(r'<i\s*>', text, re.I))
+        closes = len(re.findall(r'</i\s*>', text, re.I))
+        if opens == 2 and closes == 0:
+            last_open = text.rfind('<i>')
+            if last_open >= 0:
+                text = text[:last_open] + '</i>' + text[last_open + 3:]
+                count += 1
+        elif opens > closes:
+            n = opens - closes
+            for _ in range(n):
+                last_i = text.rfind('<i>')
+                if last_i >= 0:
+                    end = text.find('>', last_i) + 1
+                    text = text[:end] + '</i>' + text[end:]
+                    count += 1
+        if text != e["text"]:
+            e["text"] = text
+            if count == 0:
+                count = 1  # e.g. <i/> normalization only
+    return count
+
+
+def _fix_overlapping_display_times(entries: List[Dict], config: Dict) -> int:
+    """Fix overlapping and negative duration."""
+    count = 0
+    min_dur = config.get("subtitle_minimum_display_ms", 1000)
+    for i, e in enumerate(entries):
+        dur = e["end_ms"] - e["start_ms"]
+        if dur < min_dur:
+            e["end_ms"] = e["start_ms"] + min_dur
+            count += 1
+        if i > 0 and e["start_ms"] < entries[i - 1]["end_ms"]:
+            entries[i - 1]["end_ms"] = e["start_ms"] - 1
+            if entries[i - 1]["end_ms"] < entries[i - 1]["start_ms"]:
+                entries[i - 1]["end_ms"] = entries[i - 1]["start_ms"] + min_dur
+            count += 1
+    return count
+
+
+def _fix_short_display_times(entries: List[Dict], config: Dict) -> int:
+    """Extend short display times if next allows."""
+    count = 0
+    min_dur = config.get("subtitle_minimum_display_ms", 1000)
+    for i, e in enumerate(entries):
+        dur = e["end_ms"] - e["start_ms"]
+        if dur < min_dur and i + 1 < len(entries):
+            gap = entries[i + 1]["start_ms"] - e["end_ms"]
+            need = min_dur - dur
+            if gap > need:
+                e["end_ms"] += need
+                count += 1
+    return count
+
+
+def _fix_long_display_times(entries: List[Dict], config: Dict) -> int:
+    """Cap long display times."""
+    count = 0
+    max_dur = config.get("subtitle_maximum_display_ms", 8000)
+    for e in entries:
+        dur = e["end_ms"] - e["start_ms"]
+        if dur > max_dur:
+            e["end_ms"] = e["start_ms"] + max_dur
+            count += 1
+    return count
+
+
+def _fix_short_gaps(entries: List[Dict], config: Dict) -> int:
+    """Ensure minimum gap between subtitles."""
+    count = 0
+    min_gap = config.get("minimum_ms_between_lines", 24)
+    for i in range(len(entries) - 1):
+        gap = entries[i + 1]["start_ms"] - entries[i]["end_ms"]
+        if 0 <= gap < min_gap:
+            entries[i]["end_ms"] = entries[i + 1]["start_ms"] - min_gap
+            count += 1
+    return count
+
+
+def _remove_unneeded_spaces(entries: List[Dict], config: Dict) -> int:
+    """Remove zero-width chars, collapse spaces, normalize ellipses."""
+    count = 0
+    zw = '\u200B\uFEFF\u009D'
+    for e in entries:
+        text = e["text"]
+        for c in zw:
+            if c in text:
+                text = text.replace(c, '')
+                count += 1
+        text = text.replace('\t', ' ').replace('\u00A0', ' ')
+        text = re.sub(r' +', ' ', text)
+        text = re.sub(r'\. \. \.', '...', text)
+        text = re.sub(r'\.{4,}', '...', text)
+        if text != e["text"]:
+            e["text"] = text
+            count += 1
+    return count
+
+
+def _fix_missing_spaces(entries: List[Dict], config: Dict) -> int:
+    """Insert missing spaces after punctuation."""
+    count = 0
+    for e in entries:
+        text = e["text"]
+        # Comma: letter,letter -> letter, letter
+        new_text = re.sub(r'([^\s\d]),([^\s])', r'\1, \2', text)
+        # Period: ll.LL -> ll. LL
+        new_text = re.sub(r'([a-z]{2})\.([A-Za-z])', r'\1. \2', new_text)
+        # ? and !
+        new_text = re.sub(r'([^\s\d])([?!])([A-Za-z])', r'\1\2 \3', new_text)
+        # HTML: word<i> -> word <i>
+        new_text = re.sub(r'([a-zA-Z])(<i>)', r'\1 \2', new_text, flags=re.I)
+        new_text = re.sub(r'(</i>)([a-zA-Z])', r'\1 \2', new_text, flags=re.I)
+        if new_text != text:
+            e["text"] = new_text
+            count += 1
+    return count
+
+
+def _break_long_lines(entries: List[Dict], config: Dict) -> int:
+    """Break lines longer than max length at spaces."""
+    count = 0
+    max_len = config.get("subtitle_line_max_length", 43)
+    for e in entries:
+        lines = e["text"].split('\n')
+        new_lines = []
+        for line in lines:
+            if len(line) <= max_len:
+                new_lines.append(line)
+                continue
+            parts = line.split(' ')
+            curr = []
+            curr_len = 0
+            for p in parts:
+                if curr_len + len(p) + (1 if curr else 0) > max_len and curr:
+                    new_lines.append(' '.join(curr))
+                    curr = [p]
+                    curr_len = len(p)
+                    count += 1
+                else:
+                    curr.append(p)
+                    curr_len += len(p) + (1 if len(curr) > 1 else 0)
+            if curr:
+                new_lines.append(' '.join(curr))
+        e["text"] = '\n'.join(new_lines)
+    return count
+
+
+def _split_dialogs_on_one_line(entries: List[Dict], config: Dict) -> int:
+    """Split 'A - B' style dialogs onto two lines."""
+    count = 0
+    for e in entries:
+        text = e["text"]
+        if '\n' in text or ' - ' not in text:
+            continue
+        # Pattern: sentence ending .!?..." then " - " then uppercase
+        m = re.search(r'([.!?…")\]])\s*-\s+([A-Z"\'\u2669\u266a])', text)
+        if m:
+            pos = m.start(2) - 2  # before " - "
+            text = text[:pos] + '\n- ' + text[pos + 3:]
+            e["text"] = text
+            count += 1
+    return count
+
+
+def _remove_dialog_dashes_single_line(entries: List[Dict], config: Dict) -> int:
+    """Remove leading dash when single sentence (no dialog)."""
+    count = 0
+    for e in entries:
+        text = e["text"]
+        stripped = text.strip()
+        if not stripped.startswith('-') and not stripped.startswith('\u2010'):
+            continue
+        if ' - ' in text or '\n' in text:
+            continue
+        new_text = re.sub(r'^[\s\-‐\-]+', '', stripped)
+        if new_text != stripped:
+            e["text"] = new_text
+            count += 1
+    return count
+
+
+def _remove_start_dash_non_dialogs(entries: List[Dict], config: Dict) -> int:
+    """Remove leading dash when not dialog structure."""
+    count = 0
+    for e in entries:
+        text = e["text"]
+        if not (text.strip().startswith('-') or text.strip().startswith('\u2010')):
+            continue
+        if re.search(r'[.!?]\s*-\s', text):
+            continue
+        new_text = re.sub(r'^[\s\-‐\-]+', '', text.strip()).strip()
+        if new_text != text.strip():
+            e["text"] = new_text
+            count += 1
+    return count
+
+
+def _apply_fixes_to_content(content: str, enabled_fixes: List[str], config: Dict) -> tuple:
+    """Apply enabled fixes to SRT content. Returns (new_content, change_summary)."""
+    entries = _parse_srt(content)
+    if not entries:
+        return content, {}
+    cfg = {**FIX_CONFIG_DEFAULTS, **config}
+    summary = {}
+    fix_map = {
+        "remove_empty_lines": _fix_empty_lines,
+        "fix_invalid_italic_tags": _fix_invalid_italic_tags,
+        "fix_overlapping_display_times": _fix_overlapping_display_times,
+        "fix_short_display_times": _fix_short_display_times,
+        "fix_long_display_times": _fix_long_display_times,
+        "fix_short_gaps": _fix_short_gaps,
+        "remove_unneeded_spaces": _remove_unneeded_spaces,
+        "fix_missing_spaces": _fix_missing_spaces,
+        "break_long_lines": _break_long_lines,
+        "split_dialogs_on_one_line": _split_dialogs_on_one_line,
+        "remove_dialog_dashes_single_line": _remove_dialog_dashes_single_line,
+        "remove_start_dash_non_dialogs": _remove_start_dash_non_dialogs,
+    }
+    for key in enabled_fixes:
+        if key in fix_map:
+            n = fix_map[key](entries, cfg)
+            if n > 0:
+                summary[key] = n
+    return _format_srt(entries), summary
+
+
+def clean_subtitles(subtitles_dir: Path, enabled_fixes: Optional[List[str]] = None,
+                    progress_callback=None, log_callback=None) -> bool:
+    """Remove color tags (always) and optionally apply fix common errors to subtitle files."""
     if not subtitles_dir.exists():
         if log_callback:
             log_callback(f"Error: Subtitles directory not found: {subtitles_dir}")
@@ -1218,39 +1561,49 @@ def clean_subtitles(subtitles_dir: Path, progress_callback=None, log_callback=No
     total = len(srt_files)
     cleaned_count = 0
     skipped_count = 0
+    fixes_list = enabled_fixes or []
     
     if log_callback:
         log_callback(f"Starting subtitle cleaning for {total} file(s)...")
+        if fixes_list:
+            log_callback(f"Applying: Remove color tags (always) + {len(fixes_list)} fix(es)")
     
     for idx, srt_file in enumerate(srt_files, start=1):
         if progress_callback:
             progress_callback(idx, total, srt_file.name)
         
         try:
-            # File size for logging
             file_size = srt_file.stat().st_size
             file_size_kb = file_size / 1024
             
             with open(srt_file, 'r', encoding='utf-8') as f:
                 content = f.read()
             
-            original_length = len(content)
-            
-            # Remove color tags
+            # 1. Always remove color tags
             cleaned = re.sub(r'<c\.[a-zA-Z0-9_]+>', '', content)
             cleaned = re.sub(r'</c\.[a-zA-Z0-9_]+>', '', cleaned)
             
+            # 2. Apply selected fixes (they work on full SRT content)
+            if fixes_list:
+                cleaned, summary = _apply_fixes_to_content(cleaned, fixes_list, {})
+            
             if cleaned != content:
-                tags_removed = len(re.findall(r'<c\.[a-zA-Z0-9_]+>|</c\.[a-zA-Z0-9_]+>', content))
                 with open(srt_file, 'w', encoding='utf-8') as f:
                     f.write(cleaned)
                 cleaned_count += 1
                 if log_callback:
-                    log_callback(f"  ✓ Cleaned: {srt_file.name} ({file_size_kb:.1f} KB, removed {tags_removed} color tag(s))")
+                    if fixes_list and summary:
+                        summary_str = ", ".join(f"{v} {k}" for k, v in summary.items())
+                        log_callback(f"  ✓ Cleaned: {srt_file.name} ({file_size_kb:.1f} KB) — {summary_str}")
+                    elif not fixes_list:
+                        tags_removed = len(re.findall(r'<c\.[a-zA-Z0-9_]+>|</c\.[a-zA-Z0-9_]+>', content))
+                        log_callback(f"  ✓ Cleaned: {srt_file.name} ({file_size_kb:.1f} KB, removed {tags_removed} color tag(s))")
+                    else:
+                        log_callback(f"  ✓ Cleaned: {srt_file.name} ({file_size_kb:.1f} KB)")
             else:
                 skipped_count += 1
                 if log_callback:
-                    log_callback(f"  ○ Skipped: {srt_file.name} ({file_size_kb:.1f} KB, no color tags found)")
+                    log_callback(f"  ○ Skipped: {srt_file.name} ({file_size_kb:.1f} KB, no changes)")
         except Exception as e:
             if log_callback:
                 log_callback(f"  ✗ Error cleaning {srt_file.name}: {e}")
@@ -3690,6 +4043,81 @@ def check_app_exists(app_name: str) -> bool:
 # Setup wizard & dialogs
 # ============================================================================
 
+class CleanSubtitlesDialog(QDialog):
+    """Dialog to select which fixes to apply when cleaning subtitles."""
+    
+    def __init__(self, parent=None, config: Optional[Dict] = None):
+        super().__init__(parent)
+        self.setWindowTitle("Clean subtitles – select fixes")
+        self.setMinimumWidth(420)
+        self.config = config or load_config()
+        self.fix_checkboxes = {}
+        
+        layout = QVBoxLayout()
+        
+        # Always-on: Remove color tags (greyed out)
+        color_cb = QCheckBox("Remove color tags")
+        color_cb.setChecked(True)
+        color_cb.setEnabled(False)
+        color_cb.setStyleSheet("color: #888;")
+        layout.addWidget(color_cb)
+        
+        always_label = QLabel("(always on)")
+        always_label.setStyleSheet("color: #888; font-size: 10px;")
+        layout.addWidget(always_label)
+        
+        sep = QLabel("────────────────────────────────────")
+        sep.setStyleSheet("color: #ccc;")
+        layout.addWidget(sep)
+        
+        # 12 optional fixes
+        saved = self.config.get("clean_subtitles_fixes", {})
+        for key, label in CLEAN_SUBTITLES_FIX_ITEMS:
+            cb = QCheckBox(label)
+            cb.setChecked(saved.get(key, True))
+            self.fix_checkboxes[key] = cb
+            layout.addWidget(cb)
+        
+        layout.addWidget(QLabel("────────────────────────────────────"))
+        
+        # Buttons
+        btn_layout = QHBoxLayout()
+        select_all_btn = QPushButton("Select all")
+        select_all_btn.clicked.connect(self._select_all)
+        select_none_btn = QPushButton("Select none")
+        select_none_btn.clicked.connect(self._select_none)
+        apply_btn = QPushButton("Apply selected")
+        apply_btn.clicked.connect(self.accept)
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        btn_layout.addWidget(select_all_btn)
+        btn_layout.addWidget(select_none_btn)
+        btn_layout.addStretch()
+        btn_layout.addWidget(apply_btn)
+        btn_layout.addWidget(cancel_btn)
+        layout.addLayout(btn_layout)
+        
+        self.setLayout(layout)
+    
+    def _select_all(self):
+        for cb in self.fix_checkboxes.values():
+            cb.setChecked(True)
+    
+    def _select_none(self):
+        for cb in self.fix_checkboxes.values():
+            cb.setChecked(False)
+    
+    def get_enabled_fixes(self) -> List[str]:
+        """Return list of fix keys that are checked."""
+        return [k for k, cb in self.fix_checkboxes.items() if cb.isChecked()]
+    
+    def save_selection_to_config(self):
+        """Persist current selection to config."""
+        fixes = {k: cb.isChecked() for k, cb in self.fix_checkboxes.items()}
+        self.config["clean_subtitles_fixes"] = fixes
+        save_config(self.config)
+
+
 class SetupWizard(QDialog):
     """First-time setup wizard - step by step."""
     
@@ -5063,7 +5491,6 @@ class SettingsDialog(QDialog):
         row_layout.addWidget(le)
         remove_btn = QPushButton("−")
         remove_btn.setFixedWidth(28)
-        remove_btn.setToolTip("Remove this key")
 
         def do_remove():
             self.api_key_inputs.remove((le, row, remove_btn))
@@ -5131,63 +5558,86 @@ class SettingsDialog(QDialog):
 
 # Whisper options dialog
 class WhisperOptionsDialog(QDialog):
-    """Simplified dialog for Whisper advanced options - manual parameter entry."""
-    
-    def __init__(self, parent=None):
+    """Advanced options dialog for Whisper — shows per-engine parameter reference and extra args."""
+
+    _BTN_ACTIVE = (
+        "QPushButton { background: #e8e8e8; border: 2px solid #aaa; border-radius: 4px;"
+        " font-weight: bold; padding: 4px 10px; }"
+    )
+    _BTN_INACTIVE = (
+        "QPushButton { background: none; border: 1px solid #ccc; border-radius: 4px;"
+        " font-weight: normal; padding: 4px 10px; }"
+        "QPushButton:hover { background: #f0f0f0; }"
+    )
+
+    def __init__(self, parent=None, initial_method="cpp"):
         super().__init__(parent)
         self.setWindowTitle("Whisper Advanced Options")
         self.setMinimumWidth(1000)
         self.setMinimumHeight(700)
-        
+
         self.config = load_config()
-        
+        self._current_method = None  # set by _switch_method
+
+        # Load both extra_args up front
+        self._extra_args = {
+            "cpp":    (self.config.get("whisper_cpp_extra_args") or ""),
+            "openai": (self.config.get("whisper_options", {}).get("extra_args") or ""),
+        }
+
         main_layout = QVBoxLayout()
-        
-        # Info label
-        info_label = QLabel("Type additional Whisper parameters below. These will be appended to the default command.")
-        info_label.setStyleSheet("color: #666; margin-bottom: 10px;")
+
+        info_label = QLabel("Type additional parameters below. These will be appended to the default command for the selected engine.")
+        info_label.setStyleSheet("color: #666; margin-bottom: 6px;")
         info_label.setWordWrap(True)
         main_layout.addWidget(info_label)
-        
-        # Split layout: left panel (parameters reference) and right panel (user input)
+
         split_layout = QHBoxLayout()
-        
-        # Left panel: Available Parameters (read-only reference)
+
+        # ── Left panel: engine selector + reference ──────────────────────────
         left_panel = QGroupBox("Available Parameters (Reference)")
         left_layout = QVBoxLayout()
-        
-        params_text = QTextEdit()
-        params_text.setReadOnly(True)
-        params_text.setFont(QFont("Courier New", 10))
-        params_text.setPlainText(self.get_parameters_reference())
-        left_layout.addWidget(params_text)
-        
+        left_layout.setSpacing(6)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(6)
+        self.btn_cpp = QPushButton("Whisper CPP")
+        self.btn_openai = QPushButton("OpenAI Whisper")
+        self.btn_cpp.clicked.connect(lambda: self._switch_method("cpp"))
+        self.btn_openai.clicked.connect(lambda: self._switch_method("openai"))
+        btn_row.addWidget(self.btn_cpp)
+        btn_row.addWidget(self.btn_openai)
+        btn_row.addStretch()
+        left_layout.addLayout(btn_row)
+
+        self.params_text = QTextEdit()
+        self.params_text.setReadOnly(True)
+        self.params_text.setFont(QFont("Courier New", 10))
+        left_layout.addWidget(self.params_text)
+
         left_panel.setLayout(left_layout)
-        split_layout.addWidget(left_panel, 1)  # 1:1 ratio
-        
-        # Right panel: Additional Parameters (user input)
+        split_layout.addWidget(left_panel, 1)
+
+        # ── Right panel: extra args input ────────────────────────────────────
         right_panel = QGroupBox("Additional Parameters")
         right_layout = QVBoxLayout()
-        
-        help_label = QLabel("Enter one parameter per line. Format: --parameter_name value\nExample:\n--patience 1.0\n--word_timestamps True\n--max_words_per_line 7")
-        help_label.setStyleSheet("color: #666; font-size: 10px; margin-bottom: 5px;")
-        help_label.setWordWrap(True)
-        right_layout.addWidget(help_label)
-        
+        right_layout.setSpacing(6)
+
+        self.help_label = QLabel()
+        self.help_label.setStyleSheet("color: #666; font-size: 10px;")
+        self.help_label.setWordWrap(True)
+        right_layout.addWidget(self.help_label)
+
         self.extra_args_input = QTextEdit()
         self.extra_args_input.setFont(QFont("Courier New", 11))
-        self.extra_args_input.setPlaceholderText("--patience 1.0\n--word_timestamps True\n--max_words_per_line 7\n--max_line_count 2")
-        # Load existing extra_args from config
-        extra_args = self.config.get("whisper_options", {}).get("extra_args", "")
-        self.extra_args_input.setPlainText(extra_args)
         right_layout.addWidget(self.extra_args_input)
-        
+
         right_panel.setLayout(right_layout)
-        split_layout.addWidget(right_panel, 1)  # 1:1 ratio
-        
+        split_layout.addWidget(right_panel, 1)
+
         main_layout.addLayout(split_layout)
-        
-        # Buttons at bottom
+
+        # ── Buttons ──────────────────────────────────────────────────────────
         button_layout = QHBoxLayout()
         button_layout.addStretch()
         save_btn = QPushButton("Save")
@@ -5197,92 +5647,379 @@ class WhisperOptionsDialog(QDialog):
         button_layout.addWidget(save_btn)
         button_layout.addWidget(cancel_btn)
         main_layout.addLayout(button_layout)
-        
+
         self.setLayout(main_layout)
-    
+
+        # Open on the requested method
+        self._switch_method(initial_method)
+
+    # ── Method switching ─────────────────────────────────────────────────────
+
+    def _switch_method(self, method: str):
+        """Flush current input, then load the new method's reference + args."""
+        # Flush currently displayed text back to the dict before switching
+        if self._current_method is not None:
+            self._extra_args[self._current_method] = self.extra_args_input.toPlainText()
+
+        self._current_method = method
+
+        if method == "cpp":
+            self.params_text.setPlainText(self.get_cpp_parameters_reference())
+            self.extra_args_input.setPlaceholderText(
+                "-bo 3\n-bs 2\n--word-thold 0.02\n--vad\n-vm /path/to/silero_v5.onnx"
+            )
+            self.help_label.setText(
+                "One flag per line.  Short form (-bo 3) or long form (--best-of 3).\n"
+                "Language, model path, output format and VAD model are handled by the main tab."
+            )
+            self.btn_cpp.setStyleSheet(self._BTN_ACTIVE)
+            self.btn_openai.setStyleSheet(self._BTN_INACTIVE)
+        else:
+            self.params_text.setPlainText(self.get_parameters_reference())
+            self.extra_args_input.setPlaceholderText(
+                "--patience 1.0\n--word_timestamps True\n--max_words_per_line 7\n--max_line_count 2"
+            )
+            self.help_label.setText(
+                "One parameter per line.  Format: --parameter_name value\n"
+                "Language, model, output format and task are handled by the main tab."
+            )
+            self.btn_openai.setStyleSheet(self._BTN_ACTIVE)
+            self.btn_cpp.setStyleSheet(self._BTN_INACTIVE)
+
+        self.extra_args_input.setPlainText(self._extra_args.get(method, ""))
+
+    # ── Parameter references ─────────────────────────────────────────────────
+
+    def get_cpp_parameters_reference(self) -> str:
+        """Parameter reference for whisper-cli (whisper.cpp)."""
+        return """\
+Whisper CPP (whisper-cli) extra flags
+======================================
+Note: -l / --language, -m / --model, -f / --file, output format flags
+and VAD flags are already set by the main tab. Only add flags not listed there.
+
+Core decoding
+-------------
+-t N,   --threads N          [4]      number of threads for computation
+-p N,   --processors N       [1]      number of processors
+-bo N,  --best-of N          [5]      best-of candidates to keep
+-bs N,  --beam-size N        [5]      beam size for beam search
+-tp,    --temperature N      [0.00]   sampling temperature (0-1)
+-tpi,   --temperature-inc N  [0.20]   temperature increment on fallback
+-nf,    --no-fallback        [false]  disable temperature fallback
+-mc N,  --max-context N      [-1]     max text context tokens to store
+-ml N,  --max-len N          [0]      max segment length in characters
+-sow,   --split-on-word      [false]  split on word rather than token
+-ac N,  --audio-ctx N        [0]      audio context size (0 = all)
+
+Quality / filtering thresholds
+-------------------------------
+-wt N,  --word-thold N       [0.01]   word timestamp probability threshold
+-et N,  --entropy-thold N    [2.40]   entropy threshold for decoder fail
+-lpt N, --logprob-thold N    [-1.00]  log probability threshold for fail
+-nth N, --no-speech-thold N  [0.60]   no-speech probability threshold
+
+Output options
+--------------
+-otxt,  --output-txt         [false]  also write a .txt file
+-ovtt,  --output-vtt         [false]  also write a .vtt file
+-olrc,  --output-lrc         [false]  also write a .lrc file
+-oj,    --output-json        [false]  also write a .json file
+-ojf,   --output-json-full   [false]  include token-level detail in JSON
+-nt,    --no-timestamps      [false]  omit timestamps from output
+-ps,    --print-special      [false]  print special tokens
+        --print-confidence   [false]  print confidence scores
+-pp,    --print-progress     [false]  print progress to stderr
+
+Translation / diarization
+-------------------------
+-tr,    --translate          [false]  translate to English
+-di,    --diarize            [false]  stereo audio diarization
+-tdrz,  --tinydiarize        [false]  tinydiarize (requires tdrz model)
+
+Advanced / experimental
+-----------------------
+        --prompt PROMPT      []       initial prompt (max n_text_ctx/2 tokens)
+        --carry-initial-prompt [false] always prepend initial prompt
+-dtw MODEL --dtw MODEL       []       compute token-level timestamps
+-ng,    --no-gpu             [false]  disable GPU
+-fa,    --flash-attn         [true]   enable flash attention
+-nfa,   --no-flash-attn      [false]  disable flash attention
+-sns,   --suppress-nst       [false]  suppress non-speech tokens
+        --suppress-regex REGEX []     regex matching tokens to suppress
+        --grammar GRAMMAR    []       GBNF grammar to guide decoding
+        --grammar-rule RULE  []       top-level GBNF grammar rule name
+        --grammar-penalty N  [100.0]  scale down logits of non-grammar tokens
+-debug, --debug-mode         [false]  dump log_mel and other debug info
+-ls,    --log-score          [false]  log best decoder scores of tokens
+
+Voice Activity Detection (VAD) — set by main tab if model configured
+---------------------------------------------------------------------
+        --vad                [false]  enable VAD
+-vm FNAME, --vad-model FNAME []       VAD model path (.onnx)
+-vt N,  --vad-threshold N    [0.50]   speech probability threshold
+-vspd N, --vad-min-speech-duration-ms N [250]  min speech duration (ms)
+-vsd N,  --vad-min-silence-duration-ms N [100]  min silence to split (ms)
+-vmsd N, --vad-max-speech-duration-s  N [FLT_MAX] auto-split threshold (s)
+-vp N,  --vad-speech-pad-ms N [30]   extend segments by this padding (ms)
+-vo N,  --vad-samples-overlap N [0.10] overlap between segments (s)
+
+Time / clipping
+---------------
+-ot N,  --offset-t N         [0]      time offset in milliseconds
+-on N,  --offset-n N         [0]      segment index offset
+-d  N,  --duration N         [0]      duration of audio to process (ms)"""
+
     def get_parameters_reference(self) -> str:
-        """Generate reference text listing all available Whisper parameters."""
-        params = """--model : name of the Whisper model to use (default: turbo), selects model size; larger = more accurate but slower, smaller = faster but less accurate
+        """Parameter reference for openai-whisper (Python package)."""
+        return """\
+OpenAI Whisper (python -m whisper) extra flags
+===============================================
+Note: --language, --model, --output_dir, --output_format and --task
+are already set by the main tab. Only add flags not listed there.
 
---model_dir : path to save model files (default: ~/.cache/whisper), folder where downloaded models are stored
+Core decoding
+-------------
+--temperature TEMPERATURE         [0]      sampling temperature; 0 = greedy
+--best_of BEST_OF                 [5]      candidates when temperature > 0
+--beam_size BEAM_SIZE             [5]      beams in beam search (temperature=0)
+--patience PATIENCE               [None]   beam search patience multiplier
+--length_penalty LENGTH_PENALTY   [None]   token length penalty (alpha)
 
---device : device for PyTorch inference (default: cpu), hardware used for processing; GPU is much faster than CPU if available
+Context / prompting
+-------------------
+--initial_prompt INITIAL_PROMPT            optional prompt for first window
+--carry_initial_prompt BOOL       [False]  prepend prompt to every decode()
+--condition_on_previous_text BOOL [True]   use prior output as context prompt
+--suppress_tokens SUPPRESS_TOKENS [-1]     comma-separated token ids to suppress
 
---output_dir, -o OUTPUT_DIR : directory to save outputs (default: .), where transcription files are written
+Quality / filtering thresholds
+-------------------------------
+--compression_ratio_threshold N   [2.4]    gzip ratio above = failed decode
+--logprob_threshold N             [-1.0]   avg log-prob below = failed decode
+--no_speech_threshold N           [0.6]    nospeech prob above = silence
+--temperature_increment_on_fallback N [0.2] temp increase when decode fails
 
---output_format {txt,vtt,srt,tsv,json,all}, -f {txt,vtt,srt,tsv,json,all} : format of output file (default: all)
+Hardware
+--------
+--device DEVICE                   [cpu]    pytorch device (cpu / cuda / mps)
+--fp16 BOOL                       [True]   fp16 inference (faster on GPU)
+--threads THREADS                 [0]      torch CPU threads (0 = auto)
 
---verbose : print progress/debug messages (default: True)
+Word-level timestamps (experimental)
+-------------------------------------
+--word_timestamps BOOL            [False]  extract per-word timestamps
+--highlight_words BOOL            [False]  underline words in srt/vtt output
+--max_line_width N                [None]   max chars per line (needs word_ts)
+--max_line_count N                [None]   max lines per segment (needs word_ts)
+--max_words_per_line N            [None]   max words per line (needs word_ts)
+--prepend_punctuations CHARS               punctuation to attach to next word
+--append_punctuations CHARS                punctuation to attach to prev word
+--hallucination_silence_threshold N [None] skip silence if hallucination likely
 
---temperature : temperature for sampling (default: 0), randomness of decoding; low = stable/accurate, high = more varied but riskier
+Clipping
+--------
+--clip_timestamps CLIP_TIMESTAMPS [0]      start,end,... timestamps (seconds)"""
 
---best_of : number of candidates when sampling (default: 5), more candidates can improve accuracy but slow things down
+    # ── Save ─────────────────────────────────────────────────────────────────
 
---beam_size : beams in beam search (default: 5), higher explores more alternatives; improves accuracy at the cost of speed
-
---patience : beam search patience (default: None)
-
---length_penalty : token length penalty coefficient (default: None)
-
---suppress_tokens : comma-separated token ids to suppress (default: -1)
-
---initial_prompt : text prompt for first window (default: None), primes the model with exoected wording or context
-
---carry_initial_prompt : prepend initial_prompt to every decode() (default: False), keeps the same prompt across all segments
-
---condition_on_previous_text : use previous output as prompt (default: True), improves continuity but can repeat earlier mistakes
-
---fp16 : perform inference in fp16 (default: True), faster and lower memory usage on supported hardware
-
---temperature_increment_on_fallback : temperature increase on fallback (default: 0.2), loosens decoding if the model gets stuck
-
---compression_ratio_threshold : gzip compression ratio threshold (default: 2.4), detects repetitive or hallucinated output; lower is stricter
-
---logprob_threshold : average log probability threshold (default: -1.0), filters low-confidence transcriptions; higher is stricter
-
---no_speech_threshold : probability of <|nospeech|> token (default: 0.6), higher skips more silent segments
-
---word_timestamps : extract word-level timestamps (default: False), enables per-word timing for subtitles (idk how tho)
-
---prepend_punctuations : merge with next word (default: "'"¿([{-), keeps opening punctuation attached to the following word
-
---append_punctuations : merge with previous word (default: "'.。,，!！?？:：")]}), keeps closing punctuation attached to the previous word
-
---highlight_words : underline words in srt/vtt (requires word_timestamps) (default: False), visually emphasizes spoken words (idk how tho)
-
---max_line_width : max chars before line break (requires word_timestamps) (default: None), lower values create shorter subtitle lines
-
---max_line_count : max lines in segment (requires word_timestamps) (default: None), limits subtitle height on screen (max. two lines is standard practice)
-
---max_words_per_line : max words in segment (REQUIRES word_timestamps, no effect with max_line_width) (default: None), caps words per subtitle LINE
-
---threads : threads for CPU inference (default: 0), higher can speed up CPU processing at the cost of all other processes running simultaneously
-
---clip_timestamps : comma-separated start,end,start,end,... timestamps in seconds (default: 0), transcribes only selected audio ranges
-
---hallucination_silence_threshold : skip silent periods when hallucination detected (requires word_timestamps) (default: None), avoids fake text (the so-called "hallucination") during silences
-
-Note: --language and --task translate are handled by the main tab and should not be included here."""
-        return params
-    
     def save_settings(self):
-        """Save whisper options and close dialog."""
-        # Get user-typed parameters (one per line)
-        extra_args_text = self.extra_args_input.toPlainText().strip()
-        
-        # Convert newlines to spaces for WHISPER_EXTRA_ARGS
-        # This allows users to type one parameter per line for readability
-        extra_args = " ".join(line.strip() for line in extra_args_text.split("\n") if line.strip())
-        
-        # Save to config
+        """Save extra args for both engines and close dialog."""
+        # Flush the currently visible input back to the dict
+        self._extra_args[self._current_method] = self.extra_args_input.toPlainText().strip()
+
+        # Save Whisper CPP args
+        self.config["whisper_cpp_extra_args"] = self._extra_args["cpp"]
+
+        # Save OpenAI Whisper args
         if "whisper_options" not in self.config:
             self.config["whisper_options"] = {}
-        
-        self.config["whisper_options"]["extra_args"] = extra_args_text  # Save as multiline for display
-        self.config["whisper_options"]["extra_args_parsed"] = extra_args  # Save as space-separated for script
-        
+        raw = self._extra_args["openai"]
+        parsed = " ".join(line.strip() for line in raw.split("\n") if line.strip())
+        self.config["whisper_options"]["extra_args"] = raw
+        self.config["whisper_options"]["extra_args_parsed"] = parsed
+
         save_config(self.config)
         self.accept()
+
+
+# ============================================================================
+# Burn-in subtitles dialog
+# ============================================================================
+
+class BurnInDialog(QDialog):
+    """Dialog for configuring and launching the burn-in subtitles operation."""
+
+    def __init__(self, config: dict, parent=None):
+        super().__init__(parent)
+        self.config = config
+        self.selected_files: list[str] = []
+        self.setWindowTitle("Burn-in subtitles")
+        self.setMinimumSize(640, 420)
+        self.resize(720, 460)
+        self._build_ui()
+
+    def _build_ui(self):
+        root = QVBoxLayout(self)
+        root.setSpacing(12)
+        root.setContentsMargins(16, 16, 16, 16)
+
+        top = QHBoxLayout()
+        top.setSpacing(16)
+
+        # ── Left: options ────────────────────────────────────────────────────
+        opts_group = QGroupBox("Options")
+        opts_group.setStyleSheet("QGroupBox { font-weight: bold; font-size: 11px; }")
+        opts_layout = QVBoxLayout()
+        opts_layout.setSpacing(10)
+
+        # Quality
+        q_row = QHBoxLayout()
+        q_row.addWidget(QLabel("Output quality:"))
+        self.quality_combo = QComboBox()
+        self.quality_combo.addItem("720p", "720")
+        self.quality_combo.addItem("1080p", "1080")
+        self.quality_combo.currentIndexChanged.connect(self._on_quality_changed)
+        q_row.addWidget(self.quality_combo)
+        q_row.addStretch()
+        opts_layout.addLayout(q_row)
+
+        # Watermark
+        wm_header = QHBoxLayout()
+        self.watermark_check = QCheckBox("Add watermark")
+        self.watermark_check.setChecked(self.config.get("use_watermarks", True))
+        self.watermark_check.toggled.connect(self._on_watermark_toggled)
+        wm_header.addWidget(self.watermark_check)
+        wm_header.addStretch()
+        opts_layout.addLayout(wm_header)
+
+        self.wm_path_label = QLabel()
+        self.wm_path_label.setStyleSheet("color: #555; font-size: 10px;")
+        self.wm_path_label.setWordWrap(True)
+        opts_layout.addWidget(self.wm_path_label)
+
+        wm_browse_row = QHBoxLayout()
+        self.wm_browse_btn = QPushButton("Browse…")
+        self.wm_browse_btn.setFixedWidth(90)
+        self.wm_browse_btn.clicked.connect(self._browse_watermark)
+        wm_browse_row.addWidget(self.wm_browse_btn)
+        wm_browse_row.addStretch()
+        opts_layout.addLayout(wm_browse_row)
+
+        opts_layout.addStretch()
+        opts_group.setLayout(opts_layout)
+        top.addWidget(opts_group, 1)
+
+        # ── Right: file list ─────────────────────────────────────────────────
+        files_group = QGroupBox("Video files")
+        files_group.setStyleSheet("QGroupBox { font-weight: bold; font-size: 11px; }")
+        files_layout = QVBoxLayout()
+        files_layout.setSpacing(6)
+
+        self.file_list = QListWidget()
+        self.file_list.setSelectionMode(QListWidget.ExtendedSelection)
+        self.file_list.setAlternatingRowColors(True)
+        files_layout.addWidget(self.file_list)
+
+        file_btn_row = QHBoxLayout()
+        add_btn = QPushButton("Add files…")
+        add_btn.clicked.connect(self._add_files)
+        remove_btn = QPushButton("Remove")
+        remove_btn.clicked.connect(self._remove_selected)
+        clear_btn = QPushButton("Clear")
+        clear_btn.clicked.connect(self._clear_files)
+        file_btn_row.addWidget(add_btn)
+        file_btn_row.addWidget(remove_btn)
+        file_btn_row.addWidget(clear_btn)
+        file_btn_row.addStretch()
+        files_layout.addLayout(file_btn_row)
+
+        files_group.setLayout(files_layout)
+        top.addWidget(files_group, 2)
+
+        root.addLayout(top)
+
+        # ── Bottom: action buttons ───────────────────────────────────────────
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        self.burn_btn = QPushButton("Burn-in subtitles")
+        self.burn_btn.setMinimumWidth(160)
+        self.burn_btn.setDefault(True)
+        self.burn_btn.clicked.connect(self.accept)
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        btn_row.addWidget(cancel_btn)
+        btn_row.addWidget(self.burn_btn)
+        root.addLayout(btn_row)
+
+        # Initialise watermark display
+        self._refresh_watermark_ui()
+
+    # ── Helpers ──────────────────────────────────────────────────────────────
+
+    def _current_wm_key(self) -> str:
+        return f"watermark_{self.quality_combo.currentData()}p"
+
+    def _refresh_watermark_ui(self):
+        enabled = self.watermark_check.isChecked()
+        self.wm_path_label.setVisible(enabled)
+        self.wm_browse_btn.setVisible(enabled)
+        if enabled:
+            path = self.config.get(self._current_wm_key(), "")
+            res = "1280×720" if self.quality_combo.currentData() == "720" else "1920×1080"
+            if path:
+                self.wm_path_label.setText(f"{path}\n(expected dimensions: {res})")
+            else:
+                self.wm_path_label.setText(f"No watermark configured — use Browse or set in Settings.\n(expected dimensions: {res})")
+
+    def _on_quality_changed(self):
+        self._refresh_watermark_ui()
+
+    def _on_watermark_toggled(self):
+        self._refresh_watermark_ui()
+
+    def _browse_watermark(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select watermark image",
+            str(Path(self.config.get(self._current_wm_key(), str(Path.home()))).parent),
+            "Images (*.png *.jpg *.jpeg);;All Files (*)"
+        )
+        if path:
+            self.config[self._current_wm_key()] = path
+            self._refresh_watermark_ui()
+
+    def _add_files(self):
+        from_dir = str(get_downloads_dir())
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Select video files",
+            from_dir,
+            "Video Files (*.mkv *.mp4 *.mov);;All Files (*)"
+        )
+        for p in paths:
+            if p not in self.selected_files:
+                self.selected_files.append(p)
+                self.file_list.addItem(Path(p).name)
+
+    def _remove_selected(self):
+        for item in self.file_list.selectedItems():
+            row = self.file_list.row(item)
+            self.file_list.takeItem(row)
+            del self.selected_files[row]
+
+    def _clear_files(self):
+        self.file_list.clear()
+        self.selected_files.clear()
+
+    # ── Result accessors ─────────────────────────────────────────────────────
+
+    def get_resolution(self) -> str:
+        return self.quality_combo.currentData()
+
+    def get_use_watermarks(self) -> bool:
+        return self.watermark_check.isChecked()
+
+    def get_watermark_path(self) -> str:
+        return self.config.get(self._current_wm_key(), "")
 
 
 # ============================================================================
@@ -5363,99 +6100,72 @@ class VideoProcessingApp(QMainWindow):
             "#b42075",  # Dark Pink
         ]
         
-        # Find buttons by section
-        buttons = self.findChildren(QPushButton)
-        
-        # bunch of buttons
-        download_buttons = []
-        subtitle_buttons = []
-        process_buttons = []
-        remux_buttons = []
-        transcribe_buttons = []
-        settings_button = None
-        faq_button = None
-        about_button = None
-        
-        # find button by section 
-        for btn in buttons:
-            parent = btn.parent()
-            # find group box
-            while parent:
-                if isinstance(parent, QGroupBox):
-                    group_title = parent.title()
-                    if group_title == "DOWNLOAD":
-                        download_buttons.append(btn)
-                    elif group_title == "SUBTITLES":
-                        subtitle_buttons.append(btn)
-                    elif group_title == "PROCESS VIDEO":
-                        process_buttons.append(btn)
-                    elif group_title == "REMUX":
-                        remux_buttons.append(btn)
-                    elif group_title == "TRANSCRIBE":
-                        transcribe_buttons.append(btn)
-                    break
-                parent = parent.parent()
-            
-            # Top bar buttons
-            if btn.text() == "Settings":
-                settings_button = btn
-            elif btn.text() == "FAQ":
-                faq_button = btn
-            elif btn.text() == "About":
-                about_button = btn
-        
-        # make buttons lesbian
-        for btn in download_buttons:
-            self.apply_button_style(btn, colors[0])
-        
-        for btn in subtitle_buttons:
-            self.apply_button_style(btn, colors[1])
-        
-        for btn in process_buttons:
-            self.apply_button_style(btn, colors[2])
-        
-        for btn in remux_buttons:
-            self.apply_button_style(btn, colors[3])
-        
-        for btn in transcribe_buttons:
-            self.apply_button_style(btn, colors[4])
-        
-        if settings_button:
-            self.apply_button_style(settings_button, colors[5])
-        if faq_button:
-            self.apply_button_style(faq_button, colors[5])
-        if about_button:
-            self.apply_button_style(about_button, colors[5])
+        role_to_color = {
+            "download": colors[0],
+            "subtitle": colors[1],
+            "process": colors[2],
+            "remux": colors[3],
+            "transcribe": colors[4],
+            "header": colors[5],
+        }
+        for btn in self.findChildren(QPushButton):
+            role = btn.property("ui_role")
+            if role and role in role_to_color:
+                self.apply_button_style(btn, role_to_color[role])
     
-    # time to transcribe
-    def create_transcription_tab(self):
+    def build_transcription_tab(self):
         """Create the dedicated transcription tab."""
         tab = QWidget()
         layout = QVBoxLayout()
-        layout.setSpacing(15)
-        
-        # Transcription tab description
-        transcribe_desc = QLabel(
-            "<p style='margin: 0 0 12px 0; font-style: italic; color: #666;'>Note: \"Transcribe\" and \"Transcribe longer video\" are legacy and no longer updated or fixed. \"Transcribe (Whisper CPP)\" is the actively maintained option and will be continuously improved.</p>"
-            "<h3 style='margin: 0 0 4px 0; font-size: 13px;'>Transcribe</h3>"
-            "<p style='margin: 0 0 12px 0;'>Select video or audio file(s). For short clips. Outputs subtitle file(s) (SRT, VTT, TXT, etc.) in the same directory as each input file. <em style='color: #888;'>(Legacy)</em></p>"
-            "<h3 style='margin: 0 0 4px 0; font-size: 13px;'>Transcribe longer video</h3>"
-            "<p style='margin: 0 0 12px 0;'>For files over ~5 minutes. Splits audio into short segments via voice detection (VAD), then transcribes each with Whisper. Reduces hallucination from long silences compared to \"Transcribe\". <em style='color: #888;'>(Legacy)</em></p>"
-            "<h3 style='margin: 0 0 4px 0; font-size: 13px;'>Transcribe (Whisper CPP)</h3>"
-            "<p style='margin: 0;'>Uses whisper.cpp. Faster, built-in VAD. Requires whisper.cpp installed. Models auto-download on first use. <em style='color: #555;'>Actively maintained and continuously improved.</em></p>"
-        )
-        transcribe_desc.setWordWrap(True)
-        transcribe_desc.setTextFormat(Qt.RichText)
-        transcribe_desc.setStyleSheet("color: #555; font-size: 11px; padding: 8px 0;")
-        layout.addWidget(transcribe_desc)
-        
-        # File selection
-        file_group = QGroupBox("File Selection")
+        layout.setSpacing(8)
+
+        _folder_strip_style = "QPushButton { background: none; color: #777; border: none; padding: 2px 6px; font-size: 10px; } QPushButton:hover { color: #555; text-decoration: underline; } QPushButton:pressed { color: #333; }"
+        tr_folder_bar = QFrame()
+        tr_folder_bar.setStyleSheet("QFrame { background: #f5f5f5; border-bottom: 1px solid #e0e0e0; }")
+        tr_folder_layout = QHBoxLayout(tr_folder_bar)
+        tr_folder_layout.setContentsMargins(4, 4, 4, 4)
+        tr_open_downloads_top = QPushButton("Open downloads folder")
+        tr_open_downloads_top.setStyleSheet(_folder_strip_style)
+        tr_open_downloads_top.clicked.connect(lambda: open_folder_in_explorer(get_downloads_dir()))
+        tr_open_subtitles_top = QPushButton("Open subtitles folder")
+        tr_open_subtitles_top.setStyleSheet(_folder_strip_style)
+        tr_open_subtitles_top.clicked.connect(lambda: open_folder_in_explorer(get_subtitles_dir()))
+        tr_open_output_top = QPushButton("Open output folder")
+        tr_open_output_top.setStyleSheet(_folder_strip_style)
+        tr_open_output_top.clicked.connect(lambda: open_folder_in_explorer(get_output_dir()))
+        tr_folder_layout.addWidget(tr_open_downloads_top)
+        tr_folder_layout.addWidget(tr_open_subtitles_top)
+        tr_folder_layout.addWidget(tr_open_output_top)
+        tr_folder_layout.addStretch()
+        layout.addWidget(tr_folder_bar)
+
+        # Transcription setup
+        file_group = QGroupBox("Setup")
+        file_group.setStyleSheet("QGroupBox { font-weight: bold; }")
         file_layout = QVBoxLayout()
         self.transcribe_file_paths = []
 
+        # Method selector — primary choice, shown first
+        _LABEL_W = 120   # all row labels share this width so controls align
+        _COMBO_W = 280   # all dropdowns share this width
+
+        method_row = QHBoxLayout()
+        method_label = QLabel("Method:")
+        method_label.setFixedWidth(_LABEL_W)
+        method_label.setStyleSheet("font-weight: bold;")
+        self.transcribe_method_combo = QComboBox()
+        self.transcribe_method_combo.setFixedWidth(_COMBO_W)
+        self.transcribe_method_combo.addItem("Whisper CPP (recommended)", "cpp")
+        self.transcribe_method_combo.addItem("OpenAI Whisper (short clip, legacy)", "standard")
+        self.transcribe_method_combo.addItem("OpenAI Whisper (>5 min. clip, legacy)", "long")
+        method_row.addWidget(method_label, 0)
+        method_row.addWidget(self.transcribe_method_combo, 0)
+        method_row.addStretch()
+        file_layout.addLayout(method_row)
+
         file_row = QHBoxLayout()
         file_label = QLabel("Select file(s):")
+        file_label.setFixedWidth(_LABEL_W)
         self.transcribe_file_input = QLineEdit()
         self.transcribe_file_input.setReadOnly(True)
         self.transcribe_file_input.setPlaceholderText("No file selected")
@@ -5465,23 +6175,26 @@ class VideoProcessingApp(QMainWindow):
         file_row.addWidget(self.transcribe_file_input, 1)
         file_row.addWidget(browse_btn, 0)
         file_layout.addLayout(file_row)
-        
+
         # Language selection
         lang_row = QHBoxLayout()
         lang_label = QLabel("Language:")
+        lang_label.setFixedWidth(_LABEL_W)
         self.transcribe_language_combo = QComboBox()
+        self.transcribe_language_combo.setFixedWidth(_COMBO_W)
         for name, code in TRANSCRIBE_LANGUAGES:
             self.transcribe_language_combo.addItem(name, code)
         lang_row.addWidget(lang_label, 0)
-        lang_row.addWidget(self.transcribe_language_combo, 1)
+        lang_row.addWidget(self.transcribe_language_combo, 0)
         lang_row.addStretch()
         file_layout.addLayout(lang_row)
-        
+
         # Output format selector
         format_row = QHBoxLayout()
         format_label = QLabel("Output Format:")
-        format_label.setFixedWidth(120)
+        format_label.setFixedWidth(_LABEL_W)
         self.transcribe_format_combo = QComboBox()
+        self.transcribe_format_combo.setFixedWidth(_COMBO_W)
         formats = [
             ("SRT (Subtitles)", "srt"),
             ("VTT (WebVTT)", "vtt"),
@@ -5498,140 +6211,72 @@ class VideoProcessingApp(QMainWindow):
         if format_index >= 0:
             self.transcribe_format_combo.setCurrentIndex(format_index)
         format_row.addWidget(format_label, 0)
-        format_row.addWidget(self.transcribe_format_combo, 1)
+        format_row.addWidget(self.transcribe_format_combo, 0)
         format_row.addStretch()
         file_layout.addLayout(format_row)
-        
+
         # Whisper model selector
         model_row = QHBoxLayout()
         model_label = QLabel("Whisper Model:")
-        model_label.setFixedWidth(120)
+        model_label.setFixedWidth(_LABEL_W)
         self.transcribe_model_combo = QComboBox()
-        self.transcribe_model_combo.addItems(["tiny", "base", "small", "medium", "large", "turbo"])
+        self.transcribe_model_combo.setFixedWidth(_COMBO_W)
+        for _m_name, _m_size in [
+            ("tiny",   "~75 MB"),
+            ("base",   "~145 MB"),
+            ("small",  "~465 MB"),
+            ("medium", "~1.5 GB"),
+            ("large",  "~2.9 GB"),
+            ("turbo",  "~1.6 GB"),
+        ]:
+            self.transcribe_model_combo.addItem(f"{_m_name} ({_m_size})", _m_name)
         current_model = self.config.get("whisper_model", "turbo")
-        model_index = self.transcribe_model_combo.findText(current_model)
+        model_index = self.transcribe_model_combo.findData(current_model)
         if model_index >= 0:
             self.transcribe_model_combo.setCurrentIndex(model_index)
         else:
-            self.transcribe_model_combo.setCurrentText("turbo")
-        # Save model when changed
-        self.transcribe_model_combo.currentTextChanged.connect(self.save_whisper_model)
-        model_info = QLabel("(Turbo recommended for best accuracy/speed, ~1.5 GB)")
-        model_info.setStyleSheet("color: #666; font-size: 12px;")
+            self.transcribe_model_combo.setCurrentIndex(self.transcribe_model_combo.findData("turbo"))
+        # Save model key (not display text) when changed
+        self.transcribe_model_combo.currentIndexChanged.connect(
+            lambda: self.save_whisper_model(self.transcribe_model_combo.currentData())
+        )
         model_row.addWidget(model_label, 0)
-        model_row.addWidget(self.transcribe_model_combo, 1)
-        model_row.addWidget(model_info, 1)
+        model_row.addWidget(self.transcribe_model_combo, 0)
         model_row.addStretch()
         file_layout.addLayout(model_row)
+
         file_group.setLayout(file_layout)
         layout.addWidget(file_group)
-        
-        # Action buttons
-        buttons_layout = QHBoxLayout()
-        
+
+        # Action bar: separated from the form by a top border
+        action_bar = QFrame()
+        action_bar.setStyleSheet("QFrame { border-top: 1px solid #e0e0e0; }")
+        action_bar_layout = QHBoxLayout(action_bar)
+        action_bar_layout.setContentsMargins(0, 6, 0, 2)
+        action_bar_layout.setSpacing(8)
+
+        gear_btn = QPushButton("⚙  Advanced options")
+        gear_btn.setToolTip("Open advanced transcription settings")
+        gear_btn.setStyleSheet(
+            "QPushButton { background: #f5f5f5; border: 1px solid #ccc; border-radius: 4px;"
+            "  font-size: 11px; color: #555; padding: 4px 10px; }"
+            "QPushButton:hover { background: #eaeaea; border-color: #aaa; color: #333; }"
+            "QPushButton:pressed { background: #d8d8d8; }"
+        )
+        gear_btn.clicked.connect(self.open_whisper_options)
+
         self.transcribe_main_btn = QPushButton("Transcribe")
-        # Apply same styling as other buttons in the app
-        hover_color = "#b1588a"
-        self.transcribe_main_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: #d168a3;
-                color: white;
-                border: none;
-                border-radius: 5px;
-                padding: 4px 12px;
-                font-weight: bold;
-                min-height: 18px;
-                outline: none;
-            }}
-            QPushButton:hover {{
-                background-color: {hover_color};
-                border: none;
-                outline: none;
-            }}
-            QPushButton:pressed {{
-                background-color: {hover_color};
-                border: none;
-                outline: none;
-            }}
-        """)
-        self.transcribe_main_btn.clicked.connect(self.transcribe_from_tab)
+        self.transcribe_main_btn.setProperty("ui_role", "transcribe")
+        self.transcribe_main_btn.clicked.connect(self._transcribe_from_tab_by_method)
+
+        action_bar_layout.addWidget(gear_btn)
+        action_bar_layout.addWidget(self.transcribe_main_btn)
+        action_bar_layout.addStretch()
+        layout.addWidget(action_bar)
         
-        transcribe_long_btn = QPushButton("Transcribe longer video")
-        transcribe_long_btn.setToolTip(
-            "Use this for files over ~5 minutes. Splits audio into short segments via voice detection "
-            "(Silero VAD), then transcribes each with Whisper. Prevents hallucination caused by long "
-            "silences or extended audio. Takes roughly 1–2× the file duration on CPU."
+        transcribe_log_group, self.transcribe_log_output = self._make_log_panel(
+            placeholder="Logs will appear here after processing starts"
         )
-        transcribe_long_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #c46ea1;
-                color: white;
-                border: none;
-                border-radius: 5px;
-                padding: 4px 12px;
-                font-weight: bold;
-                min-height: 18px;
-            }
-            QPushButton:hover {
-                background-color: #b85d90;
-            }
-            QPushButton:pressed {
-                background-color: #a04d80;
-            }
-        """)
-        transcribe_long_btn.clicked.connect(self.transcribe_long_from_tab)
-        
-        transcribe_cpp_btn = QPushButton("Transcribe (Whisper CPP)")
-        transcribe_cpp_btn.setToolTip(
-            "Uses whisper.cpp. Faster, built-in VAD. Requires whisper.cpp binary (whisper-cli or main); models auto-download on first use."
-        )
-        transcribe_cpp_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #a85d8a;
-                color: white;
-                border: none;
-                border-radius: 5px;
-                padding: 4px 12px;
-                font-weight: bold;
-                min-height: 18px;
-            }
-            QPushButton:hover {
-                background-color: #984d7a;
-            }
-            QPushButton:pressed {
-                background-color: #8a4570;
-            }
-        """)
-        transcribe_cpp_btn.clicked.connect(self.transcribe_whisper_cpp_from_tab)
-        
-        advanced_btn = QPushButton("Advanced Options...")
-        advanced_btn.clicked.connect(self.open_whisper_options)
-        
-        buttons_layout.addWidget(self.transcribe_main_btn, 2)
-        buttons_layout.addWidget(transcribe_long_btn, 2)
-        buttons_layout.addWidget(transcribe_cpp_btn, 2)
-        buttons_layout.addWidget(advanced_btn, 1)
-        layout.addLayout(buttons_layout)
-        
-        transcribe_hint = QLabel(
-            "Use \"Transcribe\" for short clips. Use \"Transcribe longer video\" for files over ~5 min (VAD-assisted, prevents hallucination). "
-            "Use \"Transcribe (Whisper CPP)\" for a faster alternative with built-in VAD (requires whisper.cpp installed)."
-        )
-        transcribe_hint.setStyleSheet("color: #666; font-size: 12px;")
-        transcribe_hint.setWordWrap(True)
-        layout.addWidget(transcribe_hint)
-        
-        # Log output
-        transcribe_log_group = QGroupBox("LOG OUTPUT")
-        transcribe_log_group.setStyleSheet("QGroupBox { font-weight: bold; }")
-        transcribe_log_layout = QVBoxLayout()
-        self.transcribe_log_output = QTextEdit()
-        self.transcribe_log_output.setReadOnly(True)
-        self.transcribe_log_output.setFont(QFont("Monaco", 9))
-        self.transcribe_log_output.setMinimumHeight(180)
-        self.transcribe_log_output.setStyleSheet("QTextEdit { background-color: #f5f5f5; border: 1px solid #ddd; border-radius: 3px; }")
-        transcribe_log_layout.addWidget(self.transcribe_log_output)
-        transcribe_log_group.setLayout(transcribe_log_layout)
         layout.addWidget(transcribe_log_group)
         
         # Progress bar for transcription
@@ -5677,6 +6322,18 @@ class VideoProcessingApp(QMainWindow):
         tab.setLayout(layout)
         return tab
     
+    def _transcribe_from_tab_by_method(self):
+        """Dispatch to the appropriate transcription handler based on method selection."""
+        method = self.transcribe_method_combo.currentData()
+        if method == "standard":
+            self.transcribe_from_tab()
+        elif method == "long":
+            self.transcribe_long_from_tab()
+        elif method == "cpp":
+            self.transcribe_whisper_cpp_from_tab()
+        else:
+            self.transcribe_from_tab()
+
     def save_whisper_model(self, model: str):
         """Save Whisper model selection to config."""
         config = load_config()
@@ -5730,7 +6387,7 @@ class VideoProcessingApp(QMainWindow):
             return
 
         # Get model from combo (saved to config automatically)
-        model = self.transcribe_model_combo.currentText()
+        model = self.transcribe_model_combo.currentData()
         
         # Get whisper options from config
         config = load_config()
@@ -5883,7 +6540,7 @@ class VideoProcessingApp(QMainWindow):
                 "Please select a language before transcribing."
             )
             return
-        model = self.transcribe_model_combo.currentText()
+        model = self.transcribe_model_combo.currentData()
         config = load_config()
         whisper_model_asked = config.get("whisper_model_asked", False)
         if not whisper_model_asked:
@@ -5990,7 +6647,7 @@ class VideoProcessingApp(QMainWindow):
             )
             return
         # Use same model as UI selector
-        ui_model = self.transcribe_model_combo.currentText()
+        ui_model = self.transcribe_model_combo.currentData()
         model_name = "large-v3-turbo" if ui_model == "turbo" else ui_model
         n = len(video_paths)
         self.transcribe_log(f"Starting Whisper CPP transcription of {n} file(s)")
@@ -6014,11 +6671,11 @@ class VideoProcessingApp(QMainWindow):
         self.worker.finished.connect(self.on_transcribe_finished)
         self.worker.start()
 
-    def create_remuxing_tab(self):
+    def build_remux_tab(self):
         """Create the dedicated remuxing tab."""
         tab = QWidget()
         layout = QVBoxLayout()
-        layout.setSpacing(12)
+        layout.setSpacing(LAYOUT_SPACING)
         
         # Header
         header_row = QHBoxLayout()
@@ -6045,21 +6702,25 @@ class VideoProcessingApp(QMainWindow):
         # Buttons row - primary actions first
         buttons_row = QHBoxLayout()
         add_files_btn = QPushButton("Add Files...")
+        add_files_btn.setProperty("ui_role", "remux")
         add_files_btn.clicked.connect(self.add_remux_files)
         auto_match_btn = QPushButton("Auto-match Subtitles")
-        auto_match_btn.setToolTip("Find SRT/VTT with same name as each video (same folder or Subtitles folder) and attach.")
+        auto_match_btn.setProperty("ui_role", "remux")
         auto_match_btn.clicked.connect(self.auto_match_remux_subtitles)
         buttons_row.addWidget(add_files_btn)
         buttons_row.addWidget(auto_match_btn)
         buttons_row.addSpacing(10)
         remove_files_btn = QPushButton("Remove")
+        remove_files_btn.setProperty("ui_role", "remux")
         remove_files_btn.clicked.connect(self.remove_remux_files)
         clear_files_btn = QPushButton("Clear")
+        clear_files_btn.setProperty("ui_role", "remux")
         clear_files_btn.clicked.connect(self.clear_remux_files)
         buttons_row.addWidget(remove_files_btn)
         buttons_row.addWidget(clear_files_btn)
         buttons_row.addStretch()
         media_info_btn = QPushButton("Media Info")
+        media_info_btn.setProperty("ui_role", "remux")
         media_info_btn.clicked.connect(self.show_media_info)
         buttons_row.addWidget(media_info_btn)
         file_layout.addLayout(buttons_row)
@@ -6087,11 +6748,21 @@ class VideoProcessingApp(QMainWindow):
                 color: white;
             }
         """)
-        # Enable context menu
         self.remux_files_tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.remux_files_tree.customContextMenuRequested.connect(self.show_track_context_menu)
-        file_layout.addWidget(self.remux_files_tree)
-        
+
+        # Empty state placeholder (shown in tree area when no files)
+        self.remux_empty_placeholder = QLabel("No files added yet. Click Add Files to get started.")
+        self.remux_empty_placeholder.setAlignment(Qt.AlignCenter)
+        self.remux_empty_placeholder.setStyleSheet("color: #888; font-size: 12px; padding: 24px; background-color: #f5f5f5; border: 1px solid #ddd; border-radius: 3px;")
+        self.remux_empty_placeholder.setMinimumHeight(120)
+
+        self.remux_tree_stack = QStackedWidget()
+        self.remux_tree_stack.addWidget(self.remux_empty_placeholder)
+        self.remux_tree_stack.addWidget(self.remux_files_tree)
+        self.remux_tree_stack.setCurrentWidget(self.remux_empty_placeholder)
+        file_layout.addWidget(self.remux_tree_stack)
+
         # File count label
         self.remux_file_count_label = QLabel("No files selected")
         self.remux_file_count_label.setStyleSheet("color: #666; font-size: 10px;")
@@ -6110,25 +6781,19 @@ class VideoProcessingApp(QMainWindow):
         actions_row.addWidget(self.remux_default_output_format)
         actions_row.addSpacing(20)
         remux_selected_btn = QPushButton("Remux Selected")
+        remux_selected_btn.setProperty("ui_role", "remux")
         remux_selected_btn.clicked.connect(self.remux_selected_files_action)
         actions_row.addWidget(remux_selected_btn)
         split_audio_btn = QPushButton("Split Audio")
+        split_audio_btn.setProperty("ui_role", "remux")
         split_audio_btn.clicked.connect(self.split_audio_channels_batch)
         actions_row.addWidget(split_audio_btn)
         actions_row.addStretch()
         layout.addLayout(actions_row)
         
-        # Log output
-        remux_log_group = QGroupBox("LOG OUTPUT")
-        remux_log_group.setStyleSheet("QGroupBox { font-weight: bold; }")
-        remux_log_layout = QVBoxLayout()
-        self.remux_log_output = QTextEdit()
-        self.remux_log_output.setReadOnly(True)
-        self.remux_log_output.setFont(QFont("Monaco", 9))
-        self.remux_log_output.setMinimumHeight(180)
-        self.remux_log_output.setStyleSheet("QTextEdit { background-color: #f5f5f5; border: 1px solid #ddd; border-radius: 3px; }")
-        remux_log_layout.addWidget(self.remux_log_output)
-        remux_log_group.setLayout(remux_log_layout)
+        remux_log_group, self.remux_log_output = self._make_log_panel(
+            placeholder="Logs will appear here after processing starts"
+        )
         layout.addWidget(remux_log_group)
         tab.setLayout(layout)
         return tab
@@ -6186,7 +6851,6 @@ class VideoProcessingApp(QMainWindow):
                 sub_btn = self.remux_file_configs.get(video_path, {}).get('subtitle_btn')
                 if sub_btn:
                     sub_btn.setText("✓ Set")
-                    sub_btn.setToolTip(sub_path.name)
                 return True
         return False
     
@@ -6253,7 +6917,6 @@ class VideoProcessingApp(QMainWindow):
         # Col 4 (Channels): subtitle file button - file row repurposes Channels for this
         sub_btn = QPushButton("+ Add" if not sub_path else "✓ Set")
         sub_btn.setFixedWidth(52)
-        sub_btn.setToolTip(sub_path.name if sub_path else "Add subtitle file (SRT/VTT)")
         sub_btn.clicked.connect(lambda checked, path=video_path: self.browse_subtitle_file(path))
         self.remux_files_tree.setItemWidget(file_item, 4, sub_btn)
         self.remux_file_configs[video_path]['subtitle_btn'] = sub_btn
@@ -6374,7 +7037,6 @@ class VideoProcessingApp(QMainWindow):
             sub_btn = self.remux_file_configs.get(video_path, {}).get('subtitle_btn')
             if sub_btn:
                 sub_btn.setText("✓ Set")
-                sub_btn.setToolTip(Path(subtitle_file).name)
     
     def update_file_output_format(self, video_path: Path, output_format: str):
         """Update output format for a specific file."""
@@ -6762,14 +7424,17 @@ class VideoProcessingApp(QMainWindow):
         dialog.exec_()
     
     def update_remux_file_count(self):
-        """Update the file count label."""
+        """Update the file count label and empty state visibility."""
         count = len(self.remux_selected_files)
         if count == 0:
             self.remux_file_count_label.setText("No files selected")
-        elif count == 1:
-            self.remux_file_count_label.setText("1 file selected")
+            self.remux_tree_stack.setCurrentWidget(self.remux_empty_placeholder)
         else:
-            self.remux_file_count_label.setText(f"{count} files selected")
+            self.remux_tree_stack.setCurrentWidget(self.remux_files_tree)
+            if count == 1:
+                self.remux_file_count_label.setText("1 file selected")
+            else:
+                self.remux_file_count_label.setText(f"{count} files selected")
     
     
     def split_audio_channels_batch(self):
@@ -6822,78 +7487,96 @@ class VideoProcessingApp(QMainWindow):
         else:
             self._remux_log(f"✓ Split {channel_count} channels for {len(self.remux_selected_files)} file(s)")
     
-    def init_ui(self):
-        """Initialize the UI."""
-        self.setWindowTitle(f"SP Workshop (WLW video processing, translation & subtitling hub) v{__version__}")
-        self.setMinimumSize(900, 700)
-        
-        # Get screen geometry and maximize height
-        screen = QApplication.primaryScreen().availableGeometry()
-        max_height = screen.height() - 50  # Leave some margin for menu bar/taskbar
-        self.resize(900, max_height)
-        
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        main_layout = QVBoxLayout()
-        central_widget.setLayout(main_layout)
-        
-        # Header with app name
+    def _make_log_panel(self, title: str = "LOG OUTPUT", placeholder: str = None):
+        """Returns (group, text_edit). Caller adds to layout."""
+        group = QGroupBox(title)
+        group.setStyleSheet("QGroupBox { font-weight: bold; }")
+        layout = QVBoxLayout()
+        text_edit = QTextEdit()
+        text_edit.setReadOnly(True)
+        text_edit.setFont(QFont("Monaco", 9))
+        text_edit.setMinimumHeight(LOG_MIN_HEIGHT)
+        text_edit.setStyleSheet("QTextEdit { background-color: #f5f5f5; border: 1px solid #ddd; border-radius: 3px; }")
+        if placeholder:
+            text_edit.setPlaceholderText(placeholder)
+        layout.addWidget(text_edit)
+        group.setLayout(layout)
+        return group, text_edit
+
+    def build_header(self, main_layout: QVBoxLayout):
+        """Build header with app name, version, About/FAQ/Settings."""
         header_left_layout = QVBoxLayout()
         header_left_layout.setSpacing(4)
-        
-        # App name with gradient background
+
         app_name_label = OutlinedLabel("SP WORKSHOP")
-        app_name_label.setFont(QFont("Arial", 30, QFont.Bold))
+        app_name_label.setFont(QFont("Arial", 25, QFont.Bold))
         app_name_label.setStyleSheet("""
             background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0,
                 stop:0 #df4300, stop:0.20 #f48a32, stop:0.33 #ffab68,
                 stop:0.5 white, stop:0.66 #dc7bb3, stop:0.80 #c46ea1, stop:1 #b42075);
-            padding: 8px 16px;
+            padding: 4px 10px;
             border-radius: 5px;
         """)
-        
         header_left_layout.addWidget(app_name_label)
-        
-        # Version number below title
-        version_label = QLabel(f'version {__version__} "{VERSION_CODENAME}"')
-        version_label.setFont(QFont("Arial", 13))
-        version_label.setStyleSheet("color: #999; font-style: italic;")
-        header_left_layout.addWidget(version_label)
-        
+
         header_layout = QHBoxLayout()
-        header_layout.setSpacing(15)
+        header_layout.setSpacing(8)
         header_left_widget = QWidget()
         header_left_widget.setLayout(header_left_layout)
         header_layout.addWidget(header_left_widget)
-        
         header_layout.addStretch()
-        
-        # Top bar with About, FAQ, and Settings
+
         about_btn = QPushButton("About")
+        about_btn.setProperty("ui_role", "header")
+        about_btn.setFont(QFont("Arial", 10))
         about_btn.clicked.connect(self.open_about)
         faq_btn = QPushButton("FAQ")
+        faq_btn.setProperty("ui_role", "header")
+        faq_btn.setFont(QFont("Arial", 10))
         faq_btn.clicked.connect(self.open_faq)
         settings_btn = QPushButton("Settings")
+        settings_btn.setProperty("ui_role", "header")
+        settings_btn.setFont(QFont("Arial", 10))
         settings_btn.clicked.connect(self.open_settings)
         header_layout.addWidget(about_btn)
         header_layout.addWidget(faq_btn)
         header_layout.addWidget(settings_btn)
-        
+
         main_layout.addLayout(header_layout)
-        
-        # Main tabs
-        self.main_tabs = QTabWidget()
-        
-        # Download tab
+
+    def build_download_tab(self) -> QWidget:
+        """Build the Download tab."""
         download_tab = QWidget()
         download_tab_layout = QVBoxLayout()
+        download_tab_layout.setSpacing(LAYOUT_SPACING)
         download_tab.setLayout(download_tab_layout)
-        
-        download_group = QGroupBox("DOWNLOAD")
-        download_group.setStyleSheet("QGroupBox { font-weight: bold; }")
-        download_layout = QVBoxLayout()
-        
-        # Naming row
+
+        _folder_strip_style = "QPushButton { background: none; color: #777; border: none; padding: 2px 6px; font-size: 10px; } QPushButton:hover { color: #555; text-decoration: underline; } QPushButton:pressed { color: #333; }"
+        dl_folder_bar = QFrame()
+        dl_folder_bar.setStyleSheet("QFrame { background: #f5f5f5; border-bottom: 1px solid #e0e0e0; }")
+        dl_folder_layout = QHBoxLayout(dl_folder_bar)
+        dl_folder_layout.setContentsMargins(4, 4, 4, 4)
+        dl_open_downloads_top = QPushButton("Open downloads folder")
+        dl_open_downloads_top.setStyleSheet(_folder_strip_style)
+        dl_open_downloads_top.clicked.connect(lambda: open_folder_in_explorer(get_downloads_dir()))
+        dl_open_subtitles_top = QPushButton("Open subtitles folder")
+        dl_open_subtitles_top.setStyleSheet(_folder_strip_style)
+        dl_open_subtitles_top.clicked.connect(lambda: open_folder_in_explorer(get_subtitles_dir()))
+        dl_open_output_top = QPushButton("Open output folder")
+        dl_open_output_top.setStyleSheet(_folder_strip_style)
+        dl_open_output_top.clicked.connect(lambda: open_folder_in_explorer(get_output_dir()))
+        dl_folder_layout.addWidget(dl_open_downloads_top)
+        dl_folder_layout.addWidget(dl_open_subtitles_top)
+        dl_folder_layout.addWidget(dl_open_output_top)
+        dl_folder_layout.addStretch()
+        download_tab_layout.addWidget(dl_folder_bar)
+
+        # Naming/options group
+        naming_group = QGroupBox("Naming options")
+        naming_group.setStyleSheet("QGroupBox { font-weight: bold; }")
+        naming_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        naming_layout = QVBoxLayout()
+        naming_layout.setContentsMargins(8, 4, 8, 6)
         naming_row1 = QHBoxLayout()
         naming_row1.addWidget(QLabel("Mode:"))
         self.download_mode_combo = QComboBox()
@@ -6904,7 +7587,8 @@ class VideoProcessingApp(QMainWindow):
         naming_row1.addWidget(QLabel("Name:"))
         self.download_name_input = QLineEdit()
         self.download_name_input.setPlaceholderText("e.g. Show Name (2025)")
-        self.download_name_input.setMinimumWidth(160)
+        self.download_name_input.setMinimumWidth(140)
+        self.download_name_input.setMaximumWidth(220)
         naming_row1.addWidget(self.download_name_input)
 
         self.download_s01e_check = QCheckBox("Use S01E02")
@@ -6926,17 +7610,9 @@ class VideoProcessingApp(QMainWindow):
         self.download_items_input.setText("1")
         self.download_items_input.setMaximumWidth(120)
         self.download_items_input.setPlaceholderText("1 or 1-5 or 1,3,5-7")
-        self.download_items_input.setToolTip("Episode numbers or range:\n• Single: 1\n• Range: 1-5\n• Mixed: 1,3,5-7,10")
         naming_row1.addWidget(self.download_items_input)
 
         naming_row1.addStretch()
-        instructions_btn = QPushButton("How to get commands")
-        instructions_btn.setFlat(True)
-        instructions_btn.setStyleSheet("color: #0066cc; text-decoration: underline;")
-        instructions_btn.setCursor(Qt.PointingHandCursor)
-        instructions_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(DOWNLOAD_INSTRUCTIONS_URL)))
-        instructions_btn.setToolTip("Opens instructions in your browser")
-        naming_row1.addWidget(instructions_btn)
 
         def _update_naming_visibility():
             is_episodes = self.download_mode_combo.currentText() == "Episode(s)"
@@ -6950,24 +7626,46 @@ class VideoProcessingApp(QMainWindow):
         self.download_mode_combo.currentTextChanged.connect(_update_naming_visibility)
         self.download_s01e_check.toggled.connect(_update_naming_visibility)
 
-        download_layout.addLayout(naming_row1)
-        
-        download_label = QLabel("Commands (one per line, paste full command per instructions):")
-        download_layout.addWidget(download_label)
-        
+        naming_layout.addLayout(naming_row1)
+        naming_group.setLayout(naming_layout)
+        download_tab_layout.addWidget(naming_group)
+
+        # Commands group
+        commands_group = QGroupBox()
+        commands_group.setStyleSheet("QGroupBox { font-weight: bold; font-size: 11px; }")
+        commands_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        commands_layout = QVBoxLayout()
+        commands_layout.setContentsMargins(8, 4, 8, 6)
+        commands_layout.setSpacing(4)
+
+        commands_header_row = QHBoxLayout()
+        commands_heading = QLabel("Commands")
+        commands_heading.setStyleSheet("font-weight: bold;")
+        commands_header_row.addWidget(commands_heading)
+        commands_header_row.addSpacing(8)
+        commands_how_btn = QPushButton("How to get commands")
+        commands_how_btn.setFlat(True)
+        commands_how_btn.setStyleSheet("color: #0066cc; text-decoration: underline; font-weight: normal; font-size: 11px;")
+        commands_how_btn.setCursor(Qt.PointingHandCursor)
+        commands_how_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(DOWNLOAD_INSTRUCTIONS_URL)))
+        commands_header_row.addWidget(commands_how_btn)
+        commands_header_row.addStretch()
+        commands_layout.addLayout(commands_header_row)
+
         self.commands_text = QTextEdit()
         self.commands_text.setPlaceholderText(
-            '"https://..." -H "..." --key KID:KEY\n'
-            '"https://..." -H "..." --key KID:KEY\n'
-            '(see How to get commands for format)'
+            'Paste commands, one per line. See "How to get commands" for format.'
         )
+        self.commands_text.setMinimumHeight(90)
         self.commands_text.setMaximumHeight(120)
-        self.commands_text.setMinimumHeight(80)
-        download_layout.addWidget(self.commands_text)
-        
+        commands_layout.addWidget(self.commands_text)
+        commands_group.setLayout(commands_layout)
+        download_tab_layout.addWidget(commands_group)
+        download_tab_layout.addSpacing(-4)
+
+        # Action row: Quality → Download (primary) → stretch → Clear → Open in LosslessCut
         download_buttons = QHBoxLayout()
         self.download_quality_combo = QComboBox()
-        # Resolution fallback
         for name, code in [
             ("480p", 'res="480":for=best'),
             ("720p", 'res="720|480":for=best'),
@@ -6978,114 +7676,168 @@ class VideoProcessingApp(QMainWindow):
             self.download_quality_combo.addItem(name, code)
         self.download_quality_combo.setCurrentIndex(self.download_quality_combo.findData("best"))
         self.download_quality_combo.setMaximumWidth(120)
-        clear_btn = QPushButton("Clear")
-        clear_btn.clicked.connect(lambda: self.commands_text.clear())
         download_btn = QPushButton("(Batch) Download")
+        download_btn.setProperty("ui_role", "download")
+        download_btn.setMinimumWidth(160)
         download_btn.clicked.connect(lambda: self.download_episodes(self.download_quality_combo.currentData()))
+        clear_btn = QPushButton("Clear")
+        clear_btn.setStyleSheet(
+            "QPushButton { color: #c0392b; border: 1px solid #e8c0bb; background: #fff5f4; "
+            "border-radius: 3px; padding: 4px 10px; } "
+            "QPushButton:hover { background: #fde8e6; } "
+            "QPushButton:pressed { background: #f9d0cc; }"
+        )
+        clear_btn.setCursor(Qt.PointingHandCursor)
+        clear_btn.clicked.connect(lambda: self.commands_text.clear())
         open_lossless_btn = QPushButton("Open in LosslessCut...")
+        open_lossless_btn.setStyleSheet(
+            "QPushButton { color: #555; border: 1px solid #ccc; background: #f9f9f9; "
+            "border-radius: 3px; padding: 4px 10px; } "
+            "QPushButton:hover { background: #efefef; } "
+            "QPushButton:pressed { background: #e5e5e5; }"
+        )
+        open_lossless_btn.setCursor(Qt.PointingHandCursor)
         open_lossless_btn.clicked.connect(self.open_lossless_cut)
-        open_downloads_btn = QPushButton("Open Downloads folder")
-        open_downloads_btn.clicked.connect(lambda: open_folder_in_explorer(get_downloads_dir()))
         download_buttons.addWidget(self.download_quality_combo)
         download_buttons.addWidget(download_btn)
+        download_buttons.addStretch()
         download_buttons.addWidget(clear_btn)
         download_buttons.addWidget(open_lossless_btn)
-        download_buttons.addWidget(open_downloads_btn)
-        download_layout.addLayout(download_buttons)
-        download_group.setLayout(download_layout)
-        download_tab_layout.addWidget(download_group)
-        
-        # Download tab log output
-        download_log_group = QGroupBox("LOG OUTPUT")
-        download_log_group.setStyleSheet("QGroupBox { font-weight: bold; }")
-        download_log_layout = QVBoxLayout()
-        self.download_log_output = QTextEdit()
-        self.download_log_output.setReadOnly(True)
-        self.download_log_output.setFont(QFont("Monaco", 9))
-        self.download_log_output.setMinimumHeight(180)
-        self.download_log_output.setStyleSheet("QTextEdit { background-color: #f5f5f5; border: 1px solid #ddd; border-radius: 3px; }")
-        download_log_layout.addWidget(self.download_log_output)
-        download_log_group.setLayout(download_log_layout)
-        download_tab_layout.addWidget(download_log_group)
-        
-        self.main_tabs.addTab(download_tab, "Download")
-        
-        # Subtitles tab
+        download_tab_layout.addLayout(download_buttons)
+
+        download_log_group, self.download_log_output = self._make_log_panel(
+            placeholder="Logs will appear here after processing starts"
+        )
+        download_tab_layout.addWidget(download_log_group, 1)
+
+        return download_tab
+
+    def build_subtitles_tab(self) -> QWidget:
+        """Build the Subtitles tab."""
         main_tab = QWidget()
         layout = QVBoxLayout()
+        layout.setSpacing(LAYOUT_SPACING)
         main_tab.setLayout(layout)
-        
-        # Subtitles tab description
-        subtitles_desc = QLabel(
-            "<h3 style='margin: 0 0 4px 0; font-size: 13px;'>Extract subtitles</h3>"
-            "<p style='margin: 0 0 12px 0;'>Expects MKV files in the downloads folder. Extracts subtitles to the subtitles folder.</p>"
-            "<h3 style='margin: 0 0 4px 0; font-size: 13px;'>Clean subtitles</h3>"
-            "<p style='margin: 0 0 12px 0;'>Works on SRT files in the subtitles folder (e.g. from Extract). Removes color tags in-place.</p>"
-            "<h3 style='margin: 0 0 4px 0; font-size: 13px;'>Translate subtitles</h3>"
-            "<p style='margin: 0 0 12px 0;'>Select SRT files to translate.</p>"
-            "<h3 style='margin: 0 0 4px 0; font-size: 13px;'>Burn subtitles + watermark (720p/1080p)</h3>"
-            "<p style='margin: 0;'>Select video file(s). For each video, looks for a matching SRT in: same directory → subtitles folder → downloads folder. Outputs to the output folder.</p>"
-        )
-        subtitles_desc.setWordWrap(True)
-        subtitles_desc.setTextFormat(Qt.RichText)
-        subtitles_desc.setStyleSheet("color: #555; font-size: 11px; padding: 8px 0;")
-        layout.addWidget(subtitles_desc)
-        
-        # Subtitles section
-        subtitles_group = QGroupBox("SUBTITLES")
-        subtitles_group.setStyleSheet("QGroupBox { font-weight: bold; }")
-        subtitles_layout = QHBoxLayout()
-        extract_btn = QPushButton("Extract subtitles")
-        extract_btn.clicked.connect(self.extract_subtitles)
-        clean_btn = QPushButton("Clean subtitles")
-        clean_btn.clicked.connect(self.clean_subtitles)
-        translate_btn = QPushButton("Translate subtitles")
-        translate_btn.clicked.connect(self.translate_subtitles)
+
+        # All buttons share this fixed width (sized to fit "Open subtitles folder")
+        BUTTON_WIDTH = 200
+
+        _folder_strip_style = "QPushButton { background: none; color: #777; border: none; padding: 2px 6px; font-size: 10px; } QPushButton:hover { color: #555; text-decoration: underline; } QPushButton:pressed { color: #333; }"
+
+        # Folder shortcuts
+        folder_bar = QFrame()
+        folder_bar.setStyleSheet("QFrame { background: #f5f5f5; border-bottom: 1px solid #e0e0e0; }")
+        folder_bar_layout = QHBoxLayout(folder_bar)
+        folder_bar_layout.setContentsMargins(4, 4, 4, 4)
+        open_downloads_btn = QPushButton("Open downloads folder")
+        open_downloads_btn.setStyleSheet(_folder_strip_style)
+        open_downloads_btn.clicked.connect(lambda: open_folder_in_explorer(get_downloads_dir()))
         open_subtitles_btn = QPushButton("Open subtitles folder")
+        open_subtitles_btn.setStyleSheet(_folder_strip_style)
         open_subtitles_btn.clicked.connect(lambda: open_folder_in_explorer(get_subtitles_dir()))
-        subtitles_layout.addWidget(extract_btn)
-        subtitles_layout.addWidget(clean_btn)
-        subtitles_layout.addWidget(translate_btn)
-        subtitles_layout.addWidget(open_subtitles_btn)
-        subtitles_group.setLayout(subtitles_layout)
-        layout.addWidget(subtitles_group)
-        
-        # Process video section
-        process_group = QGroupBox("PROCESS VIDEO")
-        process_group.setStyleSheet("QGroupBox { font-weight: bold; }")
-        process_layout = QHBoxLayout()
-        process_720_btn = QPushButton("Burn subtitles + watermark (720p)")
-        process_720_btn.clicked.connect(lambda: self.process_video("720"))
-        process_1080_btn = QPushButton("Burn subtitles + watermark (1080p)")
-        process_1080_btn.clicked.connect(lambda: self.process_video("1080"))
         open_output_btn = QPushButton("Open output folder")
+        open_output_btn.setStyleSheet(_folder_strip_style)
         open_output_btn.clicked.connect(lambda: open_folder_in_explorer(get_output_dir()))
-        process_layout.addWidget(process_720_btn)
-        process_layout.addWidget(process_1080_btn)
-        process_layout.addWidget(open_output_btn)
-        process_group.setLayout(process_layout)
-        layout.addWidget(process_group)
-        
-        # Progress section (above log output)
+        folder_bar_layout.addWidget(open_downloads_btn)
+        folder_bar_layout.addWidget(open_subtitles_btn)
+        folder_bar_layout.addWidget(open_output_btn)
+        folder_bar_layout.addStretch()
+        layout.addWidget(folder_bar)
+
+        # Process flow: buttons stacked, description on right of each
+        process_frame = QFrame()
+        process_frame.setStyleSheet("QFrame { border: 1px solid #ebebeb; border-radius: 4px; background: #fafafa; }")
+        process_layout = QVBoxLayout(process_frame)
+        process_layout.setSpacing(6)
+        process_layout.setContentsMargins(4, 6, 4, 6)
+
+        extract_row = QHBoxLayout()
+        extract_btn = QPushButton("Extract subtitles")
+        extract_btn.setProperty("ui_role", "subtitle")
+        extract_btn.setFixedWidth(BUTTON_WIDTH)
+        extract_btn.clicked.connect(self.extract_subtitles)
+        extract_desc = QLabel("Expects MKV files in downloads folder. Extracts subtitles to subtitles folder.")
+        extract_desc.setFont(QFont("Arial", 12))
+        extract_desc.setStyleSheet("color: #555;")
+        extract_desc.setWordWrap(True)
+        extract_row.addWidget(extract_btn)
+        extract_row.addWidget(extract_desc, 1)
+        process_layout.addLayout(extract_row)
+
+        clean_row = QHBoxLayout()
+        clean_btn = QPushButton("Clean subtitles")
+        clean_btn.setProperty("ui_role", "subtitle")
+        clean_btn.setFixedWidth(BUTTON_WIDTH)
+        clean_btn.clicked.connect(self.clean_subtitles)
+        clean_desc = QLabel("Works on SRT files in subtitles folder (e.g. from Extract). Cleans color tags, auto-breaks and common errors.")
+        clean_desc.setFont(QFont("Arial", 12))
+        clean_desc.setStyleSheet("color: #555;")
+        clean_desc.setWordWrap(True)
+        clean_row.addWidget(clean_btn)
+        clean_row.addWidget(clean_desc, 1)
+        process_layout.addLayout(clean_row)
+
+        translate_row = QHBoxLayout()
+        translate_btn = QPushButton("Translate subtitles")
+        translate_btn.setProperty("ui_role", "subtitle")
+        translate_btn.setFixedWidth(BUTTON_WIDTH)
+        translate_btn.clicked.connect(self.translate_subtitles)
+        translate_desc = QLabel("Select SRT files to translate.")
+        translate_desc.setFont(QFont("Arial", 12))
+        translate_desc.setStyleSheet("color: #555;")
+        translate_desc.setWordWrap(True)
+        translate_row.addWidget(translate_btn)
+        translate_row.addWidget(translate_desc, 1)
+        process_layout.addLayout(translate_row)
+
+        burn_row = QHBoxLayout()
+        burn_btn = QPushButton("Burn-in subtitles")
+        burn_btn.setFixedWidth(BUTTON_WIDTH)
+        burn_btn.setStyleSheet("""
+            QPushButton {
+                background-color: white;
+                color: #f48a32;
+                border: 2px solid #f48a32;
+                border-radius: 5px;
+                padding: 4px 12px;
+                font-weight: bold;
+                min-height: 18px;
+            }
+            QPushButton:hover { background-color: #fff4ec; }
+            QPushButton:pressed { background-color: #ffe8d4; }
+        """)
+        burn_btn.clicked.connect(self.open_burn_in_dialog)
+        burn_desc = QLabel("Select video file(s), quality and watermark options, then burn.")
+        burn_desc.setFont(QFont("Arial", 12))
+        burn_desc.setStyleSheet("color: #555;")
+        burn_desc.setWordWrap(True)
+        burn_row.addWidget(burn_btn)
+        burn_row.addWidget(burn_desc, 1)
+        process_layout.addLayout(burn_row)
+
+        process_frame.setLayout(process_layout)
+        layout.addWidget(process_frame)
+
         progress_group = QGroupBox("PROGRESS")
+        progress_group.setStyleSheet("QGroupBox { font-weight: bold; font-size: 11px; }")
         progress_layout = QVBoxLayout()
-        progress_layout.setSpacing(8)
-        
-        # Operation type label
+        progress_layout.setSpacing(4)
+        progress_layout.setContentsMargins(8, 12, 8, 8)
+
+        progress_strip = QHBoxLayout()
         self.progress_operation_label = QLabel("Ready")
         self.progress_operation_label.setFont(QFont("Arial", 10, QFont.Bold))
-        progress_layout.addWidget(self.progress_operation_label)
-        
-        # Current file label
+        self.progress_operation_label.setMinimumWidth(100)
+        progress_strip.addWidget(self.progress_operation_label)
+
         self.progress_file_label = QLabel("")
         self.progress_file_label.setFont(QFont("Arial", 9))
         self.progress_file_label.setStyleSheet("color: #666;")
-        progress_layout.addWidget(self.progress_file_label)
-        
-        # Progress bar with counter
-        progress_bar_layout = QHBoxLayout()
+        self.progress_file_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        progress_strip.addWidget(self.progress_file_label, 1)
+
         self.progress_bar = QProgressBar()
-        self.progress_bar.setMinimumHeight(25)
+        self.progress_bar.setMinimumHeight(20)
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
         self.progress_bar.setFormat("%p%")
@@ -7107,10 +7859,9 @@ class VideoProcessingApp(QMainWindow):
         self.progress_counter_label.setFont(QFont("Arial", 9))
         self.progress_counter_label.setMinimumWidth(80)
         self.progress_counter_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        progress_bar_layout.addWidget(self.progress_bar)
-        progress_bar_layout.addWidget(self.progress_counter_label)
-        
-        # Stop button
+        progress_strip.addWidget(self.progress_bar, 2)
+        progress_strip.addWidget(self.progress_counter_label)
+
         self.stop_btn = QPushButton("Stop")
         self.stop_btn.setFixedWidth(80)
         self.stop_btn.clicked.connect(self.stop_operation)
@@ -7134,60 +7885,89 @@ class VideoProcessingApp(QMainWindow):
                 color: #666666;
             }
         """)
-        self.stop_btn.setToolTip("Stop the current operation (Ctrl+C)")
-        progress_bar_layout.addWidget(self.stop_btn)
-        
-        progress_layout.addLayout(progress_bar_layout)
-        
+        progress_strip.addWidget(self.stop_btn)
+
+        progress_layout.addLayout(progress_strip)
         progress_group.setLayout(progress_layout)
-        progress_group.setVisible(False)  # Hidden by default
+        progress_group.setVisible(False)
         layout.addWidget(progress_group)
-        self.progress_group = progress_group  # Store reference
-        
-        # Log output
-        log_group = QGroupBox("LOG OUTPUT")
-        log_group.setStyleSheet("QGroupBox { font-weight: bold; }")
-        log_layout = QVBoxLayout()
-        self.log_output = QTextEdit()
-        self.log_output.setReadOnly(True)
-        self.log_output.setFont(QFont("Monaco", 9))
-        self.log_output.setMinimumHeight(180)
-        self.log_output.setStyleSheet("QTextEdit { background-color: #f5f5f5; border: 1px solid #ddd; border-radius: 3px; }")
-        log_layout.addWidget(self.log_output)
-        log_group.setLayout(log_layout)
+        self.progress_group = progress_group
+
+        log_group, self.log_output = self._make_log_panel(
+            placeholder="Logs will appear here after processing starts"
+        )
         layout.addWidget(log_group)
-        
-        # Add main tab to tabs widget
-        self.main_tabs.addTab(main_tab, "Subtitles")
-        
-        # Add transcription tab
-        transcription_tab = self.create_transcription_tab()
-        self.main_tabs.addTab(transcription_tab, "Transcription")
-        
-        # Add remux tab
-        remuxing_tab = self.create_remuxing_tab()
-        self.main_tabs.addTab(remuxing_tab, "Remux")
-        
-        # Add tabs to main layout
-        main_layout.addWidget(self.main_tabs)
-        
-        # Status bar
+
+        return main_tab
+
+    def build_main_tabs(self) -> QTabWidget:
+        """Build main tab widget with all tabs."""
+        self.main_tabs = QTabWidget()
+        self.main_tabs.addTab(self.build_download_tab(), "Download")
+        self.main_tabs.addTab(self.build_subtitles_tab(), "Subtitles")
+        self.main_tabs.addTab(self.build_transcription_tab(), "Transcription")
+        self.main_tabs.addTab(self.build_remux_tab(), "Remux")
+        return self.main_tabs
+
+    def init_ui(self):
+        """Initialize the UI."""
+        self.setWindowTitle(f"SP Workshop (WLW video processing, translation & subtitling hub) v{__version__}")
+        self.setMinimumSize(900, 700)
+
+        screen = QApplication.primaryScreen().availableGeometry()
+        max_height = screen.height() - 50
+        self.resize(900, max_height)
+
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        main_layout = QVBoxLayout()
+        central_widget.setLayout(main_layout)
+
+        self.build_header(main_layout)
+        main_layout.addWidget(self.build_main_tabs())
+
         self.statusBar().showMessage("Ready")
-        
-        # Apply lesbian flag color scheme to all buttons
         self.apply_lesbian_flag_styles()
-        
-        # Track current operation type for color coding
         self.current_operation = None
     
     
     def log(self, message: str):
-        """Add a message to the log output (both Download and Subtitles tabs)."""
+        """Add a message to both log outputs (global / settings messages)."""
         for widget in (self.log_output, self.download_log_output):
             widget.append(message)
             widget.verticalScrollBar().setValue(
                 widget.verticalScrollBar().maximum()
             )
+
+    def log_download(self, message: str):
+        """Add a message to the Download tab log only."""
+        self.download_log_output.append(message)
+        self.download_log_output.verticalScrollBar().setValue(
+            self.download_log_output.verticalScrollBar().maximum()
+        )
+
+    def log_subtitles(self, message: str):
+        """Add a message to the Subtitles tab log only."""
+        self.log_output.append(message)
+        self.log_output.verticalScrollBar().setValue(
+            self.log_output.verticalScrollBar().maximum()
+        )
+
+    def _log_route(self, message: str):
+        """Route a log message to the appropriate tab based on current_operation."""
+        download_ops = {"Downloading episodes"}
+        subtitle_ops = {
+            "Extracting subtitles", "Cleaning subtitles",
+            "Translating subtitles", "Processing videos",
+            "Remuxing videos", "Transcribing video", "Transcribing video (long)",
+        }
+        op = self.current_operation
+        if op in download_ops:
+            self.log_download(message)
+        elif op in subtitle_ops:
+            self.log_subtitles(message)
+        else:
+            self.log(message)
     
     def open_about(self):
         """Open About dialog."""
@@ -7207,8 +7987,10 @@ class VideoProcessingApp(QMainWindow):
             self.log("Settings saved.")
     
     def open_whisper_options(self):
-        """Open Whisper advanced options dialog."""
-        dialog = WhisperOptionsDialog(self)
+        """Open Whisper advanced options dialog, pre-selected to the current engine."""
+        method = self.transcribe_method_combo.currentData()
+        initial = "openai" if method in ("standard", "long") else "cpp"
+        dialog = WhisperOptionsDialog(self, initial_method=initial)
         if dialog.exec_() == QDialog.Accepted:
             # Reload config after whisper options are saved
             self.config = load_config()
@@ -7255,7 +8037,7 @@ class VideoProcessingApp(QMainWindow):
         self.statusBar().showMessage("Running...")
         
         self.worker = ScriptWorker(script_func, *args, **kwargs)
-        self.worker.log_message.connect(self.log)
+        self.worker.log_message.connect(self._log_route)
         self.worker.progress_update.connect(self.on_progress_update)
         self.worker.finished.connect(self.on_script_finished)
         self.worker.start()
@@ -7437,11 +8219,17 @@ class VideoProcessingApp(QMainWindow):
         self.run_script(extract_subtitles, downloads_dir, subtitles_dir)
     
     def clean_subtitles(self):
-        """Clean subtitles."""
-        subtitles_dir = get_subtitles_dir()
+        """Clean subtitles. Opens dialog to select fixes, then runs."""
+        dlg = CleanSubtitlesDialog(self, self.config)
+        if dlg.exec_() != QDialog.Accepted:
+            return
+        enabled_fixes = dlg.get_enabled_fixes()
+        dlg.save_selection_to_config()
+        self.config = load_config()
         
+        subtitles_dir = get_subtitles_dir()
         self.log("Starting subtitle cleaning...")
-        self.run_script(clean_subtitles, subtitles_dir)
+        self.run_script(clean_subtitles, subtitles_dir, enabled_fixes)
     
     def translate_subtitles(self):
         """Translate subtitles."""
@@ -7515,25 +8303,33 @@ class VideoProcessingApp(QMainWindow):
             self.log(f"Using {len(api_keys)} API key(s) (quota retry enabled)")
         self.run_script(translate_subtitles, file_paths, target_language, use_iso639, api_keys)
     
-    def process_video(self, resolution: str):
-        """Process video."""
-        # Open file picker to select video files
-        file_paths, _ = QFileDialog.getOpenFileNames(
-            self, f"Select Video Files to Process ({resolution}p)",
-            str(get_downloads_dir()),
-            "Video Files (*.mkv *.mp4 *.mov);;All Files (*)"
-        )
-        
-        if not file_paths:
+    def open_burn_in_dialog(self):
+        """Open the Burn-in subtitles configuration dialog."""
+        dlg = BurnInDialog(self.config, parent=self)
+        if dlg.exec_() != QDialog.Accepted:
             return
-        
+        if not dlg.selected_files:
+            QMessageBox.warning(self, "No files", "Please add at least one video file.")
+            return
+        self.process_video(
+            file_paths=dlg.selected_files,
+            resolution=dlg.get_resolution(),
+            use_watermarks=dlg.get_use_watermarks(),
+            watermark_path_override=dlg.get_watermark_path(),
+        )
+
+    def process_video(self, file_paths: list, resolution: str,
+                      use_watermarks: bool = None, watermark_path_override: str = None):
+        """Process video files: burn subtitles, resize, optionally add watermark."""
         subtitles_dir = get_subtitles_dir()
         output_dir = get_output_dir()
-        
-        use_watermarks = self.config.get("use_watermarks", True)
-        watermark_key = f"watermark_{resolution}p"
-        watermark_path = self.config.get(watermark_key, "")
-        
+
+        if use_watermarks is None:
+            use_watermarks = self.config.get("use_watermarks", True)
+
+        watermark_path = watermark_path_override if watermark_path_override is not None \
+            else self.config.get(f"watermark_{resolution}p", "")
+
         if use_watermarks:
             if not watermark_path or not Path(watermark_path).exists():
                 QMessageBox.warning(
@@ -7541,11 +8337,10 @@ class VideoProcessingApp(QMainWindow):
                     f"Watermark file for {resolution}p not found. Please set it in Settings or disable watermarks."
                 )
                 return
-        
-        # Get ISO 639 settings from config
+
         use_iso639 = self.config.get("use_iso639_suffixes", False)
         target_language = self.config.get("translation_target_language", "English")
-        
+
         self.log(f"Starting video processing ({resolution}p) for {len(file_paths)} file(s)...")
         if use_iso639:
             self.log(f"ISO 639 mode enabled - looking for .{ISO_639_CODES.get(target_language, 'eng')}.srt files")
@@ -7604,7 +8399,7 @@ class VideoProcessingApp(QMainWindow):
             language_code = lang_dialog.get_language_code()
             
         # Get model from combo (saved to config automatically)
-        model = self.transcribe_model_combo.currentText()
+        model = self.transcribe_model_combo.currentData()
         
         # Get whisper options from config
         config = load_config()

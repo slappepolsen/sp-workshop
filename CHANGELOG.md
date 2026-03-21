@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Subtitles, Download, and Transcription tabs: folder shortcut strip at top of each tab
+  (Open downloads / subtitles / output folder — light grey bar, text-only links).
+- Subtitles tab: each action row shows a button + inline description beside it
+  (replaces the old top-of-tab description block from alpha.7).
+- CleanSubtitlesDialog: selection dialog with 12 optional SRT fixes (Remove color tags
+  always on). Select fixes, Apply selected. Selection persisted in settings.
+- BurnInDialog: dedicated dialog for burn-in configuration (quality selector 720p/1080p,
+  watermark toggle/browse, file list with add/remove/clear).
+- Transcription tab: unified method combobox (Standard / Long video / Whisper CPP) +
+  single Transcribe button + gear "Advanced options" button; replaces three separate
+  per-method buttons from alpha.7.
+- WhisperOptionsDialog: engine toggle (Whisper CPP / OpenAI Whisper) with per-engine
+  parameter reference and extra args; opens pre-selected for the active method.
+- WhisperOptionsDialog: comprehensive Whisper CPP (whisper-cli) parameter reference
+  (decoding flags, thresholds, VAD options, defaults).
+- Whisper model selector: dropdown now shows model file sizes (e.g. `turbo (~1.6 GB)`).
+
+### Changed
+- Subtitles tab: SUBTITLES and PROCESS VIDEO QGroupBoxes replaced by card-style
+  process frame; "Burn subtitles + watermark (720p/1080p)" split buttons replaced by
+  single "Burn-in subtitles" button opening BurnInDialog.
+- `clean_subtitles()`: extended with `enabled_fixes` parameter; applies selected fixes
+  in addition to always-on color tag removal.
+- `init_ui` refactored into `build_header`, `build_download_tab`, `build_subtitles_tab`,
+  `build_transcription_tab`, `build_main_tabs`.
+- Button theming: `apply_button_colors()` refactored to use `ui_role` button property
+  instead of parent QGroupBox traversal.
+
+### Removed
+- Subtitles tab description block (alpha.7 feature) — replaced by inline row descriptions.
+- Transcription tab description block (alpha.7 feature) — replaced by folder strip + method combo.
+
 ## [10.4.0-alpha.7] - 2026-03-19
 
 ### Added
