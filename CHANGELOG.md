@@ -7,26 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [10.4.0-alpha.8] - 2026-03-21
+
 ### Added
-- Subtitles, Download, and Transcription tabs have a folder shortcut strip at top of each tab
-- Subtitles tab: each action row shows a button + inline description beside it
+- Subtitles, Download, and Transcription tabs: folder shortcut strip at top of each tab.
+- Subtitles tab: each action row shows a button + inline description beside it.
 - CleanSubtitlesDialog: selection dialog with 12 optional SRT fixes (Remove color tags
   always on). Select fixes, Apply selected. Selection persisted in settings.
 - BurnInDialog: dedicated dialog for burn-in configuration (quality selector 720p/1080p,
   watermark toggle/browse, file list with add/remove/clear).
 - Transcription tab: unified method combobox (Standard / Long video / Whisper CPP) +
-  single Transcribe button + gear "Advanced options" button
+  single Transcribe button + gear "Advanced options" button.
 - WhisperOptionsDialog: engine toggle (Whisper CPP / OpenAI Whisper) with per-engine
-  parameter reference and extra args; opens pre-selected for the active method.
+  parameter reference and extra args, opens pre-selected for the active method.
 - WhisperOptionsDialog: comprehensive Whisper CPP (whisper-cli) parameter reference
   (decoding flags, thresholds, VAD options, defaults).
 - Whisper model selector: dropdown now shows model file sizes (e.g. `turbo (~1.6 GB)`).
 
 ### Changed
 - Subtitles tab: SUBTITLES and PROCESS VIDEO QGroupBoxes replaced by card-style
-  process frame; "Burn subtitles + watermark (720p/1080p)" split buttons replaced by
+  process frame, "Burn subtitles + watermark (720p/1080p)" split buttons replaced by
   single "Burn-in subtitles" button opening BurnInDialog.
-- `clean_subtitles()`: extended with `enabled_fixes` parameter; applies selected fixes
+- `clean_subtitles()`: extended with `enabled_fixes` parameter, applies selected fixes
   in addition to always-on color tag removal.
 - `init_ui` refactored into `build_header`, `build_download_tab`, `build_subtitles_tab`,
   `build_transcription_tab`, `build_main_tabs`.
