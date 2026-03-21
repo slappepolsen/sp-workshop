@@ -8,17 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Subtitles, Download, and Transcription tabs: folder shortcut strip at top of each tab
-  (Open downloads / subtitles / output folder — light grey bar, text-only links).
+- Subtitles, Download, and Transcription tabs have a folder shortcut strip at top of each tab
 - Subtitles tab: each action row shows a button + inline description beside it
-  (replaces the old top-of-tab description block from alpha.7).
 - CleanSubtitlesDialog: selection dialog with 12 optional SRT fixes (Remove color tags
   always on). Select fixes, Apply selected. Selection persisted in settings.
 - BurnInDialog: dedicated dialog for burn-in configuration (quality selector 720p/1080p,
   watermark toggle/browse, file list with add/remove/clear).
 - Transcription tab: unified method combobox (Standard / Long video / Whisper CPP) +
-  single Transcribe button + gear "Advanced options" button; replaces three separate
-  per-method buttons from alpha.7.
+  single Transcribe button + gear "Advanced options" button
 - WhisperOptionsDialog: engine toggle (Whisper CPP / OpenAI Whisper) with per-engine
   parameter reference and extra args; opens pre-selected for the active method.
 - WhisperOptionsDialog: comprehensive Whisper CPP (whisper-cli) parameter reference
@@ -37,8 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of parent QGroupBox traversal.
 
 ### Removed
-- Subtitles tab description block (alpha.7 feature) — replaced by inline row descriptions.
-- Transcription tab description block (alpha.7 feature) — replaced by folder strip + method combo.
+- Subtitles tab description block, replaced by inline row descriptions.
+- Transcription tab description block, replaced by folder strip + method combo.
 
 ## [10.4.0-alpha.7] - 2026-03-19
 
