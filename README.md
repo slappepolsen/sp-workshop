@@ -38,42 +38,79 @@ SP Workshop is built for:
 - **Python 3.9–3.12** (3.12 recommended; 3.13+ causes Qt errors on macOS)
   Download from [python.org](https://www.python.org/downloads/) and make sure it is added to PATH during installation.
 
+> **Note**
+> During Python setup, keep the option to add Python to PATH enabled (wording varies by version and OS). This allows Terminal or Command Prompt to find `python` / `python3` when you run a command.
+
 Download SP Workshop from:
 👉 [GitHub Releases](https://github.com/slappepolsen/sp-workshop/releases)
 
-Select **Source code (zip)** under Assets.
+> **Tip**
+> On the page you are on, look at the right-hand side. Under **Releases**, you will see a version number (e.g., `10.3.0-alpha.2`) + a label **Latest**. Click on that.
+
+Select **Source code (zip)** under **Assets**.
+
+> **Note** 
+> After downloading, you will have a `.zip` file (for example `sp-workshop-10.3.0-alpha.2.zip`). 
+> Double-click it to unzip. This creates a folder with the same name (for example `sp-workshop-10.3.0-alpha.2`).
+> Open this folder. You should see files like `app.py`, `requirements.txt`, and `README.md`. The steps below assume you open a terminal inside this folder.
 
 ## macOS
 
-1. Open **Terminal**
+1. Open the **Terminal** app
 2. Navigate to the project folder
    ```bash
    cd path/to/sp-workshop
    ```
+
+> **Tip**
+> In that same Terminal, do **either**: 
+> **Option A:** type `cd`, add a space, drag the unzipped project folder into Terminal, then press Enter. 
+> **Option B:** type `cd`, add a space, then type or paste your real folder path where the example says `path/to/sp-workshop` (for example something under Downloads), then press Enter.
+
 3. Create and activate a virtual environment  
    Use Python 3.12 to avoid Qt issues on macOS (`brew install python@3.12`).
    ```bash
    python3.12 -m venv .venv   # or python3 if 3.12 is default
    source .venv/bin/activate
    ```
+
+> **Note**
+> A virtual environment keeps this app’s Python packages separate from the rest of your system.
+
 4. Install dependencies
    ```bash
    pip install -r requirements.txt
    ```
 
-5. Install FFmpeg (required; use ffmpeg-full for burn-in subtitles)
+5. Install FFmpeg (required)
+
    ```bash
    brew install ffmpeg-full
    ```
-   If using ffmpeg-full, set path in Settings > Tools to `/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg` (keg-only).
-6. Install N_m3u8DL-RE (optional, for downloads)
-   - Download from https://github.com/nilaoda/N_m3u8DL-RE/releases
-   - Add the executable to your PATH
+
+> **Note**  
+> Homebrew must be installed first. Install it from https://brew.sh if needed.
+
+> **If FFmpeg is not detected later in the app**  
+> After you start SP Workshop, open **Settings → Tools** and set the FFmpeg path manually:
+>
+> - Apple Silicon: `/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg`
+> - Intel: `/usr/local/opt/ffmpeg-full/bin/ffmpeg`
+
+6. Install N_m3u8DL-RE (optional)
+- Download from https://github.com/nilaoda/N_m3u8DL-RE/releases
+- Add the executable to your PATH
+
+> **Note**  
+> PATH is a list of folders your system searches for commands. Search “add directory to PATH macOS” if needed.
+
 7. Run the app
    ```bash
    python3 app.py
    ```
-   For older versions (before 10.0.0), the main file is called  `video_app_v8.py`. Use `python3 video_app_v8.py` or rename it to `app.py`.
+   
+   > **Note**  
+   > For versions before 10.0.0, use `python3 video_app_v8.py` or rename the file to `app.py`.
 
 ## Windows
 
@@ -82,27 +119,50 @@ Select **Source code (zip)** under Assets.
    ```bash
    cd path\to\sp-workshop
    ```
+
+> **Tip**  
+> Copy the folder path from File Explorer, then type `cd`, paste it, and press Enter..
+
 3. Create and activate a virtual environment  
    Python 3.12 recommended.
    ```bash
    python -m venv .venv
    .venv\Scripts\activate
    ```
+
 4. Install dependencies
    ```bash
    pip install -r requirements.txt
    ```
-5. Install FFmpeg and add it to PATH ([ffmpeg-full](https://www.gyan.dev/ffmpeg/builds/#:~:text=latest%20git%20master%20branch%20build%20version%3A%202026%2D03%2D15%2Dgit%2D6ba0b59d8b))
-6. Install N_m3u8DL-RE (optional, for downloads)
-   - Download from https://github.com/nilaoda/N_m3u8DL-RE/releases
-   - Add the executable to your PATH
+
+5. Install FFmpeg and add it to PATH
+
+> Download from: https://www.gyan.dev/ffmpeg/builds/
+
+> **Note**  
+> **PATH** tells Windows where to find programs when you type them in Command Prompt. 
+> If `ffmpeg` is not found, add the folder that contains **your** `ffmpeg.exe` to PATH.
+
+6. Install N_m3u8DL-RE (optional)
+- Download from https://github.com/nilaoda/N_m3u8DL-RE/releases
+- Add the executable to your PATH
+
+> **Note**  
+> Same idea as for FFmpeg: add the folder that contains the N_m3u8DL-RE executable to your PATH, or
+> configure the path inside the app’s settings if there is an option.
+
 7. Run the app
    ```bash
    python app.py
    ```
-   For older versions (before 10.0.0), the main file is called  `video_app_v8.py`. Use `python3 video_app_v8.py` or rename it to `app.py`.
+   
+> **Note**  
+> For versions before 10.0.0, use `python video_app_v8.py` or rename the file to `app.py`.
+
 
 ## Linux
+
+> The `apt` commands below assume **Debian** or **Ubuntu**. Other distributions use their own package manager to install FFmpeg.
 
 1. Create and activate a virtual environment  
    Python 3.12 recommended.
@@ -122,6 +182,7 @@ Select **Source code (zip)** under Assets.
 4. Install N_m3u8DL-RE (optional, for downloads)
    - Download from https://github.com/nilaoda/N_m3u8DL-RE/releases
    - Add the executable to your PATH
+
 5. Run the app
    ```bash
    python3 app.py

@@ -8,8 +8,8 @@ A PyQt5 desktop app that provides a button-based interface for all video process
 """
 
 
-__version__ = "10.4.0-alpha.7"
-VERSION_CODENAME = "Hallucination"
+__version__ = "10.4.0-alpha.9"
+VERSION_CODENAME = "Routing"
 
 import sys
 import os
@@ -32,6 +32,10 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, List
+try:
+    from typing import Protocol, runtime_checkable
+except ImportError:
+    from typing_extensions import Protocol, runtime_checkable  # type: ignore
 
 
 # Enforce Python 3.9–3.12 (PyQt5 + 3.13+ causes Qt plugin errors on macOS)
@@ -76,7 +80,7 @@ try:
         QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
         QPushButton, QLabel, QTextEdit, QFileDialog, QDialog,
         QLineEdit, QFormLayout, QMessageBox, QProgressBar, QGroupBox, QStyleFactory, QCheckBox, QStackedWidget, QTextBrowser, QComboBox,
-        QGraphicsDropShadowEffect, QTabWidget, QSpinBox, QDoubleSpinBox, QScrollArea, QListWidget, QListWidgetItem, QTreeWidget, QTreeWidgetItem, QHeaderView, QMenu, QFrame, QSizePolicy
+        QGraphicsDropShadowEffect, QTabWidget, QSpinBox, QDoubleSpinBox, QScrollArea, QListWidget, QListWidgetItem, QTreeWidget, QTreeWidgetItem, QHeaderView, QMenu, QFrame, QSizePolicy,
     )
     from PyQt5.QtCore import QThread, pyqtSignal, Qt, QProcess, QUrl, QTimer
     from PyQt5.QtGui import QFont, QIcon, QPainter, QPen, QDesktopServices
@@ -94,6 +98,7 @@ except ImportError as e:
 
 # Download instructions URL
 DOWNLOAD_INSTRUCTIONS_URL = "https://rentry.co/sp-workshop"
+DEFAULT_WHISPER_VOLUME_BOOST = 1.75
 
 # Layout spacing (used across tabs for consistency)
 LAYOUT_SPACING = 12
@@ -261,7 +266,15 @@ def load_config() -> Dict:
             "split_dialogs_on_one_line": True,
             "remove_dialog_dashes_single_line": True,
             "remove_start_dash_non_dialogs": True,
-        }
+            "strip_leading_spaces": True,
+        },
+        "whisper_post_processing_enabled":         False,
+        "whisper_post_proc_adjust_timings":        True,
+        "whisper_post_proc_merge_lines":           True,
+        "whisper_post_proc_split_lines":           True,
+        "whisper_post_proc_fix_short_duration":    True,
+        "whisper_post_proc_add_periods":           True,
+        "whisper_post_proc_fix_casing":            True,
     }
     
     if config_path.exists():
@@ -909,6 +922,59 @@ def _strip_ansi(text: str) -> str:
     return re.sub(r'\x1b\[[0-9;]*m', '', text)
 
 
+def _parse_n_m3u8dl_progress(line: str) -> Optional[str]:
+    """Parse an N_m3u8DL-RE progress bar line into a compact status string.
+
+    Returns a formatted string like
+      "Vid 1920x1080 | 5002 Kbps | Main · 23/212 segs · 11.15 MBps · ETA 00:01:35"
+    or None if the line cannot be parsed.
+    """
+    clean = _strip_ansi(line).replace("\r", "").strip()
+    if not clean:
+        return None
+
+    # Format 1: Unicode progress bar lines (contains "━")
+    bar_idx = clean.find('━')
+    if bar_idx >= 0:
+        label = clean[:bar_idx].strip()
+        if not label:
+            return None
+        after_bar = clean[bar_idx:]
+        seg_match = re.search(r'(\d+)/(\d+)', after_bar)
+        segments = seg_match.group(0) if seg_match else '?/?'
+        speed_match = re.search(r'[\d.]+\s*[KMG]?B(?:ps|/s)', after_bar, re.IGNORECASE)
+        speed = speed_match.group(0).strip() if speed_match else '-'
+        eta_match = re.search(r'\d{2}:\d{2}:\d{2}|--:--:--', after_bar)
+        eta = eta_match.group(0) if eta_match else '--:--:--'
+        return f"{label} · {segments} segs · {speed} · ETA {eta}"
+
+    # Format 2: INFO lines in the style:
+    # "INFO : Vid ... | 3023 Kbps | ... | 214 Segments | Main | ~28m26s"
+    if "|" not in clean or "segment" not in clean.lower():
+        return None
+    payload = clean.split("INFO :", 1)[-1].strip()
+    parts = [p.strip() for p in payload.split("|") if p.strip()]
+    if not parts:
+        return None
+
+    label = parts[0]
+    bitrate = next((p for p in parts if re.search(r'\b\d+(?:\.\d+)?\s*[KMG]bps\b', p, re.IGNORECASE)), None)
+    segments = next((p for p in parts if re.search(r'\b\d+\s+Segments?\b', p, re.IGNORECASE)), None)
+    eta = next(
+        (p for p in parts if p.startswith("~") or re.search(r'\d{1,2}m\d{1,2}s|--:--:--|\d{2}:\d{2}:\d{2}', p)),
+        None,
+    )
+
+    out = [label]
+    if bitrate:
+        out.append(bitrate)
+    if segments:
+        out.append(segments)
+    if eta:
+        out.append(f"ETA {eta}" if eta.startswith("~") else eta)
+    return " · ".join(out)
+
+
 # ============================================================================
 # Download & subtitle pipeline
 # ============================================================================
@@ -924,6 +990,7 @@ def download_episodes(
     select_video: str = "best",
     progress_callback=None,
     log_callback=None,
+    stream_progress_callback=None,
 ) -> bool:
     """Download episodes or movies using commands from text.
 
@@ -1046,13 +1113,12 @@ def download_episodes(
 
                 # Stream output
                 output_lines = []
-                last_logged_percent = -5  # Track last logged percentage to avoid spam
+                last_progress_emit: dict = {}  # stream_label -> last emit time (seconds)
 
                 while True:
                     line_output = process.stdout.readline()
                     if not line_output:
                         break
-                    # Skip progress bar lines
                     is_progress_bar = '━' in line_output
                     if not is_progress_bar:
                         cleaned = _strip_ansi(line_output)
@@ -1062,8 +1128,17 @@ def download_episodes(
                     if line_output:
                         output_lines.append(line_output)
 
-                        # Skip progress bar
                         is_progress_bar = '━' in line_output
+
+                        if stream_progress_callback:
+                            parsed = _parse_n_m3u8dl_progress(line_output)
+                            if parsed:
+                                # Use the part before ' · ' as stream key to throttle.
+                                stream_key = parsed.split(' · ')[0]
+                                now = time.time()
+                                if now - last_progress_emit.get(stream_key, 0) >= 1.0:
+                                    last_progress_emit[stream_key] = now
+                                    stream_progress_callback(parsed)
 
                         # Skip file access warnings
                         is_file_access_warning = 'The process cannot access the file' in line_output
@@ -1086,7 +1161,20 @@ def download_episodes(
                         if should_log and log_callback:
                             log_callback(f"  {line_output}")
 
-                        # Suppress progress spam
+                        # Drive the stream-status label with key milestone lines
+                        if should_log and stream_progress_callback:
+                            clean_line = _strip_ansi(line_output)
+                            if 'Start downloading' in clean_line:
+                                desc = clean_line.split('Start downloading...', 1)[-1].strip()
+                                if desc:
+                                    stream_progress_callback(f"Downloading: {desc[:100]}")
+                            elif 'Binary merging' in clean_line:
+                                stream_progress_callback("Merging segments…")
+                            elif 'Decrypting using' in clean_line:
+                                stream_progress_callback("Decrypting…")
+                            elif 'Muxing to' in clean_line:
+                                dest = clean_line.split('Muxing to', 1)[-1].strip()
+                                stream_progress_callback(f"Muxing: {dest}")
 
                 # Wait for process
                 returncode = process.wait()
@@ -1228,21 +1316,23 @@ def extract_subtitles(downloads_dir: Path, subtitles_dir: Path, progress_callbac
 # Fix common errors (SRT parsing + 12 fixes)
 # ============================================================================
 
-# Fix key -> display label for CleanSubtitlesDialog
+# Fix key -> (display label, example) for CleanSubtitlesDialog
 CLEAN_SUBTITLES_FIX_ITEMS = [
-    ("remove_empty_lines", "Remove empty lines"),
-    ("fix_invalid_italic_tags", "Fix invalid italic tags"),
-    ("fix_overlapping_display_times", "Fix overlapping display times"),
-    ("fix_short_display_times", "Fix short display times"),
-    ("fix_long_display_times", "Fix long display times"),
-    ("fix_short_gaps", "Fix short gaps"),
-    ("remove_unneeded_spaces", "Remove unneeded spaces"),
-    ("fix_missing_spaces", "Fix missing spaces"),
-    ("break_long_lines", "Break long lines"),
-    ("split_dialogs_on_one_line", "Split dialogs on one line"),
-    ("remove_dialog_dashes_single_line", "Remove dialog dashes in single lines"),
-    ("remove_start_dash_non_dialogs", "Remove start dash in non-dialogs"),
+    ("remove_empty_lines",              "Remove empty lines",                   'Line with only spaces --> [removed]'),
+    ("fix_invalid_italic_tags",         "Fix invalid italic tags",              '<i>text<i> --> <i>text</i>'),
+    ("fix_overlapping_display_times",   "Fix overlapping display times",        '00:00:05,000 --> 00:00:07,000 (overlaps next)'),
+    ("fix_short_display_times",         "Fix short display times",              'Duration < minimum --> end time extended'),
+    ("fix_long_display_times",          "Fix long display times",               'Duration > maximum --> clamp end time'),
+    ("fix_short_gaps",                  "Fix short gaps",                       'Gap < 24 ms --> trim previous end'),
+    ("remove_unneeded_spaces",          "Remove unneeded spaces",               'Hey  you --> Hey you'),
+    ("fix_missing_spaces",              "Fix missing spaces",                   'Hey.You  Hey. You'),
+    ("break_long_lines",                "Break long lines",                     'Very long line --> split at space'),
+    ("split_dialogs_on_one_line",       "Split dialogs on one line",            'A. - B --> A.\n- B'),
+    ("remove_dialog_dashes_single_line","Remove dialog dashes in single lines", '- Text --> Text'),
+    ("remove_start_dash_non_dialogs",   "Remove start dash in non-dialogs",     '- Text --> Text'),
+    ("strip_leading_spaces",            "Strip leading spaces",                 ' Hello --> Hello'),
 ]
+CLEAN_SUBTITLES_FIX_LABELS = {item[0]: item[1] for item in CLEAN_SUBTITLES_FIX_ITEMS}
 
 # Default config for fix logic
 FIX_CONFIG_DEFAULTS = {
@@ -1252,6 +1342,7 @@ FIX_CONFIG_DEFAULTS = {
     "subtitle_line_max_length": 43,
     "subtitle_max_chars_per_second": 25,
 }
+
 
 
 def _parse_srt(content: str) -> List[Dict]:
@@ -1286,100 +1377,386 @@ def _format_srt(entries: List[Dict]) -> str:
     return '\n'.join(out)
 
 
-def _fix_empty_lines(entries: List[Dict], config: Dict) -> int:
+# ============================================================================
+# Whisper CPP post-processing helpers
+# ============================================================================
+
+def _pp_adjust_timings(entries: List[Dict], audio_path) -> List[Dict]:
+    """Snap subtitle start times to actual speech/silence boundaries.
+
+    Uses the already-extracted 16 kHz mono WAV (Python built-in wave + array,
+    no external deps).  Mirrors WhisperTimingFixer.ShortenViaWavePeaks logic:
+    for each entry, if the audio around the start time is above a silence
+    threshold, scan ±250 ms to find a quieter boundary and snap to it.
+    """
+    import wave as _wave
+    import array as _array
+
+    try:
+        with _wave.open(str(audio_path), 'rb') as wf:
+            if wf.getnchannels() != 1 or wf.getsampwidth() != 2:
+                return entries
+            sample_rate = wf.getframerate()
+            raw = wf.readframes(wf.getnframes())
+        samples = _array.array('h', raw)
+    except Exception:
+        return entries
+
+    # Pre-compute RMS in 25 ms windows for the whole file
+    win_samples = max(1, int(sample_rate * 0.025))
+    n_windows = len(samples) // win_samples
+    if n_windows == 0:
+        return entries
+
+    rms_windows: List[float] = []
+    for w in range(n_windows):
+        chunk = samples[w * win_samples:(w + 1) * win_samples]
+        rms_windows.append((sum(x * x for x in chunk) / len(chunk)) ** 0.5)
+
+    peak_rms = max(rms_windows) if rms_windows else 1.0
+    if peak_rms == 0:
+        return entries
+    SILENCE_THRESH = 0.07  # 7 % of peak — matches SE source
+
+    def rms_at_ms(ms: int) -> float:
+        w = int(ms / 25)
+        if 0 <= w < len(rms_windows):
+            return rms_windows[w] / peak_rms
+        return 1.0  # treat out-of-range as non-silence
+
+    result = []
+    for idx, entry in enumerate(entries):
+        prev_end_ms = result[-1]["end_ms"] if result else 0
+        start = entry["start_ms"]
+
+        # If already in silence, scan forward to find speech onset
+        if rms_at_ms(start) < SILENCE_THRESH:
+            pos = start
+            while pos < entry["end_ms"] - 600 and rms_at_ms(pos) < SILENCE_THRESH:
+                pos += 25
+            if pos > start and pos < entry["end_ms"] - 100:
+                start = max(prev_end_ms + 1, pos - 25)
+        else:
+            # In speech — scan back up to 250 ms to find silence boundary
+            best = start
+            best_rms = rms_at_ms(start)
+            for delta in range(25, 276, 25):
+                candidate = start - delta
+                if candidate <= prev_end_ms:
+                    break
+                r = rms_at_ms(candidate)
+                if r < best_rms:
+                    best_rms = r
+                    best = candidate
+                if r < SILENCE_THRESH:
+                    break
+            start = max(prev_end_ms + 1, best)
+
+        new_entry = dict(entry)
+        if start < entry["end_ms"] - 100:
+            new_entry["start_ms"] = start
+        result.append(new_entry)
+
+    return result
+
+
+def _pp_fix_short_duration(entries: List[Dict], min_ms: int = 1000) -> List[Dict]:
+    """Extend entries whose display time is below min_ms.
+
+    The end time is pushed forward to reach min_ms, capped so it does not
+    exceed the midpoint to the next entry's start.
+    """
+    result = [dict(e) for e in entries]
+    for i, e in enumerate(result):
+        dur = e["end_ms"] - e["start_ms"]
+        if dur < min_ms:
+            desired_end = e["start_ms"] + min_ms
+            if i + 1 < len(result):
+                cap = e["start_ms"] + (result[i + 1]["start_ms"] - e["start_ms"]) // 2
+                desired_end = min(desired_end, cap)
+            e["end_ms"] = max(e["end_ms"], desired_end)
+    return result
+
+
+def _pp_merge_short_lines(entries: List[Dict], max_gap_ms: int = 100, max_chars: int = 86) -> List[Dict]:
+    """Merge consecutive entries that are close together and short.
+
+    Two entries are merged when gap ≤ max_gap_ms AND their combined text
+    (separated by a space) does not exceed max_chars.  Mirrors
+    AudioToTextPostProcessor.MergeShortLines logic.
+    """
+    if not entries:
+        return entries
+    result = []
+    skip_next = False
+    for i in range(len(entries)):
+        if skip_next:
+            skip_next = False
+            continue
+        e = dict(entries[i])
+        if i + 1 < len(entries):
+            nxt = entries[i + 1]
+            gap = nxt["start_ms"] - e["end_ms"]
+            combined = e["text"].strip() + " " + nxt["text"].strip()
+            if 0 <= gap <= max_gap_ms and len(combined) <= max_chars:
+                e["text"] = combined.strip()
+                e["end_ms"] = nxt["end_ms"]
+                skip_next = True
+        result.append(e)
+    return result
+
+
+def _pp_split_long_lines(entries: List[Dict], max_chars: int = 43) -> List[Dict]:
+    """Break long text into two lines inside the same subtitle cue.
+
+    Important: this is a line-break step, not a cue-splitting step.
+    Timings stay unchanged; only text formatting is adjusted.
+    """
+    result = []
+    for e in entries:
+        text = e["text"].strip()
+        if len(text) <= max_chars or "\n" in text:
+            result.append(e)
+            continue
+
+        # Normalize internal spacing so line-length checks are meaningful.
+        text = re.sub(r"\s+", " ", text).strip()
+        words = text.split(" ")
+        if len(words) < 2:
+            result.append({**e, "text": text})
+            continue
+
+        # Choose split point that best balances line lengths.
+        best_idx = 1
+        best_score = float("inf")
+        for i in range(1, len(words)):
+            left = " ".join(words[:i])
+            right = " ".join(words[i:])
+            score = max(len(left), len(right))
+            if score < best_score:
+                best_score = score
+                best_idx = i
+
+        part1 = " ".join(words[:best_idx]).strip()
+        part2 = " ".join(words[best_idx:]).strip()
+        if not part1 or not part2:
+            result.append({**e, "text": text})
+            continue
+
+        result.append({**e, "text": f"{part1}\n{part2}"})
+    return result
+
+
+def _pp_add_periods(entries: List[Dict], gap_ms: int = 600) -> List[Dict]:
+    """Add a period at the end of an entry when the gap to the next is > gap_ms.
+
+    Matches AudioToTextPostProcessor.AddPeriods: only adds if the text does not
+    already end with terminal punctuation.
+    """
+    _terminal = set('.!?,:])}')
+    result = [dict(e) for e in entries]
+    for i, e in enumerate(result):
+        text = e["text"].rstrip()
+        if not text or text[-1] in _terminal:
+            continue
+        if i + 1 < len(result):
+            gap = result[i + 1]["start_ms"] - e["end_ms"]
+            if gap > gap_ms:
+                e["text"] = text + "."
+        else:
+            # Last entry always gets a period
+            e["text"] = text + "."
+    return result
+
+
+def _pp_fix_casing(entries: List[Dict]) -> List[Dict]:
+    """Capitalise the first letter of each entry's text."""
+    result = []
+    for e in entries:
+        text = e["text"]
+        if text and text[0].islower():
+            text = text[0].upper() + text[1:]
+        result.append({**e, "text": text})
+    return result
+
+
+def _whisper_cpp_post_process(
+    final_srt,
+    audio_path,
+    config: Dict,
+    log_callback=None,
+) -> None:
+    """Apply post-processing pipeline to a freshly written whisper.cpp SRT.
+
+    Steps are controlled by individual config keys and the master
+    whisper_post_processing_enabled toggle.  audio_path is needed only for
+    the adjust-timings step and may be None.
+    """
+    if not config.get("whisper_post_processing_enabled", False):
+        if log_callback:
+            log_callback("  Post-processing skipped (disabled).")
+        return
+    try:
+        raw = final_srt.read_text(encoding="utf-8")
+        entries = _parse_srt(raw)
+        if not entries:
+            return
+
+        if config.get("whisper_post_proc_adjust_timings", True) and audio_path and Path(audio_path).exists():
+            entries = _pp_adjust_timings(entries, audio_path)
+
+        if config.get("whisper_post_proc_fix_short_duration", True):
+            entries = _pp_fix_short_duration(entries)
+
+        if config.get("whisper_post_proc_merge_lines", True):
+            entries = _pp_merge_short_lines(entries)
+
+        if config.get("whisper_post_proc_split_lines", True):
+            entries = _pp_split_long_lines(entries)
+
+        if config.get("whisper_post_proc_add_periods", True):
+            entries = _pp_add_periods(entries)
+
+        if config.get("whisper_post_proc_fix_casing", True):
+            entries = _pp_fix_casing(entries)
+
+        final_srt.write_text(_format_srt(entries), encoding="utf-8")
+        if log_callback:
+            log_callback("  Post-processing applied.")
+    except Exception as e:
+        if log_callback:
+            log_callback(f"  Post-processing error (skipped): {e}")
+
+
+def _fix_empty_lines(entries: List[Dict], config: Dict, ctx=None) -> int:
     """Remove empty lines and fully empty paragraphs."""
     count = 0
+    ACT_TEXT = "Fix empty lines"
+    ACT_REM  = "Remove empty entry"
     i = len(entries) - 1
     while i >= 0:
         e = entries[i]
         text = e["text"]
-        # Strip HTML for emptiness check
         stripped = re.sub(r'<[^>]+>', '', text).strip()
         if not stripped:
-            entries.pop(i)
-            count += 1
+            before = dict(e)
+            if not ctx or ctx.allow(e.get("_id", i), ACT_REM):
+                entries.pop(i)
+                count += 1
+                if ctx:
+                    ctx.record(ACT_REM, before,
+                               {"start_ms": before["start_ms"], "end_ms": before["end_ms"], "text": "[removed]"})
             i -= 1
             continue
-        # Trim leading/trailing newlines, collapse double newlines
+        # Trim + collapse double newlines; remove lone dash lines
         new_text = re.sub(r'\n\n+', '\n', text.strip())
+        arr = new_text.split('\n')
+        if len(arr) == 2:
+            if arr[0].strip() == '-' and len(arr[1]) > 2:
+                new_text = arr[1].lstrip('-').lstrip()
+            elif arr[1].strip() == '-' and len(arr[0]) > 2:
+                new_text = arr[0].lstrip('-').lstrip()
         if new_text != text:
-            e["text"] = new_text
-            count += 1
+            before = dict(e)
+            if not ctx or ctx.allow(e.get("_id", i), ACT_TEXT):
+                e["text"] = new_text
+                count += 1
+                if ctx:
+                    ctx.record(ACT_TEXT, before, e)
         i -= 1
     return count
 
 
-def _fix_invalid_italic_tags(entries: List[Dict], config: Dict) -> int:
+def _fix_invalid_italic_tags(entries: List[Dict], config: Dict, ctx=None) -> int:
     """Fix unclosed/swapped italic tags."""
     count = 0
-    for e in entries:
+    ACTION = "Fix invalid italic tags"
+    for i, e in enumerate(entries):
         text = e["text"]
-        # Normalize <i/> to </i>
-        text = re.sub(r'<i\s*/>', '</i>', text, flags=re.I)
-        # Fix <i>...<i> -> <i>...</i> (change last <i> to </i>)
-        opens = len(re.findall(r'<i\s*>', text, re.I))
-        closes = len(re.findall(r'</i\s*>', text, re.I))
+        new_text = re.sub(r'<i\s*/>', '</i>', text, flags=re.I)
+        opens  = len(re.findall(r'<i\s*>',  new_text, re.I))
+        closes = len(re.findall(r'</i\s*>', new_text, re.I))
         if opens == 2 and closes == 0:
-            last_open = text.rfind('<i>')
+            last_open = new_text.rfind('<i>')
             if last_open >= 0:
-                text = text[:last_open] + '</i>' + text[last_open + 3:]
-                count += 1
+                new_text = new_text[:last_open] + '</i>' + new_text[last_open + 3:]
         elif opens > closes:
-            n = opens - closes
-            for _ in range(n):
-                last_i = text.rfind('<i>')
+            for _ in range(opens - closes):
+                last_i = new_text.rfind('<i>')
                 if last_i >= 0:
-                    end = text.find('>', last_i) + 1
-                    text = text[:end] + '</i>' + text[end:]
-                    count += 1
-        if text != e["text"]:
-            e["text"] = text
-            if count == 0:
-                count = 1  # e.g. <i/> normalization only
+                    end = new_text.find('>', last_i) + 1
+                    new_text = new_text[:end] + '</i>' + new_text[end:]
+        if new_text != text:
+            before = dict(e)
+            if not ctx or ctx.allow(e.get("_id", i), ACTION):
+                e["text"] = new_text
+                count += 1
+                if ctx:
+                    ctx.record(ACTION, before, e)
     return count
 
 
-def _fix_overlapping_display_times(entries: List[Dict], config: Dict) -> int:
+def _fix_overlapping_display_times(entries: List[Dict], config: Dict, ctx=None) -> int:
     """Fix overlapping and negative duration."""
     count = 0
     min_dur = config.get("subtitle_minimum_display_ms", 1000)
+    ACTION = "Fix overlapping display times"
     for i, e in enumerate(entries):
         dur = e["end_ms"] - e["start_ms"]
-        if dur < min_dur:
-            e["end_ms"] = e["start_ms"] + min_dur
-            count += 1
+        if dur < 0:
+            before = dict(e)
+            if not ctx or ctx.allow(e.get("_id", i), ACTION):
+                e["end_ms"] = e["start_ms"] + min_dur
+                count += 1
+                if ctx:
+                    ctx.record(ACTION, before, e)
         if i > 0 and e["start_ms"] < entries[i - 1]["end_ms"]:
-            entries[i - 1]["end_ms"] = e["start_ms"] - 1
-            if entries[i - 1]["end_ms"] < entries[i - 1]["start_ms"]:
-                entries[i - 1]["end_ms"] = entries[i - 1]["start_ms"] + min_dur
-            count += 1
+            prev = entries[i - 1]
+            before_prev = dict(prev)
+            if not ctx or ctx.allow(prev.get("_id", i - 1), ACTION):
+                prev["end_ms"] = e["start_ms"] - 1
+                if prev["end_ms"] < prev["start_ms"]:
+                    prev["end_ms"] = prev["start_ms"] + min_dur
+                count += 1
+                if ctx:
+                    ctx.record(ACTION, before_prev, prev)
     return count
 
 
-def _fix_short_display_times(entries: List[Dict], config: Dict) -> int:
+def _fix_short_display_times(entries: List[Dict], config: Dict, ctx=None) -> int:
     """Extend short display times if next allows."""
     count = 0
     min_dur = config.get("subtitle_minimum_display_ms", 1000)
+    ACTION = "Fix short display time"
     for i, e in enumerate(entries):
         dur = e["end_ms"] - e["start_ms"]
         if dur < min_dur and i + 1 < len(entries):
             gap = entries[i + 1]["start_ms"] - e["end_ms"]
             need = min_dur - dur
             if gap > need:
-                e["end_ms"] += need
-                count += 1
+                before = dict(e)
+                if not ctx or ctx.allow(e.get("_id", i), ACTION):
+                    e["end_ms"] += need
+                    count += 1
+                    if ctx:
+                        ctx.record(ACTION, before, e)
     return count
 
 
-def _fix_long_display_times(entries: List[Dict], config: Dict) -> int:
+def _fix_long_display_times(entries: List[Dict], config: Dict, ctx=None) -> int:
     """Cap long display times."""
     count = 0
     max_dur = config.get("subtitle_maximum_display_ms", 8000)
-    for e in entries:
+    ACTION = "Fix long display time"
+    for i, e in enumerate(entries):
         dur = e["end_ms"] - e["start_ms"]
         if dur > max_dur:
-            e["end_ms"] = e["start_ms"] + max_dur
-            count += 1
+            before = dict(e)
+            if not ctx or ctx.allow(e.get("_id", i), ACTION):
+                e["end_ms"] = e["start_ms"] + max_dur
+                count += 1
+                if ctx:
+                    ctx.record(ACTION, before, e)
     return count
 
 
@@ -1395,96 +1772,115 @@ def _fix_short_gaps(entries: List[Dict], config: Dict) -> int:
     return count
 
 
-def _remove_unneeded_spaces(entries: List[Dict], config: Dict) -> int:
+def _remove_unneeded_spaces(entries: List[Dict], config: Dict, ctx=None) -> int:
     """Remove zero-width chars, collapse spaces, normalize ellipses."""
     count = 0
     zw = '\u200B\uFEFF\u009D'
-    for e in entries:
+    ACTION = "Remove unneeded spaces"
+    for i, e in enumerate(entries):
         text = e["text"]
+        new_text = text
         for c in zw:
-            if c in text:
-                text = text.replace(c, '')
+            new_text = new_text.replace(c, '')
+        new_text = new_text.replace('\t', ' ').replace('\u00A0', ' ')
+        new_text = re.sub(r' +', ' ', new_text)
+        new_text = re.sub(r'\. \. \.', '...', new_text)
+        new_text = re.sub(r'\.{4,}', '...', new_text)
+        if new_text != text:
+            before = dict(e)
+            if not ctx or ctx.allow(e.get("_id", i), ACTION):
+                e["text"] = new_text
                 count += 1
-        text = text.replace('\t', ' ').replace('\u00A0', ' ')
-        text = re.sub(r' +', ' ', text)
-        text = re.sub(r'\. \. \.', '...', text)
-        text = re.sub(r'\.{4,}', '...', text)
-        if text != e["text"]:
-            e["text"] = text
-            count += 1
+                if ctx:
+                    ctx.record(ACTION, before, e)
     return count
 
 
-def _fix_missing_spaces(entries: List[Dict], config: Dict) -> int:
+def _fix_missing_spaces(entries: List[Dict], config: Dict, ctx=None) -> int:
     """Insert missing spaces after punctuation."""
     count = 0
-    for e in entries:
+    ACTION = "Fix missing spaces"
+    for i, e in enumerate(entries):
         text = e["text"]
-        # Comma: letter,letter -> letter, letter
         new_text = re.sub(r'([^\s\d]),([^\s])', r'\1, \2', text)
-        # Period: ll.LL -> ll. LL
         new_text = re.sub(r'([a-z]{2})\.([A-Za-z])', r'\1. \2', new_text)
-        # ? and !
         new_text = re.sub(r'([^\s\d])([?!])([A-Za-z])', r'\1\2 \3', new_text)
-        # HTML: word<i> -> word <i>
         new_text = re.sub(r'([a-zA-Z])(<i>)', r'\1 \2', new_text, flags=re.I)
         new_text = re.sub(r'(</i>)([a-zA-Z])', r'\1 \2', new_text, flags=re.I)
         if new_text != text:
-            e["text"] = new_text
-            count += 1
+            before = dict(e)
+            if not ctx or ctx.allow(e.get("_id", i), ACTION):
+                e["text"] = new_text
+                count += 1
+                if ctx:
+                    ctx.record(ACTION, before, e)
     return count
 
 
-def _break_long_lines(entries: List[Dict], config: Dict) -> int:
+def _break_long_lines(entries: List[Dict], config: Dict, ctx=None) -> int:
     """Break lines longer than max length at spaces."""
     count = 0
     max_len = config.get("subtitle_line_max_length", 43)
-    for e in entries:
+    ACTION = "Break long lines"
+    for i, e in enumerate(entries):
         lines = e["text"].split('\n')
         new_lines = []
+        changed = False
         for line in lines:
             if len(line) <= max_len:
                 new_lines.append(line)
                 continue
             parts = line.split(' ')
-            curr = []
+            curr: List[str] = []
             curr_len = 0
             for p in parts:
                 if curr_len + len(p) + (1 if curr else 0) > max_len and curr:
                     new_lines.append(' '.join(curr))
                     curr = [p]
                     curr_len = len(p)
-                    count += 1
+                    changed = True
                 else:
                     curr.append(p)
                     curr_len += len(p) + (1 if len(curr) > 1 else 0)
             if curr:
                 new_lines.append(' '.join(curr))
-        e["text"] = '\n'.join(new_lines)
+        if changed:
+            new_text = '\n'.join(new_lines)
+            before = dict(e)
+            if not ctx or ctx.allow(e.get("_id", i), ACTION):
+                e["text"] = new_text
+                count += 1
+                if ctx:
+                    ctx.record(ACTION, before, e)
     return count
 
 
-def _split_dialogs_on_one_line(entries: List[Dict], config: Dict) -> int:
+def _split_dialogs_on_one_line(entries: List[Dict], config: Dict, ctx=None) -> int:
     """Split 'A - B' style dialogs onto two lines."""
     count = 0
-    for e in entries:
+    ACTION = "Split dialog on one line"
+    for i, e in enumerate(entries):
         text = e["text"]
         if '\n' in text or ' - ' not in text:
             continue
-        # Pattern: sentence ending .!?..." then " - " then uppercase
         m = re.search(r'([.!?…")\]])\s*-\s+([A-Z"\'\u2669\u266a])', text)
         if m:
-            pos = m.start(2) - 2  # before " - "
-            text = text[:pos] + '\n- ' + text[pos + 3:]
-            e["text"] = text
-            count += 1
+            pos = m.start(2) - 2
+            new_text = text[:pos] + '\n- ' + text[pos + 3:]
+            before = dict(e)
+            if not ctx or ctx.allow(e.get("_id", i), ACTION):
+                e["text"] = new_text
+                count += 1
+                if ctx:
+                    ctx.record(ACTION, before, e)
     return count
 
 
-def _remove_dialog_dashes_single_line(entries: List[Dict], config: Dict) -> int:
+def _remove_dialog_dashes_single_line(entries: List[Dict], config: Dict, ctx=None) -> int:
     """Remove leading dash when single sentence (no dialog)."""
     count = 0
-    for e in entries:
+    ACTION = "Remove dialog dash (single line)"
+    for i, e in enumerate(entries):
         text = e["text"]
         stripped = text.strip()
         if not stripped.startswith('-') and not stripped.startswith('\u2010'):
@@ -1493,15 +1889,20 @@ def _remove_dialog_dashes_single_line(entries: List[Dict], config: Dict) -> int:
             continue
         new_text = re.sub(r'^[\s\-‐\-]+', '', stripped)
         if new_text != stripped:
-            e["text"] = new_text
-            count += 1
+            before = dict(e)
+            if not ctx or ctx.allow(e.get("_id", i), ACTION):
+                e["text"] = new_text
+                count += 1
+                if ctx:
+                    ctx.record(ACTION, before, e)
     return count
 
 
-def _remove_start_dash_non_dialogs(entries: List[Dict], config: Dict) -> int:
+def _remove_start_dash_non_dialogs(entries: List[Dict], config: Dict, ctx=None) -> int:
     """Remove leading dash when not dialog structure."""
     count = 0
-    for e in entries:
+    ACTION = "Remove start dash (non-dialog)"
+    for i, e in enumerate(entries):
         text = e["text"]
         if not (text.strip().startswith('-') or text.strip().startswith('\u2010')):
             continue
@@ -1509,9 +1910,47 @@ def _remove_start_dash_non_dialogs(entries: List[Dict], config: Dict) -> int:
             continue
         new_text = re.sub(r'^[\s\-‐\-]+', '', text.strip()).strip()
         if new_text != text.strip():
-            e["text"] = new_text
-            count += 1
+            before = dict(e)
+            if not ctx or ctx.allow(e.get("_id", i), ACTION):
+                e["text"] = new_text
+                count += 1
+                if ctx:
+                    ctx.record(ACTION, before, e)
     return count
+
+
+def _fix_strip_leading_spaces(entries: List[Dict], config: Dict, ctx=None) -> int:
+    """Remove leading spaces from each text line (Whisper CPP tokenizer artifact)."""
+    count = 0
+    ACTION = "Strip leading spaces"
+    for i, e in enumerate(entries):
+        text = e["text"]
+        new_text = '\n'.join(line.lstrip(' ') for line in text.split('\n'))
+        if new_text != text:
+            before = dict(e)
+            if not ctx or ctx.allow(e.get("_id", i), ACTION):
+                e["text"] = new_text
+                count += 1
+                if ctx:
+                    ctx.record(ACTION, before, e)
+    return count
+
+
+_FIX_MAP = {
+    "remove_empty_lines":               _fix_empty_lines,
+    "fix_invalid_italic_tags":          _fix_invalid_italic_tags,
+    "fix_overlapping_display_times":    _fix_overlapping_display_times,
+    "fix_short_display_times":          _fix_short_display_times,
+    "fix_long_display_times":           _fix_long_display_times,
+    "fix_short_gaps":                   _fix_short_gaps,
+    "remove_unneeded_spaces":           _remove_unneeded_spaces,
+    "fix_missing_spaces":               _fix_missing_spaces,
+    "break_long_lines":                 _break_long_lines,
+    "split_dialogs_on_one_line":        _split_dialogs_on_one_line,
+    "remove_dialog_dashes_single_line": _remove_dialog_dashes_single_line,
+    "remove_start_dash_non_dialogs":    _remove_start_dash_non_dialogs,
+    "strip_leading_spaces":             _fix_strip_leading_spaces,
+}
 
 
 def _apply_fixes_to_content(content: str, enabled_fixes: List[str], config: Dict) -> tuple:
@@ -1521,26 +1960,13 @@ def _apply_fixes_to_content(content: str, enabled_fixes: List[str], config: Dict
         return content, {}
     cfg = {**FIX_CONFIG_DEFAULTS, **config}
     summary = {}
-    fix_map = {
-        "remove_empty_lines": _fix_empty_lines,
-        "fix_invalid_italic_tags": _fix_invalid_italic_tags,
-        "fix_overlapping_display_times": _fix_overlapping_display_times,
-        "fix_short_display_times": _fix_short_display_times,
-        "fix_long_display_times": _fix_long_display_times,
-        "fix_short_gaps": _fix_short_gaps,
-        "remove_unneeded_spaces": _remove_unneeded_spaces,
-        "fix_missing_spaces": _fix_missing_spaces,
-        "break_long_lines": _break_long_lines,
-        "split_dialogs_on_one_line": _split_dialogs_on_one_line,
-        "remove_dialog_dashes_single_line": _remove_dialog_dashes_single_line,
-        "remove_start_dash_non_dialogs": _remove_start_dash_non_dialogs,
-    }
     for key in enabled_fixes:
-        if key in fix_map:
-            n = fix_map[key](entries, cfg)
+        if key in _FIX_MAP:
+            n = _FIX_MAP[key](entries, cfg)
             if n > 0:
                 summary[key] = n
     return _format_srt(entries), summary
+
 
 
 def clean_subtitles(subtitles_dir: Path, enabled_fixes: Optional[List[str]] = None,
@@ -1567,6 +1993,8 @@ def clean_subtitles(subtitles_dir: Path, enabled_fixes: Optional[List[str]] = No
         log_callback(f"Starting subtitle cleaning for {total} file(s)...")
         if fixes_list:
             log_callback(f"Applying: Remove color tags (always) + {len(fixes_list)} fix(es)")
+            labels = [CLEAN_SUBTITLES_FIX_LABELS.get(k, k) for k in fixes_list]
+            log_callback(f"Selected fixes: {', '.join(labels)}")
     
     for idx, srt_file in enumerate(srt_files, start=1):
         if progress_callback:
@@ -1583,23 +2011,32 @@ def clean_subtitles(subtitles_dir: Path, enabled_fixes: Optional[List[str]] = No
             cleaned = re.sub(r'<c\.[a-zA-Z0-9_]+>', '', content)
             cleaned = re.sub(r'</c\.[a-zA-Z0-9_]+>', '', cleaned)
             
-            # 2. Apply selected fixes (they work on full SRT content)
+            # 2. Apply selected fixes (strip_leading_spaces handled in entries pipeline)
+            summary = {}
             if fixes_list:
-                cleaned, summary = _apply_fixes_to_content(cleaned, fixes_list, {})
+                cleaned, fix_summary = _apply_fixes_to_content(cleaned, fixes_list, {})
+                summary.update(fix_summary)
             
             if cleaned != content:
                 with open(srt_file, 'w', encoding='utf-8') as f:
                     f.write(cleaned)
                 cleaned_count += 1
                 if log_callback:
+                    tags_removed = len(re.findall(r'<c\.[a-zA-Z0-9_]+>|</c\.[a-zA-Z0-9_]+>', content))
                     if fixes_list and summary:
-                        summary_str = ", ".join(f"{v} {k}" for k, v in summary.items())
+                        parts = [
+                            f"{CLEAN_SUBTITLES_FIX_LABELS.get(k, k)}: {v}"
+                            for k, v in summary.items()
+                        ]
+                        if tags_removed:
+                            parts.append(f"Removed color tags: {tags_removed}")
+                        summary_str = ", ".join(parts)
                         log_callback(f"  ✓ Cleaned: {srt_file.name} ({file_size_kb:.1f} KB) — {summary_str}")
                     elif not fixes_list:
-                        tags_removed = len(re.findall(r'<c\.[a-zA-Z0-9_]+>|</c\.[a-zA-Z0-9_]+>', content))
                         log_callback(f"  ✓ Cleaned: {srt_file.name} ({file_size_kb:.1f} KB, removed {tags_removed} color tag(s))")
                     else:
-                        log_callback(f"  ✓ Cleaned: {srt_file.name} ({file_size_kb:.1f} KB)")
+                        change_hint = f", removed {tags_removed} color tag(s)" if tags_removed else ", formatting updates applied"
+                        log_callback(f"  ✓ Cleaned: {srt_file.name} ({file_size_kb:.1f} KB{change_hint})")
             else:
                 skipped_count += 1
                 if log_callback:
@@ -2669,6 +3106,44 @@ def _get_whisper_cpp_binary(config: Dict) -> Optional[Path]:
     return None
 
 
+def _extract_audio_for_transcription(
+    video_path: Path,
+    output_path: Path,
+    config: Dict,
+    log_callback=None,
+) -> bool:
+    """Extract 16 kHz mono WAV from *video_path* into *output_path* using FFmpeg.
+
+    Uses a fixed internal volume boost for all backends. This is the single
+    shared preprocessing step used by all transcription backends.
+    """
+    volume = DEFAULT_WHISPER_VOLUME_BOOST
+    ffmpeg_exe = get_ffmpeg_command(config)
+    if log_callback:
+        log_callback(f"Extracting audio (16 kHz mono, volume={volume})...")
+    result = subprocess.run(
+        [
+            ffmpeg_exe, "-y", "-i", str(video_path),
+            "-vn", "-ar", "16000", "-ac", "1",
+            "-af", f"volume={volume}",
+            "-f", "wav", str(output_path),
+            "-loglevel", "warning", "-hide_banner",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+    if result.returncode != 0:
+        if log_callback:
+            log_callback(f"FFmpeg error: {result.stderr or result.stdout}")
+        return False
+    if not output_path.exists():
+        if log_callback:
+            log_callback("FFmpeg did not produce audio file.")
+        return False
+    return True
+
+
 def transcribe_video_whisper_cpp(
     video_path: Path,
     language_code: str,
@@ -2770,6 +3245,7 @@ def transcribe_video_whisper_cpp(
 
         video_dir = video_path.parent
         base_name = video_path.stem
+        srt_out_dir = get_subtitles_dir()
         audio_stem = f"{base_name}_whisper_cpp"
         audio_path = video_dir / f"{audio_stem}.wav"
 
@@ -2781,30 +3257,11 @@ def transcribe_video_whisper_cpp(
             audio_stem = f"{audio_stem}_{n}"
             audio_path = video_dir / f"{audio_stem}.wav"
 
-        if log_callback:
-            log_callback("Extracting audio (16kHz mono, volume=1.75)...")
-        ffmpeg_exe = get_ffmpeg_command(config)
-        ffmpeg_result = subprocess.run(
-            [
-                ffmpeg_exe, "-y", "-i", str(video_path),
-                "-vn", "-ar", "16000", "-ac", "1", "-ab", "32k",
-                "-af", "volume=1.75", "-f", "wav",
-                str(audio_path), "-loglevel", "warning", "-hide_banner",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=600,
-        )
-        if ffmpeg_result.returncode != 0:
-            if log_callback:
-                log_callback(f"FFmpeg error: {ffmpeg_result.stderr or ffmpeg_result.stdout}")
+        if not _extract_audio_for_transcription(video_path, audio_path, config, log_callback):
             return False
 
-        if not audio_path.exists():
-            if log_callback:
-                log_callback("FFmpeg did not produce audio file.")
-            return False
-
+        # whisper-cli writes <stem>.srt; we point it at a temp location in video_dir
+        # then move the result to the subtitles folder.
         output_stem = str(video_dir / base_name)
 
         # On macOS: Homebrew/build-from-source often embeds Metal (GGML_METAL_EMBED_LIBRARY=ON),
@@ -2867,7 +3324,8 @@ def transcribe_video_whisper_cpp(
                 vad_args = ["--vad", "-vm", vad_model_path]
         except Exception:
             pass
-        subtitle_edit_args = ["-sow", "-bo", "3", "-bs", "2", "-nf"]
+        # Default stack tuned for more stable punctuation/sentence boundaries.
+        subtitle_edit_args = ["-sow", "-bs", "5", "-bo", "5"]
         cmd = [
             str(binary), "-m", str(model_path), "-f", str(audio_path),
             "-l", language_code if language_code != "auto" else "auto",
@@ -2944,11 +3402,16 @@ def transcribe_video_whisper_cpp(
                 cmd_fallback = cmd + ["-ng"]
                 returncode, _ = _run_whisper_streaming(cmd_fallback, cwd, extra_env)
 
-        final_srt = video_dir / f"{base_name}.srt"
+        tmp_srt   = Path(output_stem + ".srt")
+        final_srt = srt_out_dir / f"{base_name}.srt"
 
-        whisper_srt = Path(output_stem + ".srt")
-        if whisper_srt.exists():
-            shutil.move(str(whisper_srt), str(final_srt))
+        if tmp_srt.exists():
+            shutil.move(str(tmp_srt), str(final_srt))
+
+        # Post-processing uses the audio WAV for timing adjustment — delete it only after.
+        if final_srt.exists():
+            _whisper_cpp_post_process(final_srt, audio_path, config, log_callback)
+
         if audio_path.exists():
             try:
                 audio_path.unlink()
@@ -2957,7 +3420,7 @@ def transcribe_video_whisper_cpp(
 
         if returncode == 0 and final_srt.exists():
             if log_callback:
-                log_callback(f"✓ Transcription complete: {final_srt.name}")
+                log_callback(f"✓ Transcription complete: {final_srt}")
             return True
 
         if log_callback:
@@ -2997,10 +3460,11 @@ def transcribe_video(video_path: Path, language_code: str, model: str, whisper_o
             log_callback(f"Starting transcription of: {video_path.name}")
             log_callback(f"Language: {language_code}, Model: {model}, Format: {output_format}")
 
-        video_dir = video_path.parent
-        base_name = video_path.stem
-        audio_stem = f"{base_name}_converted"
-        audio_path = video_dir / f"{audio_stem}.wav"
+        video_dir   = video_path.parent
+        base_name   = video_path.stem
+        srt_out_dir = get_subtitles_dir()
+        audio_stem  = f"{base_name}_converted"
+        audio_path  = video_dir / f"{audio_stem}.wav"
 
         # Handle existing outputs (numbered suffix like whisper_auto.sh)
         existing = list(video_dir.glob(f"{audio_stem}*"))
@@ -3013,31 +3477,14 @@ def transcribe_video(video_path: Path, language_code: str, model: str, whisper_o
             if log_callback:
                 log_callback(f"Existing outputs found, using new stem: {audio_stem}")
 
-        if log_callback:
-            log_callback("Extracting and normalizing audio...")
-        ffmpeg_exe = get_ffmpeg_command()
-        ffmpeg_result = subprocess.run(
-            [
-                ffmpeg_exe, "-y", "-i", str(video_path),
-                "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", "-af", "dynaudnorm",
-                str(audio_path), "-loglevel", "warning", "-hide_banner",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=600,
-        )
-        if ffmpeg_result.returncode != 0:
-            if log_callback:
-                log_callback(f"FFmpeg error: {ffmpeg_result.stderr or ffmpeg_result.stdout}")
-            return False
-
-        if not audio_path.exists():
-            if log_callback:
-                log_callback("FFmpeg did not produce audio file.")
+        _cfg = load_config()
+        if not _extract_audio_for_transcription(video_path, audio_path, _cfg, log_callback):
             return False
 
         if log_callback:
             log_callback("Transcribing with Whisper...")
+        # whisper writes <audio_stem>.<format> into --output_dir; we use video_dir
+        # for the temp output then move the SRT to the subtitles folder.
         whisper_cmd = [
             str(whisper_python), "-m", "whisper", str(audio_path),
             "--model", model,
@@ -3069,7 +3516,7 @@ def transcribe_video(video_path: Path, language_code: str, model: str, whisper_o
                 log_callback(result.stderr)
 
         whisper_srt = video_dir / f"{audio_stem}.srt"
-        final_srt = video_dir / f"{base_name}.srt"
+        final_srt   = srt_out_dir / f"{base_name}.srt"
 
         if whisper_srt.exists():
             shutil.move(str(whisper_srt), str(final_srt))
@@ -3081,7 +3528,7 @@ def transcribe_video(video_path: Path, language_code: str, model: str, whisper_o
 
         if result.returncode == 0 and final_srt.exists():
             if log_callback:
-                log_callback(f"✓ Transcription complete: {final_srt.name}")
+                log_callback(f"✓ Transcription complete: {final_srt}")
             return True
 
         if log_callback:
@@ -3137,21 +3584,10 @@ def transcribe_video_vad(
     audio_path = workdir / "audio.wav"
 
     try:
-        if log_callback:
-            log_callback("Extracting audio...")
-        ffmpeg_exe = get_ffmpeg_command()
-        subprocess.run(
-            [
-                ffmpeg_exe, "-y",
-                "-i", str(video_path),
-                "-ac", "1",
-                "-ar", str(SAMPLE_RATE),
-                "-vn",
-                str(audio_path),
-            ],
-            check=True,
-            capture_output=True,
-        )
+        _cfg = load_config()
+        ffmpeg_exe = get_ffmpeg_command(_cfg)
+        if not _extract_audio_for_transcription(video_path, audio_path, _cfg, log_callback):
+            return False
 
         if log_callback:
             log_callback("Loading Silero VAD...")
@@ -3253,11 +3689,11 @@ def transcribe_video_vad(
                 all_subs.append(sub)
 
         all_subs.clean_indexes()
-        output_srt = video_path.with_suffix(".srt")
+        output_srt = get_subtitles_dir() / f"{video_path.stem}.srt"
         all_subs.save(output_srt, encoding="utf-8")
 
         if log_callback:
-            log_callback(f"Done → {output_srt.name}")
+            log_callback(f"Done → {output_srt}")
         return True
 
     except subprocess.CalledProcessError as e:
@@ -3344,8 +3780,16 @@ def run_batch_transcribe(transcribe_func, video_paths, *args, **kwargs) -> bool:
     """Run transcribe_func on each path. Logs [i/N] filename, respects check_stop. Returns True only if all succeed."""
     paths = [Path(p) for p in video_paths]
     total = len(paths)
-    # Strip check_stop before passing to transcribe_func (it doesn't accept it)
-    call_kwargs = {k: v for k, v in kwargs.items() if k != "check_stop"}
+    # Filter kwargs to only what transcribe_func accepts (avoids leaking ScriptWorker-injected
+    # extras like check_stop, stream_progress_callback, etc. into funcs that don't declare them)
+    sig = inspect.signature(transcribe_func)
+    params = sig.parameters
+    accepts_var_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+    if accepts_var_kwargs:
+        call_kwargs = {k: v for k, v in kwargs.items() if k != "check_stop"}
+    else:
+        allowed = set(params.keys())
+        call_kwargs = {k: v for k, v in kwargs.items() if k in allowed}
     for i, path in enumerate(paths):
         check_stop = kwargs.get("check_stop")
         if check_stop and check_stop():
@@ -3362,11 +3806,103 @@ def run_batch_transcribe(transcribe_func, video_paths, *args, **kwargs) -> bool:
     return True
 
 
+# ============================================================================
+# Transcription backend protocol + registry
+# ============================================================================
+
+@runtime_checkable
+class TranscribeBackend(Protocol):
+    """Common interface for every transcription engine.
+
+    Each backend exposes a human-readable *name* (shown in the UI combo) and a
+    stable *backend_id* key used for dispatch.  ``is_available`` is called at
+    startup so the combo can grey out unavailable engines.
+    """
+
+    name:       str   # display label, e.g. "Whisper CPP (recommended)"
+    backend_id: str   # machine key, e.g. "cpp"
+
+    def is_available(self, config: Dict) -> bool: ...
+
+    def transcribe(
+        self,
+        video_path: Path,
+        language_code: str,
+        model: str,
+        config: Dict,
+        progress_callback=None,
+        log_callback=None,
+    ) -> bool: ...
+
+
+class WhisperCppBackend:
+    name       = "Whisper CPP (recommended)"
+    backend_id = "cpp"
+
+    def is_available(self, config: Dict) -> bool:
+        binary = _get_whisper_cpp_binary(config)
+        return binary is not None and Path(binary).exists()
+
+    def transcribe(self, video_path: Path, language_code: str, model: str,
+                   config: Dict, progress_callback=None, log_callback=None) -> bool:
+        return transcribe_video_whisper_cpp(
+            video_path, language_code, model,
+            progress_callback=progress_callback, log_callback=log_callback,
+        )
+
+
+class OpenAIWhisperBackend:
+    name       = "OpenAI Whisper (short clip, legacy)"
+    backend_id = "standard"
+
+    def is_available(self, config: Dict) -> bool:  # noqa: ARG002
+        return _get_whisper_python(None) is not None
+
+    def transcribe(self, video_path: Path, language_code: str, model: str,
+                   config: Dict, progress_callback=None, log_callback=None) -> bool:
+        output_format   = config.get("whisper_output_format", "srt")
+        whisper_options = config.get("whisper_options", {})
+        return transcribe_video(
+            video_path, language_code, model, whisper_options,
+            output_format=output_format,
+            progress_callback=progress_callback, log_callback=log_callback,
+        )
+
+
+class VadWhisperBackend:
+    name       = "OpenAI Whisper (>5 min. clip, legacy)"
+    backend_id = "long"
+
+    def is_available(self, config: Dict) -> bool:  # noqa: ARG002
+        try:
+            import torch   # noqa: F401
+            import pysrt   # noqa: F401
+            return True
+        except ImportError:
+            return False
+
+    def transcribe(self, video_path: Path, language_code: str, model: str,
+                   config: Dict, progress_callback=None, log_callback=None) -> bool:
+        return transcribe_video_vad(
+            video_path, language_code, model,
+            progress_callback=progress_callback, log_callback=log_callback,
+        )
+
+
+# Ordered list of all available backends
+TRANSCRIBE_BACKENDS: List[TranscribeBackend] = [
+    WhisperCppBackend(),
+    OpenAIWhisperBackend(),
+    VadWhisperBackend(),
+]
+
+
 class ScriptWorker(QThread):
     """Worker thread for running scripts without blocking UI."""
     finished = pyqtSignal(bool)
     log_message = pyqtSignal(str)
     progress_update = pyqtSignal(int, int, str)  # current, total, filename
+    stream_progress = pyqtSignal(str)  # live per-stream download progress
     
     def __init__(self, script_func, *args, **kwargs):
         super().__init__()
@@ -3393,9 +3929,14 @@ class ScriptWorker(QThread):
         def progress_callback(current, total, filename):
             if not self._stop_requested:
                 self.progress_update.emit(current, total, filename)
-        
+
+        def stream_progress_callback(msg):
+            if not self._stop_requested:
+                self.stream_progress.emit(msg)
+
         self.kwargs["log_callback"] = log_callback
         self.kwargs["progress_callback"] = progress_callback
+        self.kwargs["stream_progress_callback"] = stream_progress_callback
         self.kwargs["check_stop"] = lambda: self._stop_requested
         # Filter kwargs to only what script_func accepts (avoids passing check_stop to functions that don't support it)
         sig = inspect.signature(self.script_func)
@@ -4070,9 +4611,10 @@ class CleanSubtitlesDialog(QDialog):
         sep.setStyleSheet("color: #ccc;")
         layout.addWidget(sep)
         
-        # 12 optional fixes
+        # Optional fixes (CLEAN_SUBTITLES_FIX_ITEMS may be 2- or 3-tuples)
         saved = self.config.get("clean_subtitles_fixes", {})
-        for key, label in CLEAN_SUBTITLES_FIX_ITEMS:
+        for item in CLEAN_SUBTITLES_FIX_ITEMS:
+            key, label = item[0], item[1]
             cb = QCheckBox(label)
             cb.setChecked(saved.get(key, True))
             self.fix_checkboxes[key] = cb
@@ -4115,6 +4657,61 @@ class CleanSubtitlesDialog(QDialog):
         """Persist current selection to config."""
         fixes = {k: cb.isChecked() for k, cb in self.fix_checkboxes.items()}
         self.config["clean_subtitles_fixes"] = fixes
+        save_config(self.config)
+
+
+class WhisperPostProcessingDialog(QDialog):
+    """Dialog to configure per-step Whisper post-processing options."""
+
+    _OPTIONS = [
+        ("whisper_post_proc_adjust_timings",     "Adjust timings",      "Snap subtitle boundaries to speech/silence using the audio waveform"),
+        ("whisper_post_proc_merge_lines",         "Merge short lines",   "Merge adjacent short subtitles when the gap is ≤ 100 ms"),
+        ("whisper_post_proc_split_lines",         "Break long lines",   "Insert a line break in long subtitles (keeps one subtitle cue)"),
+        ("whisper_post_proc_fix_short_duration",  "Fix short duration",  "Extend subtitles displayed for less than 1 second"),
+        ("whisper_post_proc_add_periods",         "Add periods",         "Add a period when the gap to the next subtitle is > 600 ms"),
+        ("whisper_post_proc_fix_casing",          "Fix casing",          "Capitalise the first letter of each subtitle"),
+    ]
+
+    def __init__(self, parent=None, config: Optional[Dict] = None):
+        super().__init__(parent)
+        self.setWindowTitle("Whisper post-processing options")
+        self.setMinimumWidth(380)
+        self.config = config or load_config()
+        self._checkboxes: Dict[str, QCheckBox] = {}
+
+        layout = QVBoxLayout()
+        layout.setSpacing(6)
+
+        for key, label, tooltip in self._OPTIONS:
+            cb = QCheckBox(label)
+            cb.setChecked(self.config.get(key, True))
+            cb.setToolTip(tooltip)
+            self._checkboxes[key] = cb
+            layout.addWidget(cb)
+
+        layout.addWidget(QLabel("────────────────────────────────────"))
+
+        btn_layout = QHBoxLayout()
+        select_all = QPushButton("Select all")
+        select_all.clicked.connect(lambda: [cb.setChecked(True) for cb in self._checkboxes.values()])
+        select_none = QPushButton("Select none")
+        select_none.clicked.connect(lambda: [cb.setChecked(False) for cb in self._checkboxes.values()])
+        ok_btn = QPushButton("OK")
+        ok_btn.clicked.connect(self.accept)
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        btn_layout.addWidget(select_all)
+        btn_layout.addWidget(select_none)
+        btn_layout.addStretch()
+        btn_layout.addWidget(ok_btn)
+        btn_layout.addWidget(cancel_btn)
+        layout.addLayout(btn_layout)
+
+        self.setLayout(layout)
+
+    def save_to_config(self):
+        for key, cb in self._checkboxes.items():
+            self.config[key] = cb.isChecked()
         save_config(self.config)
 
 
@@ -5630,6 +6227,7 @@ class WhisperOptionsDialog(QDialog):
 
         self.extra_args_input = QTextEdit()
         self.extra_args_input.setFont(QFont("Courier New", 11))
+        self.extra_args_input.setMaximumHeight(160)
         right_layout.addWidget(self.extra_args_input)
 
         right_panel.setLayout(right_layout)
@@ -5666,11 +6264,12 @@ class WhisperOptionsDialog(QDialog):
         if method == "cpp":
             self.params_text.setPlainText(self.get_cpp_parameters_reference())
             self.extra_args_input.setPlaceholderText(
-                "-bo 3\n-bs 2\n--word-thold 0.02\n--vad\n-vm /path/to/silero_v5.onnx"
+                "--word-thold 0.02\n--entropy-thold 2.4\n--no-speech-thold 0.6"
             )
             self.help_label.setText(
-                "One flag per line.  Short form (-bo 3) or long form (--best-of 3).\n"
-                "Language, model path, output format and VAD model are handled by the main tab."
+                "Applied by default: -sow (split-on-word), beam-size=5, best-of=5, temperature fallback on.\n"
+                "One flag per line. Short form (-bo 3) or long form (--best-of 3). "
+                "Language, model, output format and VAD are handled by the main tab."
             )
             self.btn_cpp.setStyleSheet(self._BTN_ACTIVE)
             self.btn_openai.setStyleSheet(self._BTN_INACTIVE)
@@ -6155,9 +6754,16 @@ class VideoProcessingApp(QMainWindow):
         method_label.setStyleSheet("font-weight: bold;")
         self.transcribe_method_combo = QComboBox()
         self.transcribe_method_combo.setFixedWidth(_COMBO_W)
-        self.transcribe_method_combo.addItem("Whisper CPP (recommended)", "cpp")
-        self.transcribe_method_combo.addItem("OpenAI Whisper (short clip, legacy)", "standard")
-        self.transcribe_method_combo.addItem("OpenAI Whisper (>5 min. clip, legacy)", "long")
+        _cfg_now = load_config()
+        for _backend in TRANSCRIBE_BACKENDS:
+            self.transcribe_method_combo.addItem(_backend.name, _backend.backend_id)
+            if not _backend.is_available(_cfg_now):
+                # Grey out unavailable backends (still selectable)
+                idx = self.transcribe_method_combo.count() - 1
+                item_model = self.transcribe_method_combo.model()
+                if item_model:
+                    from PyQt5.QtGui import QColor
+                    item_model.item(idx).setForeground(QColor("#aaaaaa"))
         method_row.addWidget(method_label, 0)
         method_row.addWidget(self.transcribe_method_combo, 0)
         method_row.addStretch()
@@ -6255,21 +6861,36 @@ class VideoProcessingApp(QMainWindow):
         action_bar_layout.setContentsMargins(0, 6, 0, 2)
         action_bar_layout.setSpacing(8)
 
-        gear_btn = QPushButton("⚙  Advanced options")
-        gear_btn.setToolTip("Open advanced transcription settings")
-        gear_btn.setStyleSheet(
+        _btn_style = (
             "QPushButton { background: #f5f5f5; border: 1px solid #ccc; border-radius: 4px;"
             "  font-size: 11px; color: #555; padding: 4px 10px; }"
             "QPushButton:hover { background: #eaeaea; border-color: #aaa; color: #333; }"
             "QPushButton:pressed { background: #d8d8d8; }"
         )
+
+        gear_btn = QPushButton("⚙  Advanced options")
+        gear_btn.setToolTip("Open advanced transcription settings")
+        gear_btn.setStyleSheet(_btn_style)
         gear_btn.clicked.connect(self.open_whisper_options)
+
+        # Post-processing toggle + options gear
+        self.transcribe_post_proc_cb = QCheckBox("Post-processing")
+        self.transcribe_post_proc_cb.setToolTip("Apply post-processing steps after transcription (adjust timings, merge lines, etc.)")
+        self.transcribe_post_proc_cb.setChecked(self.config.get("whisper_post_processing_enabled", False))
+        self.transcribe_post_proc_cb.toggled.connect(self._on_post_proc_toggled)
+        post_proc_gear = QPushButton("⚙")
+        post_proc_gear.setFixedWidth(28)
+        post_proc_gear.setToolTip("Configure post-processing options")
+        post_proc_gear.setStyleSheet(_btn_style)
+        post_proc_gear.clicked.connect(self.open_post_processing_options)
 
         self.transcribe_main_btn = QPushButton("Transcribe")
         self.transcribe_main_btn.setProperty("ui_role", "transcribe")
         self.transcribe_main_btn.clicked.connect(self._transcribe_from_tab_by_method)
 
         action_bar_layout.addWidget(gear_btn)
+        action_bar_layout.addWidget(self.transcribe_post_proc_cb)
+        action_bar_layout.addWidget(post_proc_gear)
         action_bar_layout.addWidget(self.transcribe_main_btn)
         action_bar_layout.addStretch()
         layout.addWidget(action_bar)
@@ -6323,8 +6944,15 @@ class VideoProcessingApp(QMainWindow):
         return tab
     
     def _transcribe_from_tab_by_method(self):
-        """Dispatch to the appropriate transcription handler based on method selection."""
+        """Dispatch to the appropriate transcription handler based on method selection.
+
+        Looks up the selected backend_id in TRANSCRIBE_BACKENDS so that adding a
+        new backend only requires registering it there.
+        """
         method = self.transcribe_method_combo.currentData()
+        # Legacy direct-method dispatch (kept for the install-flow handlers which
+        # call transcribe_whisper_cpp_from_tab / transcribe_from_tab / transcribe_long_from_tab
+        # directly after install succeeds)
         if method == "standard":
             self.transcribe_from_tab()
         elif method == "long":
@@ -6332,7 +6960,35 @@ class VideoProcessingApp(QMainWindow):
         elif method == "cpp":
             self.transcribe_whisper_cpp_from_tab()
         else:
-            self.transcribe_from_tab()
+            # Generic backend dispatch for any backend registered in TRANSCRIBE_BACKENDS
+            backend = next((b for b in TRANSCRIBE_BACKENDS if b.backend_id == method), None)
+            if backend:
+                video_paths = self._get_transcribe_paths()
+                if not video_paths:
+                    QMessageBox.warning(self, "No File",
+                                        "Please select a video or audio file to transcribe.")
+                    return
+                language_code = self.transcribe_language_combo.currentData() or "auto"
+                model         = self.transcribe_model_combo.currentData()
+                config        = load_config()
+                self.transcribe_log(f"Starting transcription ({backend.name})...")
+                self.transcribe_progress_bar.setVisible(True)
+                self.transcribe_stop_btn.setVisible(True)
+                self.transcribe_stop_btn.setEnabled(True)
+                self.transcribe_progress_bar.setRange(0, 0)
+
+                def _log(msg): self.transcribe_log(msg)
+                self.worker = ScriptWorker(
+                    run_batch_transcribe,
+                    lambda p, lc=language_code, m=model, c=config: backend.transcribe(
+                        p, lc, m, c, log_callback=_log),
+                    video_paths,
+                )
+                self.worker.log_message.connect(_log)
+                self.worker.finished.connect(self.on_transcribe_finished)
+                self.worker.start()
+            else:
+                self.transcribe_from_tab()
 
     def save_whisper_model(self, model: str):
         """Save Whisper model selection to config."""
@@ -7705,6 +8361,15 @@ class VideoProcessingApp(QMainWindow):
         download_buttons.addWidget(open_lossless_btn)
         download_tab_layout.addLayout(download_buttons)
 
+        self.download_stream_status = QLabel("")
+        self.download_stream_status.setFont(QFont("Monaco", 9))
+        self.download_stream_status.setStyleSheet(
+            "QLabel { background: #fff8e1; border: 1px solid #ffe082; "
+            "border-radius: 3px; padding: 3px 8px; color: #555; }"
+        )
+        self.download_stream_status.setVisible(False)
+        download_tab_layout.addWidget(self.download_stream_status)
+
         download_log_group, self.download_log_output = self._make_log_panel(
             placeholder="Logs will appear here after processing starts"
         )
@@ -7995,6 +8660,17 @@ class VideoProcessingApp(QMainWindow):
             # Reload config after whisper options are saved
             self.config = load_config()
             self.log("Whisper options updated.")
+
+    def _on_post_proc_toggled(self, checked: bool):
+        self.config["whisper_post_processing_enabled"] = checked
+        save_config(self.config)
+
+    def open_post_processing_options(self):
+        """Open the Whisper post-processing options dialog."""
+        dlg = WhisperPostProcessingDialog(self, self.config)
+        if dlg.exec_() == QDialog.Accepted:
+            dlg.save_to_config()
+            self.config = load_config()
     
     def run_script(self, script_func, *args, **kwargs):
         """Run a script in a worker thread."""
@@ -8021,6 +8697,10 @@ class VideoProcessingApp(QMainWindow):
         # Hide progress for downloads
         is_download = func_name in ["download_episodes", "download_with_detection"]
         self.progress_group.setVisible(not is_download)
+
+        if is_download:
+            self.download_stream_status.setText("")
+            self.download_stream_status.setVisible(True)
         
         if not is_download:
             # Configure progress bar
@@ -8039,6 +8719,7 @@ class VideoProcessingApp(QMainWindow):
         self.worker = ScriptWorker(script_func, *args, **kwargs)
         self.worker.log_message.connect(self._log_route)
         self.worker.progress_update.connect(self.on_progress_update)
+        self.worker.stream_progress.connect(self.on_download_stream_progress)
         self.worker.finished.connect(self.on_script_finished)
         self.worker.start()
     
@@ -8114,8 +8795,13 @@ class VideoProcessingApp(QMainWindow):
             status_msg += f" ({current}/{total})"
         self.statusBar().showMessage(status_msg)
     
+    def on_download_stream_progress(self, message: str):
+        """Update the live stream-progress label during a download."""
+        self.download_stream_status.setText(f"  ↓  {message}")
+
     def on_script_finished(self, success: bool):
         """Handle script completion."""
+        self.download_stream_status.setVisible(False)
         self.progress_group.setVisible(False)
         self.progress_bar.setRange(0, 100)  # Reset to determinate mode
         self.progress_bar.setValue(0)
@@ -8187,13 +8873,15 @@ class VideoProcessingApp(QMainWindow):
 
         def download_with_detection(
             commands_text, output_dir, mode, name, use_s01e, season, ep_spec, select_video,
-            progress_callback=None, log_callback=None,
+            progress_callback=None, log_callback=None, stream_progress_callback=None,
         ):
             result = download_episodes(
                 commands_text, output_dir,
                 mode=mode, name=name, use_s01e=use_s01e, season=season, ep_spec=ep_spec,
                 select_video=select_video,
-                progress_callback=progress_callback, log_callback=log_callback,
+                progress_callback=progress_callback,
+                log_callback=log_callback,
+                stream_progress_callback=stream_progress_callback,
             )
             if result:
                 mkv_files = list(output_dir.glob("*.mkv"))
@@ -8230,7 +8918,7 @@ class VideoProcessingApp(QMainWindow):
         subtitles_dir = get_subtitles_dir()
         self.log("Starting subtitle cleaning...")
         self.run_script(clean_subtitles, subtitles_dir, enabled_fixes)
-    
+
     def translate_subtitles(self):
         """Translate subtitles."""
         env_key = os.getenv("GEMINI_API_KEY") or os.getenv("GST_API_KEY")

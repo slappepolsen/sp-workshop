@@ -26,6 +26,13 @@ ENV/
 env/
 .venv/
 build_venv/
+.env
+.env.local
+.env.production
+.env.*
+*.env
+*.venv
+.venv*
 
 .rulesrules
 rentry.md

@@ -7,7 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [10.4.0-alpha.8] - 2026-03-21
+## [10.4.0-alpha.9] - 2026-03-24
+
+### Added
+- Transcription: shared FFmpeg step `_extract_audio_for_transcription()` (16 kHz mono + volume boost) for all backends; final `.srt` files written to the configured subtitles folder (Whisper CPP, OpenAI Whisper, long/VAD).
+- Whisper CPP: optional post-processing after transcription (adjust timings from waveform, merge short lines, break long lines, extend short cues, add periods, fix casing) with persisted options and **WhisperPostProcessingDialog**; Transcription tab checkbox + gear.
+- Transcription: `TranscribeBackend` protocol and `TRANSCRIBE_BACKENDS` registry; method combobox built from registry; unavailable backends shown greyed; generic dispatch for registered backends; `typing.Protocol` fallback via `typing_extensions` on older Python.
+- Download tab: live stream status line driven by N_m3u8DL-RE progress parsing (throttled) plus milestone messages (downloading, decrypting, merging, muxing).
+- Clean subtitles: 13th optional fix `strip_leading_spaces`; dialog lists short examples per fix; cleaner logs with human-readable fix names and color-tag counts.
+- `.gitignore`: `.env` / `.env.*` and additional venv patterns.
+
+### Changed
+- Whisper CPP: default whisper-cli subtitle-edit stack tuned (`-sow`, beam size and best-of 5); completion log shows full output path.
+- `run_batch_transcribe`: only passes keyword arguments accepted by the target transcribe function (avoids leaking worker-only kwargs).
+- `ScriptWorker`: `stream_progress` signal and `stream_progress_callback` passed into download pipeline.
+- Subtitle fix helpers: optional `ctx` for per-fix change tracking; central `_FIX_MAP`.
+- WhisperOptionsDialog: capped extra-args editor height; placeholder and help text aligned with new CPP defaults.
+- README: expanded setup guidance (PATH, releases/unzip, `cd` tips, FFmpeg paths for Apple Silicon vs Intel, Linux distro note, optional tool PATH).
+
+## [10.4.0-alpha.8] - 2026-03-23
 
 ### Added
 - Subtitles, Download, and Transcription tabs: folder shortcut strip at top of each tab.
