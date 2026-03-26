@@ -8361,15 +8361,6 @@ class VideoProcessingApp(QMainWindow):
         download_buttons.addWidget(open_lossless_btn)
         download_tab_layout.addLayout(download_buttons)
 
-        self.download_stream_status = QLabel("")
-        self.download_stream_status.setFont(QFont("Monaco", 9))
-        self.download_stream_status.setStyleSheet(
-            "QLabel { background: #fff8e1; border: 1px solid #ffe082; "
-            "border-radius: 3px; padding: 3px 8px; color: #555; }"
-        )
-        self.download_stream_status.setVisible(False)
-        download_tab_layout.addWidget(self.download_stream_status)
-
         download_log_group, self.download_log_output = self._make_log_panel(
             placeholder="Logs will appear here after processing starts"
         )
@@ -8698,10 +8689,6 @@ class VideoProcessingApp(QMainWindow):
         is_download = func_name in ["download_episodes", "download_with_detection"]
         self.progress_group.setVisible(not is_download)
 
-        if is_download:
-            self.download_stream_status.setText("")
-            self.download_stream_status.setVisible(True)
-        
         if not is_download:
             # Configure progress bar
             self.progress_bar.setRange(0, 100)
@@ -8796,12 +8783,12 @@ class VideoProcessingApp(QMainWindow):
         self.statusBar().showMessage(status_msg)
     
     def on_download_stream_progress(self, message: str):
-        """Update the live stream-progress label during a download."""
-        self.download_stream_status.setText(f"  ↓  {message}")
+        """Route download stream progress into the Download log only."""
+        if message:
+            self.log_download(f"  ↓  {message}")
 
     def on_script_finished(self, success: bool):
         """Handle script completion."""
-        self.download_stream_status.setVisible(False)
         self.progress_group.setVisible(False)
         self.progress_bar.setRange(0, 100)  # Reset to determinate mode
         self.progress_bar.setValue(0)

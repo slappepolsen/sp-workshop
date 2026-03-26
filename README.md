@@ -49,145 +49,99 @@ Download SP Workshop from:
 
 Select **Source code (zip)** under **Assets**.
 
-> **Note** 
-> After downloading, you will have a `.zip` file (for example `sp-workshop-10.3.0-alpha.2.zip`). 
+> **Note**
+> After downloading, you will have a `.zip` file (for example `sp-workshop-10.3.0-alpha.2.zip`).
 > Double-click it to unzip. This creates a folder with the same name (for example `sp-workshop-10.3.0-alpha.2`).
-> Open this folder. You should see files like `app.py`, `requirements.txt`, and `README.md`. The steps below assume you open a terminal inside this folder.
+> Open this folder. You should see files like `app.py`, `requirements.txt`, and `README.md`.
+
+## Easiest way to run (all OS)
+
+You no longer need to run this every time:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python app.py
+```
+
+Use the launcher instead. It will:
+- create `.venv` automatically if missing
+- install/update `requirements.txt` automatically when needed
+- start `app.py` automatically
+
+### One-click start
+
+- **macOS:** double-click `Start_SP_Workshop.command`
+- **Windows:** double-click `Start_SP_Workshop.bat`
+- **Linux:** run `./Start_SP_Workshop.sh` (or double-click it in file manager if executable)
+
+### Terminal command start (`spw`)
+
+Pick your OS once below. After that, just type `spw` in terminal from anywhere.
 
 ## macOS
 
-1. Open the **Terminal** app
-2. Navigate to the project folder
+1. Open Terminal and go to the project once:
    ```bash
-   cd path/to/sp-workshop
+   cd /path/to/sp-workshop
    ```
-
-> **Tip**
-> In that same Terminal, do **either**: 
-> **Option A:** type `cd`, add a space, drag the unzipped project folder into Terminal, then press Enter. 
-> **Option B:** type `cd`, add a space, then type or paste your real folder path where the example says `path/to/sp-workshop` (for example something under Downloads), then press Enter.
-
-3. Create and activate a virtual environment  
-   Use Python 3.12 to avoid Qt issues on macOS (`brew install python@3.12`).
-   ```bash
-   python3.12 -m venv .venv   # or python3 if 3.12 is default
-   source .venv/bin/activate
-   ```
-
-> **Note**
-> A virtual environment keeps this app’s Python packages separate from the rest of your system.
-
-4. Install dependencies
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-5. Install FFmpeg (required)
-
+2. Install FFmpeg (required):
    ```bash
    brew install ffmpeg-full
    ```
-
-> **Note**  
-> Homebrew must be installed first. Install it from https://brew.sh if needed.
-
-> **If FFmpeg is not detected later in the app**  
-> After you start SP Workshop, open **Settings → Tools** and set the FFmpeg path manually:
->
-> - Apple Silicon: `/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg`
-> - Intel: `/usr/local/opt/ffmpeg-full/bin/ffmpeg`
-
-6. Install N_m3u8DL-RE (optional)
-- Download from https://github.com/nilaoda/N_m3u8DL-RE/releases
-- Add the executable to your PATH
-
-> **Note**  
-> PATH is a list of folders your system searches for commands. Search “add directory to PATH macOS” if needed.
-
-7. Run the app
+3. Add `sp-workshop` and `spw` commands:
    ```bash
-   python3 app.py
+   echo 'alias sp-workshop="bash \"/path/to/sp-workshop/scripts/run_sp_workshop.sh\""' >> ~/.zshrc
+   echo 'alias spw="sp-workshop"' >> ~/.zshrc
+   source ~/.zshrc
    ```
-   
-   > **Note**  
-   > For versions before 10.0.0, use `python3 video_app_v8.py` or rename the file to `app.py`.
+4. Run from anywhere:
+   ```bash
+   spw
+   ```
 
 ## Windows
 
-1. Open **Command Prompt**
-2. Navigate to the project folder
-   ```bash
-   cd path\to\sp-workshop
+1. Install FFmpeg and add it to PATH (required): https://www.gyan.dev/ffmpeg/builds/
+2. Open **PowerShell** and run:
+   ```powershell
+   Add-Content $PROFILE 'function sp-workshop { & "C:\path\to\sp-workshop\scripts\run_sp_workshop.ps1" }'
+   Add-Content $PROFILE 'Set-Alias spw sp-workshop'
+   . $PROFILE
+   ```
+3. Run from anywhere:
+   ```powershell
+   spw
    ```
 
-> **Tip**  
-> Copy the folder path from File Explorer, then type `cd`, paste it, and press Enter..
+If PowerShell blocks scripts, run this once:
 
-3. Create and activate a virtual environment  
-   Python 3.12 recommended.
-   ```bash
-   python -m venv .venv
-   .venv\Scripts\activate
-   ```
-
-4. Install dependencies
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-5. Install FFmpeg and add it to PATH
-
-> Download from: https://www.gyan.dev/ffmpeg/builds/
-
-> **Note**  
-> **PATH** tells Windows where to find programs when you type them in Command Prompt. 
-> If `ffmpeg` is not found, add the folder that contains **your** `ffmpeg.exe` to PATH.
-
-6. Install N_m3u8DL-RE (optional)
-- Download from https://github.com/nilaoda/N_m3u8DL-RE/releases
-- Add the executable to your PATH
-
-> **Note**  
-> Same idea as for FFmpeg: add the folder that contains the N_m3u8DL-RE executable to your PATH, or
-> configure the path inside the app’s settings if there is an option.
-
-7. Run the app
-   ```bash
-   python app.py
-   ```
-   
-> **Note**  
-> For versions before 10.0.0, use `python video_app_v8.py` or rename the file to `app.py`.
-
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
 
 ## Linux
 
-> The `apt` commands below assume **Debian** or **Ubuntu**. Other distributions use their own package manager to install FFmpeg.
-
-1. Create and activate a virtual environment  
-   Python 3.12 recommended.
-   ```bash
-   python3 -m venv .venv
-   source .venv/bin/activate
-   ```
-2. Install dependencies
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-3. Install FFmpeg
+1. Install FFmpeg (Debian/Ubuntu example):
    ```bash
    sudo apt install ffmpeg
    ```
-4. Install N_m3u8DL-RE (optional, for downloads)
-   - Download from https://github.com/nilaoda/N_m3u8DL-RE/releases
-   - Add the executable to your PATH
-
-5. Run the app
+2. Add `sp-workshop` and `spw` commands:
    ```bash
-   python3 app.py
+   echo 'alias sp-workshop="bash \"/path/to/sp-workshop/scripts/run_sp_workshop.sh\""' >> ~/.bashrc
+   echo 'alias spw="sp-workshop"' >> ~/.bashrc
+   source ~/.bashrc
    ```
-   For older versions (before 10.0.0), the main file is called  `video_app_v8.py`. Use `python3 video_app_v8.py` or rename it to `app.py`.
+3. Run from anywhere:
+   ```bash
+   spw
+   ```
+
+## Optional tools
+
+- N_m3u8DL-RE (optional, for downloads): https://github.com/nilaoda/N_m3u8DL-RE/releases
+- Add it to PATH or configure path in app settings.
 
 ---
 
