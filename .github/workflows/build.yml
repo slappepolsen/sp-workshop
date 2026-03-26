@@ -34,15 +34,32 @@ jobs:
             echo "Missing macOS executable: $APP_BIN"
             exit 1
           fi
-          set +e
-          QT_QPA_PLATFORM=offscreen timeout 20 "$APP_BIN" >/tmp/spw_macos_smoke.log 2>&1
-          code=$?
-          set -e
-          if [ "$code" -ne 0 ] && [ "$code" -ne 124 ]; then
-            echo "macOS smoke test failed with code $code"
-            cat /tmp/spw_macos_smoke.log || true
-            exit 1
-          fi
+          python - <<'PY'
+          import os
+          import subprocess
+          import sys
+
+          env = os.environ.copy()
+          env["QT_QPA_PLATFORM"] = "offscreen"
+
+          proc = subprocess.Popen(
+              ["dist/SP_Workshop.app/Contents/MacOS/SP_Workshop"],
+              stdout=subprocess.PIPE,
+              stderr=subprocess.STDOUT,
+              text=True,
+              env=env,
+          )
+          try:
+              proc.wait(timeout=20)
+              output = proc.stdout.read() if proc.stdout else ""
+              print("macOS smoke test failed: process exited early.")
+              if output:
+                  print(output)
+              sys.exit(1)
+          except subprocess.TimeoutExpired:
+              proc.terminate()
+              sys.exit(0)
+          PY
 
       - name: Package macOS artifact
         run: |
@@ -75,7 +92,7 @@ jobs:
 
       - name: Build Windows executable
         run: |
-          pyinstaller --windowed --name "SP_Workshop" --icon=media/icon.ico app.py
+          pyinstaller --onefile --windowed --name "SP_Workshop" --icon=media/icon.ico app.py
 
       - name: Smoke test Windows executable
         shell: powershell
