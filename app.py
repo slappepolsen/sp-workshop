@@ -8,8 +8,8 @@ A PyQt5 desktop app that provides a button-based interface for all video process
 """
 
 
-__version__ = "10.4.0-alpha.9"
-VERSION_CODENAME = "Routing"
+__version__ = "10.4.0-alpha.11"
+VERSION_CODENAME = "Rocket Launcher"
 
 import sys
 import os

@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [10.4.0-alpha.11] - 2026-03-26
+
+### Added
+
+- GitHub Actions (`.github/workflows/build.yml`): PyInstaller builds for macOS, Windows, and Linux; per-OS smoke tests; on `v*` tag push, creates a GitHub Release attaching `SP_Workshop-macOS.zip`, `SP_Workshop-Windows.zip`, and `SP_Workshop-Linux.tar.gz` (marked **prerelease** when the tag contains `alpha`).
+- Same workflow: `workflow_dispatch` to run builds without creating a release (no tag).
+- README: pre-built downloads for all three platforms (asset names, macOS Gatekeeper, Windows SmartScreen, Linux extract/run).
+- README: pre-built users only need FFmpeg (and optional N_m3u8DL-RE); pointer to skip the source-only launcher and `spw` section.
+
+### Changed
+
+- README: clearer separation between **Releases** pre-built assets and **source code** install paths.
+- `.github/workflows/build.yml.disabled` reduced to a deprecation stub pointing at the active workflow.
+
+### Fixed
+
+- CI: macOS smoke test no longer uses GNU `timeout` (unavailable on macOS runners); portable Python-based timeout instead.
+- CI: Windows PyInstaller build uses `--onefile` so `dist/SP_Workshop.exe` exists for the smoke test.
+
+### Removed
+
+- Download tab: live stream-status label; N_m3u8DL-RE stream progress is written to the Download log only.
+
 ## [10.4.0-alpha.10] - 2026-03-26
 
 ### Added
