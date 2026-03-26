@@ -65,10 +65,7 @@ pip install -r requirements.txt
 python app.py
 ```
 
-Use the launcher instead. It will:
-- create `.venv` automatically if missing
-- install/update `requirements.txt` automatically when needed
-- start `app.py` automatically
+Use the launcher instead to start the app automatically.
 
 ### One-click start
 
