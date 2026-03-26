@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [10.4.0-alpha.10] - 2026-03-26
+
+### Added
+- Cross-platform launcher scripts: `Start_SP_Workshop.bat`, `Start_SP_Workshop.sh`, and `Start_SP_Workshop.command`.
+- New helper runners in `scripts/`: `run_sp_workshop.ps1` (Windows) and `run_sp_workshop.sh` (Unix/macOS) for consistent startup behavior.
+
+### Changed
+- Startup flow refactored to use the new launcher scripts for clearer platform-specific entry points.
+- README launch/setup guidance updated to match the new cross-platform launcher workflow.
+
 ## [10.4.0-alpha.9] - 2026-03-24
 
 ### Added
