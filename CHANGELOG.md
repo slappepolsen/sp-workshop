@@ -7,12 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- App icon master is `media/icon-source.png` (1024×1024 iOS-style SP artwork); `media/build_app_icon.sh` defaults to it and emits PNGs suited for macOS `iconutil` (8-bit RGBA).
+
+## [10.4.0-alpha.12] - 2026-03-27
+
+### Added
+
+- `media/build_app_icon.sh` and `media/preview_logo_icons.sh`: regenerate app icons (ImageMagick + macOS `iconutil`) and preview logo-derived icons.
+- PyInstaller helpers `_is_frozen_pyinstaller()` and `_host_python_for_module_cli()` so subprocesses that need CPython use a real `python3` / `python` on PATH, not the frozen GUI binary.
+
+### Changed
+
+- Application icons (`media/icon.icns`, `media/icon.ico`, `media/icon.png`) updated for sharper dock, taskbar, and window chrome.
+- README: tighter pre-built release wording; source-code section defers to the launcher (removed redundant venv one-liner block).
+- `.gitignore`: ignore `media/logo-v7.png` and `media/logo_icon_preview.png` (local source/preview only; packaged icons stay tracked).
+- `get_app_icon()` docstring: reference `media/build_app_icon.sh` instead of `create_icon.sh`.
+
+### Fixed
+
+- Bundled app: Whisper virtualenv creation uses host Python when frozen (avoids `venv` against the PyInstaller executable); log explains when no system Python is available.
+- Bundled app: in-app pip installs (`PipInstallWorker`, Whisper.cpp pip path) use host Python with actionable Terminal hints when unavailable.
+- Subtitle translation: require `gst` (PATH, venv, or `python -m gemini_srt_translator`) up front with one clear error; module fallback probes with a bounded timeout instead of a brittle short `subprocess.run`.
+- `find_gst_command()`: module fallback delegates to host Python so gemini-srt-translator works inside a frozen build when installed for system Python.
+
 ## [10.4.0-alpha.11] - 2026-03-26
 
 ### Added
 
-- GitHub Actions (`.github/workflows/build.yml`): PyInstaller builds for macOS, Windows, and Linux; per-OS smoke tests; on `v*` tag push, creates a GitHub Release attaching `SP_Workshop-macOS.zip`, `SP_Workshop-Windows.zip`, and `SP_Workshop-Linux.tar.gz` (marked **prerelease** when the tag contains `alpha`).
-- Same workflow: `workflow_dispatch` to run builds without creating a release (no tag).
+- GitHub Actions (`.github/workflows/build.yml`): PyInstaller builds for macOS, Windows, and Linux; per-OS smoke tests; **manual** `workflow_dispatch` only (tag and branch pushes do not trigger it). Optional inputs: `ref` to build, `create_github_release` + `release_tag` to publish `SP_Workshop-macOS.zip`, `SP_Workshop-Windows.zip`, and `SP_Workshop-Linux.tar.gz` (prerelease when `release_tag` contains `alpha`).
 - README: pre-built downloads for all three platforms (asset names, macOS Gatekeeper, Windows SmartScreen, Linux extract/run).
 - README: pre-built users only need FFmpeg (and optional N_m3u8DL-RE); pointer to skip the source-only launcher and `spw` section.
 

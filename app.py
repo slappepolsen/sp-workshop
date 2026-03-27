@@ -8,7 +8,7 @@ A PyQt5 desktop app that provides a button-based interface for all video process
 """
 
 
-__version__ = "10.4.0-alpha.11"
+__version__ = "10.4.0-alpha.12"
 VERSION_CODENAME = "Rocket Launcher"
 
 import sys
@@ -384,9 +384,9 @@ def _resolve_media_path(filename: str) -> Optional[Path]:
 def get_app_icon() -> QIcon:
     """Load application icon, preferring .icns on macOS, with fallback to PNG and default.
     
-    Note: For best results on macOS, use a PNG with transparent background (alpha channel)
-    and convert it to .icns using the create_icon.sh script. The icon should be at least
-    1024x1024 pixels for best quality.
+    Note: Master asset is media/icon-source.png; regenerate icon.icns / icon.ico / icon.png with
+    media/build_app_icon.sh (ImageMagick + macOS iconutil). Use at least 1024×1024; transparent
+    logos work well; full-bleed iOS-style masters often use ICON_PLATE=none ICON_INSET_PERCENT=100.
     """
     # Prefer .icns on macOS
     if sys.platform == "darwin":
@@ -2116,6 +2116,12 @@ def translate_subtitles(selected_srt_files: List[Path], target_language: str = "
     total = len(srt_files)
     success_count = 0
 
+    gst_cmd = find_gst_command()
+    if not gst_cmd:
+        if log_callback:
+            log_callback("Error: gst command not found. Install gemini-srt-translator (gst) or add it to PATH.")
+        return False
+
     for idx, srt_file in enumerate(srt_files, start=1):
         if progress_callback:
             progress_callback(idx, total, srt_file.name)
@@ -2133,13 +2139,6 @@ def translate_subtitles(selected_srt_files: List[Path], target_language: str = "
 
             if log_callback:
                 log_callback(f"Translating: {srt_file.name}")
-
-            gst_cmd = find_gst_command()
-            if not gst_cmd:
-                if log_callback:
-                    log_callback(f"  ✗ Failed: {srt_file.name}")
-                    log_callback(f"    Error: gst command not found. Make sure gemini-srt-translator is installed.")
-                continue
 
             pair_index = 0
             translation_success = False
@@ -2976,8 +2975,13 @@ def _get_whisper_python(log_callback=None) -> Optional[Path]:
         if log_callback:
             log_callback("Creating virtual environment...")
         try:
+            py = _host_python_for_module_cli()
+            if not py:
+                if log_callback:
+                    log_callback("No system Python found to create whisper-env (bundled app cannot use its own binary as python).")
+                return None
             subprocess.run(
-                [sys.executable, "-m", "venv", str(env_dir)],
+                [py, "-m", "venv", str(env_dir)],
                 check=True,
                 capture_output=True,
                 timeout=120,
@@ -3972,8 +3976,16 @@ class PipInstallWorker(QThread):
     def run(self):
         try:
             self.log_message.emit(f"Installing: {' '.join(self.packages)}")
+            py = _host_python_for_module_cli()
+            if not py:
+                self.log_message.emit(
+                    "Cannot run pip from this bundled app. Use a system Python in Terminal: "
+                    "python3 -m pip install " + " ".join(self.packages)
+                )
+                self.finished.emit(False)
+                return
             result = subprocess.run(
-                [sys.executable, "-m", "pip", "install"] + self.packages,
+                [py, "-m", "pip", "install"] + self.packages,
                 capture_output=True,
                 text=True,
                 timeout=600,
@@ -4298,8 +4310,14 @@ class WhisperCppInstallWorker(QThread):  # pyright: ignore [reportUnreachable]
     def _install_whisper_cpp_pip(self) -> bool:
         self.log_message.emit("Installing: whisper.cpp-cli")
         try:
+            py = _host_python_for_module_cli()
+            if not py:
+                self.log_message.emit(
+                    "Cannot run pip from this bundled app. In Terminal: python3 -m pip install whisper.cpp-cli"
+                )
+                return False
             result = subprocess.run(
-                [sys.executable, "-m", "pip", "install", "whisper.cpp-cli"],
+                [py, "-m", "pip", "install", "whisper.cpp-cli"],
                 capture_output=True,
                 text=True,
                 timeout=600,
@@ -4433,6 +4451,60 @@ def n_m3u8dl_installed(config: Optional[Dict] = None) -> bool:
     return Path(cmd).exists() if cmd else False
 
 
+def _is_frozen_pyinstaller() -> bool:
+    """True inside a PyInstaller bundle: sys.executable is the app binary, not CPython."""
+    return bool(getattr(sys, "frozen", False)) or hasattr(sys, "_MEIPASS")
+
+
+def _host_python_for_module_cli() -> Optional[str]:
+    """Interpreter for `python -m ...` subprocesses. Never the frozen GUI executable."""
+    if not _is_frozen_pyinstaller():
+        return sys.executable
+    frozen_exe = Path(sys.executable).resolve()
+    for name in ("python3.12", "python3", "python"):
+        candidate = shutil.which(name)
+        if not candidate:
+            continue
+        try:
+            if Path(candidate).resolve() == frozen_exe:
+                continue
+        except OSError:
+            continue
+        return candidate
+    return None
+
+
+def _gst_command_via_python_module() -> Optional[str]:
+    """Detect gemini-srt-translator via `python -m ... --help`; kills child on timeout."""
+    py = _host_python_for_module_cli()
+    if not py:
+        return None
+    proc = subprocess.Popen(
+        [py, "-m", "gemini_srt_translator", "--help"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        proc.communicate(timeout=15)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+        return None
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        return None
+    if proc.returncode == 0:
+        return f"{py} -m gemini_srt_translator"
+    return None
+
+
 def find_gst_command() -> Optional[str]:
     """Find the gst command, checking PATH and common venv locations."""
     # First try to find it in PATH
@@ -4469,21 +4541,7 @@ def find_gst_command() -> Optional[str]:
     except Exception:
         pass
     
-    # Try to run via Python module as fallback
-    try:
-        # Check gst module
-        result = subprocess.run(
-            [sys.executable, "-m", "gemini_srt_translator", "--help"],
-            capture_output=True,
-            timeout=2
-        )
-        if result.returncode == 0:
-            # Run as module
-            return f"{sys.executable} -m gemini_srt_translator"
-    except Exception:
-        pass
-    
-    return None
+    return _gst_command_via_python_module()
 
 
 def get_app_executable(app_name: str) -> Optional[Path]:

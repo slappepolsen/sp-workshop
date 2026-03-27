@@ -64,3 +64,8 @@ test_*.py
 
 # Deprecated (transcription now uses Python; kept locally for reference)
 whisper_auto.sh
+
+# media/ — keep tracked: icon.* (app + PyInstaller), flowcharts.png (release bundles), *.sh (tooling).
+# Ignore source / local-only outputs not needed at runtime.
+media/logo-v7.png
+media/logo_icon_preview.png
