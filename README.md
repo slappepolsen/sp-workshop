@@ -56,7 +56,7 @@ Select **Source code (zip)** under **Assets**.
 
 ### Pre-built apps from Releases (macOS, Windows, Linux)
 
-On tagged [Releases](https://github.com/slappepolsen/sp-workshop/releases), Assets may include **`SP_Workshop-macOS.zip`**, **`SP_Workshop-Windows.zip`**, and **`SP_Workshop-Linux.tar.gz`** (built with PyInstaller in CI). These are separate from **Source code (zip)**.
+Pre-built **`SP_Workshop-macOS.zip`**, **`SP_Workshop-Windows.zip`**, and **`SP_Workshop-Linux.tar.gz`** (PyInstaller in CI) are uploaded to [Releases](https://github.com/slappepolsen/sp-workshop/releases) 
 
 **macOS** — Unzip **`SP_Workshop-macOS.zip`**, then open **`SP_Workshop.app`**.  
 Gatekeeper may warn the first time: Control-click (or right-click) the app > **Open**, or **System Settings > Privacy & Security > Open Anyway**.
@@ -70,16 +70,7 @@ Windows SmartScreen may block unsigned downloads: click **More info** > **Run an
 
 ### How to run app using Source code / cloned the repo
 
-*Use this section if you downloaded **Source code** or cloned the repo (you have `app.py` in the folder). Pre-built zip/tar users can ignore it.*
-
-You no longer need to run this every time:
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-python app.py
-```
+*Use this section if you downloaded **Source code** or cloned the repo. Pre-built zip/tar users can ignore it.*
 
 Use the launcher instead to start the app automatically.
 
