@@ -47,28 +47,23 @@ Download SP Workshop from:
 > **Tip**
 > On the page you are on, look at the right-hand side. Under **Releases**, you will see a version number (e.g., `10.3.0-alpha.2`) + a label **Latest**. Click on that.
 
-Select **Source code (zip)** under **Assets**.
+### EASIEST: How to run app using pre-built app from Releases (macOS, Windows, Linux)
 
-> **Note**
-> After downloading, you will have a `.zip` file (for example `sp-workshop-10.3.0-alpha.2.zip`).
-> Double-click it to unzip. This creates a folder with the same name (for example `sp-workshop-10.3.0-alpha.2`).
-> Open this folder. You should see files like `app.py`, `requirements.txt`, and `README.md`.
+Go to [Releases](https://github.com/slappepolsen/sp-workshop/releases)
+**Using a pre-built app?** You only need **FFmpeg** on your system (required) and **N_m3u8DL-RE** (optional, for batch downloads).
 
-### Pre-built apps from Releases (macOS, Windows, Linux)
-
-On tagged [Releases](https://github.com/slappepolsen/sp-workshop/releases), Assets may include **`SP_Workshop-macOS.zip`**, **`SP_Workshop-Windows.zip`**, and **`SP_Workshop-Linux.tar.gz`** (built with PyInstaller in CI). These are separate from **Source code (zip)**.
-
-**macOS** — Unzip **`SP_Workshop-macOS.zip`**, then open **`SP_Workshop.app`**.  
+#### macOS
+Unzip `SP_Workshop-macOS.zip`, then open `SP_Workshop.app`.  
 Gatekeeper may warn the first time: Control-click (or right-click) the app > **Open**, or **System Settings > Privacy & Security > Open Anyway**.
 
-**Windows** — Unzip **`SP_Workshop-Windows.zip`**, then run **`SP_Workshop.exe`**.  
+#### Windows
+Unzip `SP_Workshop-Windows.zip`, then run `SP_Workshop.exe`. Please let me know if it's not working.  
 Windows SmartScreen may block unsigned downloads: click **More info** > **Run anyway** if you trust the release.
 
-**Linux** — Extract **`SP_Workshop-Linux.tar.gz`**, then run **`SP_Workshop`** from the extracted folder (e.g. `tar -xzf SP_Workshop-Linux.tar.gz` then `./SP_Workshop-Linux/SP_Workshop`). If needed: `chmod +x SP_Workshop`.
+#### Linux
+Extract `SP_Workshop-Linux.tar.gz`, then run `SP_Workshop` from the extracted folder (e.g. `tar -xzf SP_Workshop-Linux.tar.gz` then `./SP_Workshop-Linux/SP_Workshop`). If needed: `chmod +x SP_Workshop`.
 
-> **Using a pre-built app?** You only need **FFmpeg** on your system (required) and **N_m3u8DL-RE** (optional, for batch downloads). You can skip Python, virtualenv, and the whole **Easiest way to run** section below — that part is for **running from source**.
-
-### How to run app using Source code / cloned the repo
+### MORE TECHNICAL: How to run app using Source code / cloned the repo
 
 *Use this section if you downloaded **Source code** or cloned the repo (you have `app.py` in the folder). Pre-built zip/tar users can ignore it.*
 
