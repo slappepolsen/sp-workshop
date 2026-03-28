@@ -6,6 +6,8 @@
 # Compare raw logos at small sizes: ./preview_logo_icons.sh
 #
 # Requires: ImageMagick (magick), macOS iconutil for .icns. On Linux/Windows, PNG+ICO are still produced.
+# iconutil can fail on 16-bit/P3 PNG sources; this script forces 8-bit RGBA for the iconset. Run on a real macOS
+# host for .icns (some sandboxes block iconutil even when the iconset is valid).
 #
 # macOS Dock uses a squircle mask. Logos that fill the whole canvas look oversized next to Apple icons.
 # Shrink artwork inside the square with ICON_INSET_PERCENT (default 72 = logo fits in 72% of edge, rest transparent).

@@ -30,7 +30,7 @@ import tempfile
 import zipfile
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Callable
 try:
     from typing import Protocol, runtime_checkable
 except ImportError:
@@ -3969,6 +3969,91 @@ class ScriptWorker(QThread):
             self.finished.emit(False)
 
 
+def _ensure_optional_pip_venv(host_python: str, log: Callable[[str], None]) -> Optional[str]:
+    """Create ~/VideoProcessing/pip-venv if missing. Returns venv python path."""
+    existing = _optional_pip_venv_python()
+    if existing:
+        return existing
+    root = _get_optional_pip_venv_root()
+    try:
+        root.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        log(f"Could not create {root.parent}: {e}")
+        return None
+    log(f"Creating virtual environment at {root} ...")
+    result = subprocess.run(
+        [host_python, "-m", "venv", str(root)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if result.returncode != 0:
+        err = (result.stderr or result.stdout or "").strip()
+        log(f"venv creation failed: {err}")
+        return None
+    py = _optional_pip_venv_python()
+    if not py:
+        log("venv created but Python executable not found")
+    return py
+
+
+def pip_install_optional_packages(
+    host_py: Optional[str],
+    packages: List[str],
+    log: Callable[[str], None],
+) -> bool:
+    """pip install using host Python; on PEP 668 retry inside ~/VideoProcessing/pip-venv."""
+    if not host_py:
+        log(
+            "Cannot run pip from this bundled app. Use a system Python in Terminal: "
+            "python3 -m pip install " + " ".join(packages)
+        )
+        return False
+    log(f"Installing: {' '.join(packages)}")
+    env = _environ_with_cli_path()
+
+    def run_pip(py: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [py, "-m", "pip", "install"] + packages,
+            capture_output=True,
+            text=True,
+            timeout=600,
+            env=env,
+        )
+
+    result = run_pip(host_py)
+    if result.returncode == 0:
+        log("✓ Installation complete")
+        return True
+    err = (result.stderr or result.stdout or "").strip()
+    pep668 = "externally-managed-environment" in err or "externally managed" in err.lower()
+    if not pep668:
+        log(f"pip install failed: {err}")
+        log("Try manually: python -m pip install " + " ".join(packages))
+        return False
+    log(
+        "System Python is externally managed (PEP 668). "
+        "Installing into ~/VideoProcessing/pip-venv ..."
+    )
+    venv_py = _ensure_optional_pip_venv(host_py, log)
+    if not venv_py:
+        vr = _get_optional_pip_venv_root()
+        log(f"Try manually: python -m venv {vr}")
+        if sys.platform == "win32":
+            log(f"  {vr / 'Scripts' / 'activate.bat'}")
+        else:
+            log(f"  source {vr / 'bin' / 'activate'}")
+        log("  python -m pip install " + " ".join(packages))
+        return False
+    result = run_pip(venv_py)
+    if result.returncode != 0:
+        err = (result.stderr or result.stdout or "").strip()
+        log(f"pip install failed: {err}")
+        return False
+    log("✓ Installation complete")
+    return True
+
+
 class PipInstallWorker(QThread):
     """Worker thread for pip install without blocking UI."""
     finished = pyqtSignal(bool)
@@ -3980,30 +4065,9 @@ class PipInstallWorker(QThread):
     
     def run(self):
         try:
-            self.log_message.emit(f"Installing: {' '.join(self.packages)}")
             py = _host_python_for_module_cli()
-            if not py:
-                self.log_message.emit(
-                    "Cannot run pip from this bundled app. Use a system Python in Terminal: "
-                    "python3 -m pip install " + " ".join(self.packages)
-                )
-                self.finished.emit(False)
-                return
-            result = subprocess.run(
-                [py, "-m", "pip", "install"] + self.packages,
-                capture_output=True,
-                text=True,
-                timeout=600,
-                env=_environ_with_cli_path(),
-            )
-            if result.returncode != 0:
-                err = (result.stderr or result.stdout or "").strip()
-                self.log_message.emit(f"pip install failed: {err}")
-                self.log_message.emit("Try manually: python -m pip install " + " ".join(self.packages))
-                self.finished.emit(False)
-            else:
-                self.log_message.emit("✓ Installation complete")
-                self.finished.emit(True)
+            ok = pip_install_optional_packages(py, self.packages, self.log_message.emit)
+            self.finished.emit(ok)
         except subprocess.TimeoutExpired:
             self.log_message.emit("Installation timed out")
             self.finished.emit(False)
@@ -4314,27 +4378,9 @@ class WhisperCppInstallWorker(QThread):  # pyright: ignore [reportUnreachable]
         return True
 
     def _install_whisper_cpp_pip(self) -> bool:
-        self.log_message.emit("Installing: whisper.cpp-cli")
         try:
             py = _host_python_for_module_cli()
-            if not py:
-                self.log_message.emit(
-                    "Cannot run pip from this bundled app. In Terminal: python3 -m pip install whisper.cpp-cli"
-                )
-                return False
-            result = subprocess.run(
-                [py, "-m", "pip", "install", "whisper.cpp-cli"],
-                capture_output=True,
-                text=True,
-                timeout=600,
-            )
-            if result.returncode != 0:
-                err = (result.stderr or result.stdout or "").strip()
-                self.log_message.emit(f"pip install failed: {err}")
-                self.log_message.emit("Try manually: python -m pip install whisper.cpp-cli")
-                return False
-            self.log_message.emit("✓ Whisper CPP (CPU) installed")
-            return True
+            return pip_install_optional_packages(py, ["whisper.cpp-cli"], self.log_message.emit)
         except subprocess.TimeoutExpired:
             self.log_message.emit("Installation timed out")
             return False
@@ -4372,6 +4418,24 @@ def check_command_exists(command: str) -> bool:
 def _get_tools_dir() -> Path:
     """Return the tools installation directory."""
     return Path.home() / "VideoProcessing" / "tools"
+
+
+def _get_optional_pip_venv_root() -> Path:
+    """Venv for optional pip packages when system Python is PEP 668 externally-managed."""
+    return Path.home() / "VideoProcessing" / "pip-venv"
+
+
+def _optional_pip_venv_python() -> Optional[str]:
+    """Path to Python in pip-venv if that venv exists, else None."""
+    root = _get_optional_pip_venv_root()
+    if sys.platform == "win32":
+        candidates = [root / "Scripts" / "python.exe"]
+    else:
+        candidates = [root / "bin" / "python3", root / "bin" / "python"]
+    for p in candidates:
+        if p.is_file() and os.access(p, os.X_OK):
+            return str(p.resolve())
+    return None
 
 
 def get_ffmpeg_command(config: Optional[Dict] = None, require_libass: bool = False) -> str:
@@ -4476,6 +4540,10 @@ def _cli_path_extra_dirs() -> List[str]:
     """
     home = Path.home()
     dirs: List[str] = []
+    pip_root = _get_optional_pip_venv_root()
+    pip_bin = pip_root / ("Scripts" if sys.platform == "win32" else "bin")
+    if pip_bin.is_dir():
+        dirs.append(str(pip_bin))
     if sys.platform == "darwin":
         dirs.extend(
             [
@@ -4543,33 +4611,40 @@ def _host_python_for_module_cli() -> Optional[str]:
 
 def _gst_command_via_python_module() -> Optional[str]:
     """Detect gemini-srt-translator via `python -m ... --help`; kills child on timeout."""
-    py = _host_python_for_module_cli()
-    if not py:
-        return None
-    proc = subprocess.Popen(
-        [py, "-m", "gemini_srt_translator", "--help"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        env=_environ_with_cli_path(),
-    )
-    try:
-        proc.communicate(timeout=15)
-    except subprocess.TimeoutExpired:
-        proc.kill()
+    py_candidates: List[str] = []
+    vpy = _optional_pip_venv_python()
+    if vpy:
+        py_candidates.append(vpy)
+    hpy = _host_python_for_module_cli()
+    if hpy and hpy not in py_candidates:
+        py_candidates.append(hpy)
+    for py in py_candidates:
+        if not py:
+            continue
+        proc = subprocess.Popen(
+            [py, "-m", "gemini_srt_translator", "--help"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=_environ_with_cli_path(),
+        )
         try:
-            proc.wait(timeout=5)
+            proc.communicate(timeout=15)
         except subprocess.TimeoutExpired:
-            pass
-        return None
-    except Exception:
-        try:
             proc.kill()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+            continue
         except Exception:
-            pass
-        return None
-    if proc.returncode == 0:
-        return f"{py} -m gemini_srt_translator"
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            continue
+        if proc.returncode == 0:
+            return f"{py} -m gemini_srt_translator"
     return None
 
 
@@ -4602,10 +4677,17 @@ def find_gst_command() -> Optional[str]:
             return str(candidate)
 
     # Check common venv locations
+    pip_root = _get_optional_pip_venv_root()
+    pip_gst = (
+        pip_root / "Scripts" / "gst.exe"
+        if sys.platform == "win32"
+        else pip_root / "bin" / "gst"
+    )
     possible_paths = [
         Path(__file__).parent / "venv" / "bin" / "gst",
         Path.home() / "dna" / "venv" / "bin" / "gst",
         Path(__file__).parent.parent / "venv" / "bin" / "gst",
+        pip_gst,
     ]
 
     for path in possible_paths:
@@ -9101,7 +9183,12 @@ class VideoProcessingApp(QMainWindow):
                 if ok:
                     dlg.accept()
                 else:
-                    log.append("\nInstallation failed. Click Close and try: python -m pip install gemini-srt-translator")
+                    log.append(
+                        "\nInstallation failed. Click Close and try:\n"
+                        "  python3 -m venv ~/VideoProcessing/pip-venv && "
+                        "source ~/VideoProcessing/pip-venv/bin/activate && "
+                        "python -m pip install gemini-srt-translator"
+                    )
                     close_btn.setEnabled(True)
 
             close_btn.clicked.connect(dlg.accept)
@@ -9119,9 +9206,11 @@ class VideoProcessingApp(QMainWindow):
                     "• Quit and relaunch SP Workshop after installing.\n"
                     "• Run the app binary from Terminal (inherits your shell PATH), e.g.\n"
                     "  …/SP Workshop.app/Contents/MacOS/SP Workshop\n"
-                    "• Install with the same Python you use in Terminal:\n"
-                    "  python3 -m pip install --user gemini-srt-translator\n"
-                    "  (gst should appear as ~/.local/bin/gst)",
+                    "• Install with the same Python you use in Terminal, or use the app venv:\n"
+                    "  python3 -m venv ~/VideoProcessing/pip-venv\n"
+                    "  source ~/VideoProcessing/pip-venv/bin/activate\n"
+                    "  python -m pip install gemini-srt-translator\n"
+                    "  (gst will be in that venv’s bin directory)",
                 )
             return
 
