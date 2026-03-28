@@ -52,19 +52,34 @@ Download SP Workshop from:
 Go to [Releases](https://github.com/slappepolsen/sp-workshop/releases)
 **Using a pre-built app?** You only need **FFmpeg** on your system (required) and **N_m3u8DL-RE** (optional, for batch downloads).
 
-Pre-built **`SP_Workshop-macOS.zip`**, **`SP_Workshop-Windows.zip`**, and **`SP_Workshop-Linux.tar.gz`** (PyInstaller in CI) are attached to [Releases](https://github.com/slappepolsen/sp-workshop/releases).
+Pre-built assets (PyInstaller in CI), similar layout to projects like Subtitle Edit:
+
+| Platform | Download |
+|----------|----------|
+| **macOS Apple Silicon (M1/M2/M3/M4)** | **`SP_Workshop-macOS-ARM64.dmg`** |
+| **macOS Intel (x64)** | **`SP_Workshop-macOS-x64.dmg`** |
+| **Windows x64** | **`SP_Workshop-Windows-x64.zip`** |
+| **Windows ARM64** | **`SP_Workshop-Windows-ARM64.zip`** |
+| **Linux x64** | **`SP_Workshop-Linux-x64.tar.gz`** |
 
 #### macOS
 
-Unzip **`SP_Workshop-macOS.zip`**, then open **`SP_Workshop.app`**.
+Open the **`.dmg`** for your CPU, drag **`SP_Workshop.app`** to **Applications** (or run it from the disk image), then open the app. The ARM64 build does not run on Intel Macs (and vice versa).
+
 Gatekeeper may warn the first time: Control-click (or right-click) the app > **Open**, or **System Settings > Privacy & Security > Open Anyway**.
 
 #### Windows
-Unzip `SP_Workshop-Windows.zip`, then run `SP_Workshop.exe`. Please let me know if it's not working.
+
+Unzip **`SP_Workshop-Windows-x64.zip`** or **`SP_Workshop-Windows-ARM64.zip`** (match your PC architecture), then run **`SP_Workshop.exe`**.
 Windows SmartScreen may block unsigned downloads: click **More info** > **Run anyway** if you trust the release.
 
-#### Linux
-Extract `SP_Workshop-Linux.tar.gz`, then run `SP_Workshop` from the extracted folder (e.g. `tar -xzf SP_Workshop-Linux.tar.gz` then `./SP_Workshop-Linux/SP_Workshop`). If needed: `chmod +x SP_Workshop`.
+#### Linux (x64)
+
+Extract the tarball and run the binary, for example:
+
+`tar -xzf SP_Workshop-Linux-x64.tar.gz` then `./SP_Workshop`. If needed: `chmod +x SP_Workshop`.
+
+> **Note:** The **Windows ARM64** job uses GitHub’s **`windows-11-arm`** runner, which is intended for **public** repositories. Private forks may need to drop that matrix leg or use a self-hosted ARM64 runner.
 
 ### MORE TECHNICAL: How to run app using Source code / cloned the repo
 

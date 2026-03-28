@@ -9,7 +9,7 @@ on:
         default: main
         type: string
       create_github_release:
-        description: "Create GitHub Release and upload macOS/Windows/Linux zip + tar assets"
+        description: "Create GitHub Release (macOS DMGs, Windows x64+ARM64 zips, Linux x64 tar.gz)"
         required: true
         default: false
         type: boolean
@@ -31,11 +31,24 @@ jobs:
 
   build-macos:
     needs: validate-inputs
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            mac_suffix: arm64
+            mac_name: "Apple Silicon (arm64)"
+          - runner: macos-15-intel
+            mac_suffix: intel
+            mac_name: "Intel (x64)"
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref }}
+
+      - name: Runner architecture
+        run: uname -m
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -48,11 +61,11 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      - name: Build macOS app
+      - name: Build macOS app (${{ matrix.mac_name }})
         run: |
           pyinstaller --windowed --name "SP_Workshop" --icon=media/icon.icns app.py
 
-      - name: Smoke test macOS executable
+      - name: Smoke test macOS executable (${{ matrix.mac_suffix }})
         run: |
           APP_BIN="dist/SP_Workshop.app/Contents/MacOS/SP_Workshop"
           if [ ! -x "$APP_BIN" ]; then
@@ -86,22 +99,38 @@ jobs:
               sys.exit(0)
           PY
 
-      - name: Package macOS artifact
+      - name: Create macOS DMG (${{ matrix.mac_suffix }})
+        id: mac_dmg
         run: |
-          mkdir -p dist/SP_Workshop_macOS
-          cp -R dist/SP_Workshop.app dist/SP_Workshop_macOS/
-          cp README.md CHANGELOG.md LICENSE requirements.txt dist/SP_Workshop_macOS/
-          cp media/icon.icns media/icon.ico media/icon.png media/flowcharts.png dist/SP_Workshop_macOS/
+          case "${{ matrix.mac_suffix }}" in
+            arm64) DMG_NAME="SP_Workshop-macOS-ARM64.dmg" ;;
+            intel) DMG_NAME="SP_Workshop-macOS-x64.dmg" ;;
+            *) echo "unknown mac_suffix"; exit 1 ;;
+          esac
+          echo "dmg=$DMG_NAME" >> "$GITHUB_OUTPUT"
+          STAGE=$(mktemp -d)
+          cp -R dist/SP_Workshop.app "$STAGE/"
+          hdiutil create -volname "SP Workshop" -srcfolder "$STAGE" -ov -format UDZO -fs HFS+ "$DMG_NAME"
+          rm -rf "$STAGE"
+          ls -la "$DMG_NAME"
 
-      - name: Upload macOS artifact
+      - name: Upload macOS DMG (${{ matrix.mac_suffix }})
         uses: actions/upload-artifact@v4
         with:
-          name: SP_Workshop-macOS
-          path: dist/SP_Workshop_macOS/
+          name: macos-dmg-${{ matrix.mac_suffix }}
+          path: ${{ steps.mac_dmg.outputs.dmg }}
 
   build-windows:
     needs: validate-inputs
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            win_suffix: x64
+          - runner: windows-11-arm
+            win_suffix: ARM64
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -118,7 +147,7 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      - name: Build Windows executable
+      - name: Build Windows executable (${{ matrix.win_suffix }})
         run: |
           pyinstaller --onefile --windowed --name "SP_Workshop" --icon=media/icon.ico app.py
 
@@ -134,7 +163,7 @@ jobs:
           }
           Stop-Process -Id $proc.Id -Force
 
-      - name: Package Windows artifact
+      - name: Package Windows portable folder
         shell: cmd
         run: |
           mkdir dist\SP_Workshop_Windows
@@ -147,10 +176,10 @@ jobs:
           copy media\icon.png dist\SP_Workshop_Windows\
           copy media\flowcharts.png dist\SP_Workshop_Windows\
 
-      - name: Upload Windows artifact
+      - name: Upload Windows portable (${{ matrix.win_suffix }})
         uses: actions/upload-artifact@v4
         with:
-          name: SP_Workshop-Windows
+          name: windows-portable-${{ matrix.win_suffix }}
           path: dist/SP_Workshop_Windows/
 
   build-linux:
@@ -208,7 +237,7 @@ jobs:
       - name: Upload Linux artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SP_Workshop-Linux
+          name: linux-x64
           path: dist/SP_Workshop_Linux/
 
   release:
@@ -223,21 +252,27 @@ jobs:
         with:
           path: artifacts
 
-      - name: Create release archives
+      - name: Assemble release assets
         run: |
+          set -euo pipefail
+          ROOT="$GITHUB_WORKSPACE"
           cd artifacts
-          zip -r ../SP_Workshop-macOS.zip SP_Workshop-macOS/
-          zip -r ../SP_Workshop-Windows.zip SP_Workshop-Windows/
-          tar -czvf ../SP_Workshop-Linux.tar.gz SP_Workshop-Linux/
+          (cd windows-portable-x64 && zip -r "$ROOT/SP_Workshop-Windows-x64.zip" .)
+          (cd windows-portable-ARM64 && zip -r "$ROOT/SP_Workshop-Windows-ARM64.zip" .)
+          cp macos-dmg-arm64/SP_Workshop-macOS-ARM64.dmg "$ROOT/"
+          cp macos-dmg-intel/SP_Workshop-macOS-x64.dmg "$ROOT/"
+          (cd linux-x64 && tar -czvf "$ROOT/SP_Workshop-Linux-x64.tar.gz" .)
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ inputs.release_tag }}
           files: |
-            SP_Workshop-macOS.zip
-            SP_Workshop-Windows.zip
-            SP_Workshop-Linux.tar.gz
+            SP_Workshop-macOS-ARM64.dmg
+            SP_Workshop-macOS-x64.dmg
+            SP_Workshop-Windows-x64.zip
+            SP_Workshop-Windows-ARM64.zip
+            SP_Workshop-Linux-x64.tar.gz
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(inputs.release_tag, 'alpha') }}

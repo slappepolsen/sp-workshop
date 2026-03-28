@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - App icon master is `media/icon-source.png` (1024×1024 iOS-style SP artwork); `media/build_app_icon.sh` defaults to it and emits PNGs suited for macOS `iconutil` (8-bit RGBA).
+- GitHub Actions: release assets **`SP_Workshop-macOS-ARM64.dmg`** / **`SP_Workshop-macOS-x64.dmg`** (`macos-15` + `macos-15-intel`, `hdiutil`), **`SP_Workshop-Windows-x64.zip`** / **`SP_Workshop-Windows-ARM64.zip`** (`windows-latest` + `windows-11-arm`), **`SP_Workshop-Linux-x64.tar.gz`**. README lists downloads per platform.
 
 ## [10.4.0-alpha.12] - 2026-03-27
 

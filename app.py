@@ -7,8 +7,7 @@ Video Processing GUI Application
 A PyQt5 desktop app that provides a button-based interface for all video processing scripts.
 """
 
-
-__version__ = "10.4.0-alpha.12"
+__version__ = "10.4.0-alpha.13"
 VERSION_CODENAME = "Rocket Launcher"
 
 import sys
@@ -1089,6 +1088,11 @@ def download_episodes(
                 "--select-subtitle", "all",
                 "-M", "mkv",
             ]
+            # N_m3u8DL-RE resolves ffmpeg on its own PATH; GUI apps get a minimal PATH. Use the
+            # same resolved binary as the rest of the app (Settings / ffmpeg-full auto-detect).
+            ffmpeg_exe = get_ffmpeg_command()
+            if Path(ffmpeg_exe).is_file():
+                app_args = ["--ffmpeg-binary-path", str(Path(ffmpeg_exe).resolve())] + app_args
             n_m3u8_cmd = get_n_m3u8dl_command()
             cmd = [n_m3u8_cmd] + user_args + app_args
 
@@ -1108,7 +1112,8 @@ def download_episodes(
                     stderr=subprocess.STDOUT,  # Combine stderr into stdout
                     text=True,
                     bufsize=1,
-                    universal_newlines=True
+                    universal_newlines=True,
+                    env=_environ_with_cli_path(),
                 )
 
                 # Stream output
@@ -3989,6 +3994,7 @@ class PipInstallWorker(QThread):
                 capture_output=True,
                 text=True,
                 timeout=600,
+                env=_environ_with_cli_path(),
             )
             if result.returncode != 0:
                 err = (result.stderr or result.stdout or "").strip()
@@ -4398,7 +4404,12 @@ def get_ffmpeg_command(config: Optional[Dict] = None, require_libass: bool = Fal
             exe = prefix / "bin" / "ffmpeg"
             if exe.exists():
                 return str(exe.resolve())
-    return shutil.which("ffmpeg") or "ffmpeg"
+        # Plain `brew install ffmpeg` (no libass) — still a valid binary for mux/download tools
+        for candidate in (Path("/opt/homebrew/bin/ffmpeg"), Path("/usr/local/bin/ffmpeg")):
+            if candidate.is_file():
+                return str(candidate.resolve())
+    aug_path = _environ_with_cli_path().get("PATH", "")
+    return shutil.which("ffmpeg", path=aug_path) or "ffmpeg"
 
 
 def get_ffprobe_command(config: Optional[Dict] = None) -> str:
@@ -4456,13 +4467,53 @@ def _is_frozen_pyinstaller() -> bool:
     return bool(getattr(sys, "frozen", False)) or hasattr(sys, "_MEIPASS")
 
 
+def _cli_path_extra_dirs() -> List[str]:
+    """Dirs to prepend to PATH for subprocess CLI discovery.
+
+    macOS apps launched from Finder/Dock get a minimal PATH (often no Homebrew
+    or ~/.local/bin), so `which gst` and `shutil.which('python3')` miss tools
+    that work in Terminal.
+    """
+    home = Path.home()
+    dirs: List[str] = []
+    if sys.platform == "darwin":
+        dirs.extend(
+            [
+                "/opt/homebrew/bin",
+                "/usr/local/bin",
+                str(home / ".local" / "bin"),
+                "/usr/bin",
+                "/bin",
+            ]
+        )
+    elif sys.platform == "win32":
+        local = os.environ.get("LOCALAPPDATA", "")
+        if local:
+            dirs.append(str(Path(local) / "Microsoft" / "WindowsApps"))
+    else:
+        dirs.extend([str(home / ".local" / "bin"), "/usr/local/bin", "/usr/bin"])
+    return [d for d in dirs if d and Path(d).exists()]
+
+
+def _environ_with_cli_path() -> dict:
+    """Copy of os.environ with CLI tool dirs prepended to PATH."""
+    env = os.environ.copy()
+    extra = _cli_path_extra_dirs()
+    if not extra:
+        return env
+    sep = os.pathsep
+    env["PATH"] = f"{sep.join(extra)}{sep}{env.get('PATH', '')}"
+    return env
+
+
 def _host_python_for_module_cli() -> Optional[str]:
     """Interpreter for `python -m ...` subprocesses. Never the frozen GUI executable."""
     if not _is_frozen_pyinstaller():
         return sys.executable
     frozen_exe = Path(sys.executable).resolve()
-    for name in ("python3.12", "python3", "python"):
-        candidate = shutil.which(name)
+    path_str = _environ_with_cli_path().get("PATH", "")
+    for name in ("python3.12", "python3.11", "python3.10", "python3", "python"):
+        candidate = shutil.which(name, path=path_str)
         if not candidate:
             continue
         try:
@@ -4471,6 +4522,22 @@ def _host_python_for_module_cli() -> Optional[str]:
         except OSError:
             continue
         return candidate
+    if sys.platform == "darwin":
+        for p in (
+            "/opt/homebrew/bin/python3",
+            "/opt/homebrew/opt/python@3.12/bin/python3",
+            "/usr/local/bin/python3",
+            "/usr/bin/python3",
+        ):
+            pp = Path(p)
+            if not pp.is_file() or not os.access(pp, os.X_OK):
+                continue
+            try:
+                if pp.resolve() == frozen_exe:
+                    continue
+            except OSError:
+                continue
+            return str(pp)
     return None
 
 
@@ -4484,6 +4551,7 @@ def _gst_command_via_python_module() -> Optional[str]:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        env=_environ_with_cli_path(),
     )
     try:
         proc.communicate(timeout=15)
@@ -4507,12 +4575,15 @@ def _gst_command_via_python_module() -> Optional[str]:
 
 def find_gst_command() -> Optional[str]:
     """Find the gst command, checking PATH and common venv locations."""
-    # First try to find it in PATH
+    env = _environ_with_cli_path()
+    path_str = env.get("PATH", "")
+    # First try to find it in PATH (GUI apps on macOS often need augmented PATH)
     try:
         result = subprocess.run(
             ["which", "gst"],
             capture_output=True,
-            timeout=2
+            timeout=2,
+            env=env,
         )
         if result.returncode == 0:
             gst_path = result.stdout.decode().strip()
@@ -4520,27 +4591,34 @@ def find_gst_command() -> Optional[str]:
                 return gst_path
     except Exception:
         pass
-    
+
+    # Common install locations when not visible to default GUI PATH
+    for candidate in (
+        Path.home() / ".local" / "bin" / "gst",
+        Path("/opt/homebrew/bin/gst"),
+        Path("/usr/local/bin/gst"),
+    ):
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+
     # Check common venv locations
     possible_paths = [
         Path(__file__).parent / "venv" / "bin" / "gst",
         Path.home() / "dna" / "venv" / "bin" / "gst",
         Path(__file__).parent.parent / "venv" / "bin" / "gst",
     ]
-    
+
     for path in possible_paths:
         if path.exists():
             return str(path)
-    
-    # Try using shutil.which
+
     try:
-        import shutil
-        gst_path = shutil.which("gst")
+        gst_path = shutil.which("gst", path=path_str)
         if gst_path and Path(gst_path).exists():
             return gst_path
     except Exception:
         pass
-    
+
     return _gst_command_via_python_module()
 
 
@@ -8991,6 +9069,7 @@ class VideoProcessingApp(QMainWindow):
             return
 
         gst_cmd = find_gst_command()
+        offered_pip_install = False
         if not gst_cmd:
             reply = QMessageBox.question(
                 self,
@@ -9000,31 +9079,50 @@ class VideoProcessingApp(QMainWindow):
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.Yes,
             )
-            if reply == QMessageBox.Yes:
-                dlg = QDialog(self)
-                dlg.setWindowTitle("Installing gemini-srt-translator...")
-                dlg.setMinimumWidth(400)
-                layout = QVBoxLayout()
-                log = QTextEdit()
-                log.setReadOnly(True)
-                layout.addWidget(log)
-                close_btn = QPushButton("Close")
-                close_btn.setEnabled(False)
-                layout.addWidget(close_btn)
-                dlg.setLayout(layout)
-                worker = PipInstallWorker(["gemini-srt-translator"], parent=dlg)
-                worker.log_message.connect(lambda m: log.append(m))
-                def on_finished(ok):
-                    worker.wait()
-                    if ok:
-                        dlg.accept()
-                    else:
-                        log.append("\nInstallation failed. Click Close and try: python -m pip install gemini-srt-translator")
-                        close_btn.setEnabled(True)
-                close_btn.clicked.connect(dlg.accept)
-                worker.finished.connect(on_finished)
-                worker.start()
-                dlg.exec_()
+            if reply != QMessageBox.Yes:
+                return
+            offered_pip_install = True
+            dlg = QDialog(self)
+            dlg.setWindowTitle("Installing gemini-srt-translator...")
+            dlg.setMinimumWidth(400)
+            layout = QVBoxLayout()
+            log = QTextEdit()
+            log.setReadOnly(True)
+            layout.addWidget(log)
+            close_btn = QPushButton("Close")
+            close_btn.setEnabled(False)
+            layout.addWidget(close_btn)
+            dlg.setLayout(layout)
+            worker = PipInstallWorker(["gemini-srt-translator"], parent=dlg)
+            worker.log_message.connect(lambda m: log.append(m))
+
+            def on_finished(ok):
+                worker.wait()
+                if ok:
+                    dlg.accept()
+                else:
+                    log.append("\nInstallation failed. Click Close and try: python -m pip install gemini-srt-translator")
+                    close_btn.setEnabled(True)
+
+            close_btn.clicked.connect(dlg.accept)
+            worker.finished.connect(on_finished)
+            worker.start()
+            dlg.exec_()
+            gst_cmd = find_gst_command()
+        if not gst_cmd:
+            if offered_pip_install:
+                QMessageBox.warning(
+                    self,
+                    "Translator Not Found",
+                    "Still could not find gst. Pre-built apps often inherit a shorter PATH than Terminal.\n\n"
+                    "Try one of:\n"
+                    "• Quit and relaunch SP Workshop after installing.\n"
+                    "• Run the app binary from Terminal (inherits your shell PATH), e.g.\n"
+                    "  …/SP Workshop.app/Contents/MacOS/SP Workshop\n"
+                    "• Install with the same Python you use in Terminal:\n"
+                    "  python3 -m pip install --user gemini-srt-translator\n"
+                    "  (gst should appear as ~/.local/bin/gst)",
+                )
             return
 
         target_language = self.config.get("translation_target_language", "English")
