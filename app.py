@@ -3548,8 +3548,10 @@ def transcribe_video_whisper_cpp(
                 vad_args = ["--vad", "-vm", vad_model_path]
         except Exception:
             pass
-        # Default stack tuned for more stable punctuation/sentence boundaries.
-        subtitle_edit_args = ["-sow", "-bs", "5", "-bo", "5"]
+        # Default stack: same as pre–alpha.9 — beam 2 / best-of 3 and --no-fallback (-nf).
+        # The alpha.9 experiment (-bs 5 -bo 5, no -nf) changed segment boundaries and led to
+        # overly long single-line cues for many users; extra_args can override if needed.
+        subtitle_edit_args = ["-sow", "-bs", "2", "-bo", "3", "-nf"]
         cmd = [
             str(binary), "-m", str(model_path), "-f", str(audio_path),
             "-l", language_code if language_code != "auto" else "auto",
