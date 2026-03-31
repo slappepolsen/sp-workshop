@@ -50,7 +50,7 @@ Download SP Workshop from:
 ### EASIEST: How to run app using pre-built app from Releases (macOS, Windows, Linux)
 
 Go to [Releases](https://github.com/slappepolsen/sp-workshop/releases)
-**Using a pre-built app?** You only need **FFmpeg** on your system (required) and **N_m3u8DL-RE** (optional, for batch downloads).
+**Using a pre-built app?** You only need **FFmpeg** on your system (required) and **N_m3u8DL-RE** (optional, for (batch) downloads).
 
 Pre-built assets (PyInstaller in CI), similar layout to projects like Subtitle Edit:
 
@@ -61,6 +61,8 @@ Pre-built assets (PyInstaller in CI), similar layout to projects like Subtitle E
 | **Windows x64** | **`SP_Workshop-Windows-x64.zip`** |
 | **Windows ARM64** | **`SP_Workshop-Windows-ARM64.zip`** |
 | **Linux x64** | **`SP_Workshop-Linux-x64.tar.gz`** |
+--> **Go to [Releases](https://github.com/slappepolsen/sp-workshop/releases)**
+
 
 #### macOS
 

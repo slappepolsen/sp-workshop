@@ -7,7 +7,7 @@ Video Processing GUI Application
 A PyQt5 desktop app that provides a button-based interface for all video processing scripts.
 """
 
-__version__ = "10.4.0-alpha.15"
+__version__ = "10.4.0-alpha.17"
 VERSION_CODENAME = "Rocket Launcher"
 
 import sys
@@ -34,10 +34,10 @@ from typing import Optional, Dict, List, Callable
 try:
     from typing import Protocol, runtime_checkable
 except ImportError:
-    from typing_extensions import Protocol, runtime_checkable  # type: ignore
+    from typing_extensions import Protocol, runtime_checkable
 
 
-# Enforce Python 3.9–3.12 (PyQt5 + 3.13+ causes Qt plugin errors on macOS)
+# Enforce Python 3.9–3.12
 if sys.version_info >= (3, 13):
     print("SP Workshop requires Python 3.9–3.12.")
     print("Python 3.13+ causes Qt failures on macOS. Use Python 3.12:")
@@ -52,12 +52,10 @@ def quote_path(path: str) -> str:
     This function uses double quotes on Windows and shlex.quote on Unix.
     """
     if platform.system() == "Windows":
-        # Windows: use double quotes
         escaped = str(path).replace('"', '\\"')
         return f'"{escaped}"'
     else:
         return shlex.quote(str(path))
-
 
 def get_temp_dir() -> str:
     """Get a cross-platform temporary directory path."""
@@ -67,9 +65,6 @@ def get_temp_dir() -> str:
 # ============================================================================
 # Qt widgets
 # ============================================================================
-# Fix Qt "cocoa" plugin not found on macOS (often works first run, fails on second).
-# An empty QT_QPA_PLATFORM_PLUGIN_PATH makes Qt look nowhere; unset it so Qt uses defaults.
-# Must run before any PyQt5 QtWidgets/QtGui imports.
 if platform.system() == "Darwin":
     if os.environ.get("QT_QPA_PLATFORM_PLUGIN_PATH", "x") == "":
         os.environ.pop("QT_QPA_PLATFORM_PLUGIN_PATH", None)
@@ -78,8 +73,11 @@ try:
     from PyQt5.QtWidgets import (
         QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
         QPushButton, QLabel, QTextEdit, QFileDialog, QDialog,
-        QLineEdit, QFormLayout, QMessageBox, QProgressBar, QGroupBox, QStyleFactory, QCheckBox, QStackedWidget, QTextBrowser, QComboBox,
-        QGraphicsDropShadowEffect, QTabWidget, QSpinBox, QDoubleSpinBox, QScrollArea, QListWidget, QListWidgetItem, QTreeWidget, QTreeWidgetItem, QHeaderView, QMenu, QFrame, QSizePolicy,
+        QLineEdit, QFormLayout, QMessageBox, QProgressBar, QGroupBox, 
+        QStyleFactory, QCheckBox, QStackedWidget, QTextBrowser, QComboBox,
+        QGraphicsDropShadowEffect, QTabWidget, QSpinBox, QDoubleSpinBox, 
+        QScrollArea, QListWidget, QListWidgetItem, QTreeWidget, 
+        QTreeWidgetItem, QHeaderView, QMenu, QFrame, QSizePolicy,
     )
     from PyQt5.QtCore import QThread, pyqtSignal, Qt, QProcess, QUrl, QTimer
     from PyQt5.QtGui import QFont, QIcon, QPainter, QPen, QDesktopServices
@@ -125,6 +123,7 @@ TRANSCRIBE_LANGUAGES = [
     ("Turkish", "tr"),
 ]
 
+
 # Model name -> ggml filename
 WHISPER_CPP_MODELS = {
     "tiny.en": "ggml-tiny.en.bin",
@@ -150,6 +149,7 @@ WHISPER_CPP_MODELS = {
     "large-v3-turbo": "ggml-large-v3-turbo.bin",
     "large-v3-turbo-q5_0": "ggml-large-v3-turbo-q5_0.bin",
 }
+
 
 # Model sizes for progress (MB)
 WHISPER_CPP_MODEL_SIZES = {
@@ -177,8 +177,9 @@ WHISPER_CPP_MODEL_SIZES = {
     "ggml-large-v3-turbo-q5_0.bin": "547 MB",
 }
 
-# whisper-cli: max characters per subtitle line (-ml). With -sow, long cues wrap to two
-# lines without breaking words. Omit by passing -ml or --max-len in whisper_cpp_extra_args.
+# max characters per subtitle line -ml 
+# with -sow, long cues wrap to two lines without breaking words
+# omit by passing -ml or --max-len in whisper_cpp_extra_args
 WHISPER_CPP_DEFAULT_MAX_LINE_LEN = 42
 
 
@@ -191,6 +192,7 @@ def _whisper_cpp_model_size(filename: str) -> str:
 # Custom widgets
 # ============================================================================
 
+# all of this code for a banner that i'm no longer using LOL
 class OutlinedLabel(QLabel):
     """QLabel with text outline effect."""
     
@@ -198,21 +200,17 @@ class OutlinedLabel(QLabel):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         
-        # Text metrics
         font = self.font()
         painter.setFont(font)
         text = self.text()
         
-        # Draw outline with offsets
         pen = QPen(Qt.black, 2, Qt.SolidLine)
         painter.setPen(pen)
         
-        # Draw outline in all directions
         offsets = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
         for dx, dy in offsets:
             painter.drawText(self.rect().adjusted(dx, dy, dx, dy), Qt.AlignCenter, text)
         
-        # Draw text on top
         pen.setColor(Qt.white)
         painter.setPen(pen)
         painter.drawText(self.rect(), Qt.AlignCenter, text)
@@ -238,7 +236,7 @@ def load_config() -> Dict:
         "watermark_720p": str(Path.home() / "VideoProcessing" / "config" / "watermark_720p.png"),
         "watermark_1080p": str(Path.home() / "VideoProcessing" / "config" / "watermark_1080p.png"),
         "api_key": os.getenv("GST_API_KEY", ""),
-        "api_keys": [],  # List of API keys; migrated from api_key/api_key2 if empty
+        "api_keys": [], 
         "download_resolution": "1080",
         "ffmpeg_preset": "medium",
         "ffmpeg_path": "",
@@ -284,19 +282,16 @@ def load_config() -> Dict:
         try:
             with open(config_path, 'r') as f:
                 user_config = json.load(f)
-                # Merge whisper_options with defaults
                 if "whisper_options" in user_config:
                     default_config["whisper_options"].update(user_config["whisper_options"])
                     del user_config["whisper_options"]
-                # Merge clean_subtitles_fixes with defaults
                 if "clean_subtitles_fixes" in user_config:
                     default_config["clean_subtitles_fixes"].update(user_config["clean_subtitles_fixes"])
                     del user_config["clean_subtitles_fixes"]
                 default_config.update(user_config)
         except Exception as e:
             print(f"Error loading config: {e}")
-    
-    # Migrate api_key/api_key2 to api_keys
+
     api_keys = default_config.get("api_keys") or []
     if not api_keys and (default_config.get("api_key") or default_config.get("api_key2")):
         api_keys = [k for k in [default_config.get("api_key"), default_config.get("api_key2")] if k]
@@ -332,20 +327,17 @@ def get_base_dir() -> Path:
     base_dir.mkdir(parents=True, exist_ok=True)
     return base_dir
 
-
 def get_downloads_dir() -> Path:
     """Get the downloads directory."""
     downloads_dir = get_base_dir() / "downloads"
     downloads_dir.mkdir(parents=True, exist_ok=True)
     return downloads_dir
 
-
 def get_subtitles_dir() -> Path:
     """Get the subtitles directory."""
     subtitles_dir = get_base_dir() / "subtitles"
     subtitles_dir.mkdir(parents=True, exist_ok=True)
     return subtitles_dir
-
 
 def get_output_dir() -> Path:
     """Get the output directory."""
@@ -362,20 +354,25 @@ def get_logs_dir() -> Path:
 
 
 def open_folder_in_explorer(folder_path: Path):
-    """Open a folder in the system file explorer (cross-platform)."""
-    folder_str = str(folder_path)
+    """Open a folder in the system file manager (cross-platform).
+
+    macOS: ``open``; Windows: ``os.startfile`` (ShellExecute, same mechanism as
+    double‑clicking a folder—no separate ``explorer`` subprocess); Linux: ``xdg-open``.
+    """
+    folder_str = str(folder_path.resolve())
     system = platform.system()
-    
-    if system == "Darwin":  # macOS
+
+    if system == "Darwin":
         subprocess.run(["open", folder_str])
     elif system == "Windows":
-        subprocess.run(["explorer", folder_str])
-    else:  # Linux and others
+        os.startfile(folder_str)
+    else:
         subprocess.run(["xdg-open", folder_str])
 
 
 def _resolve_media_path(filename: str) -> Optional[Path]:
     """Return path to media file. Checks root first (older layouts), then media/ (new layout)."""
+    # this is because it used to be different and we don't like errors like this so we said "we're fine with both!"
     script_dir = Path(__file__).parent
     for base in (script_dir, script_dir / "media"):
         p = base / filename
@@ -466,7 +463,7 @@ def check_whisper_model_exists(model_name: str) -> bool:
         "base": "base.pt",
         "small": "small.pt",
         "medium": "medium.pt",
-        "large": "large-v2.pt",  # Note: Whisper uses "large-v2" filename I
+        "large": "large-v2.pt", 
         "turbo": "turbo.pt"
     }
     
@@ -486,6 +483,7 @@ TRANSLATION_TARGET_LANGUAGES = [
 ]
 
 # ISO 639 codes for .eng.srt etc
+# Not sure what these are but twinkgenius suggested this for compatibility with Jellyfin players (or similar)
 ISO_639_CODES = {
     "Catalan": "cat", "Dutch": "nld", "English": "eng", "French": "fra",
     "German": "deu", "Greek": "ell", "Indonesian": "ind", "Italian": "ita",
@@ -598,6 +596,9 @@ def format_eta(seconds: float) -> str:
         return f"{secs}s"
 
 
+# I want to see logs, but I don't want to see all logs
+# This is an attempt at selectively cleaning up logs
+# But it's far from nice and pretty
 def clean_log_line(line: str) -> Optional[str]:
     """Clean a log line by removing ANSI codes and filtering noise.
     
@@ -607,67 +608,43 @@ def clean_log_line(line: str) -> Optional[str]:
     if not line:
         return None
     
-    # Remove ANSI codes
     line = re.sub(r'\033\[[0-9;]*[a-zA-Z]', '', line)
-    
-    # Remove cursor sequences
     line = line.replace('\033[F', '').replace('\033[K', '')
-    
-    # Skip empty lines
     if not line.strip():
         return None
-
-    # Skip dependency warnings
     if "RequestsDependencyWarning" in line or ("urllib3" in line and "doesn't match" in line):
         return None
 
-    # Preserve errors/warnings
     is_error = any(keyword in line.lower() for keyword in [
         'error', 'failed', 'exception', 'warning', 'warn', 'fail', 
         '✗', '⚠', '❌', 'critical', 'fatal', 'unable', 'cannot',
         'not found', 'missing', 'invalid', 'denied', 'timeout'
     ])
     
-    # Return errors immediately
     if is_error:
         return f"    ⚠ {line.strip()}"
-    
-    # Skip validating messages
     if "Validating token size..." in line:
         return None
-    
-    # Skip token validated message
     if "Token size validated. Translating..." in line:
         return None
-    
-    # Skip API Key messages
     if "Starting with" in line and "API Key" in line:
         return None
-
-    # Handle starting translation line
     if "Starting translation of" in line and "lines..." in line:
         match = re.search(r'Starting translation of (\d+) lines', line)
         if match:
             return f"    Starting translation of {match.group(1)} lines..."
-    
-    # Extract progress info
     if "Translating:" in line and "|" in line:
-        # Extract percent and status
         match = re.search(r'Translating:.*?(\d+)% \((\d+)/(\d+)\)', line)
         if match:
             percent = match.group(1)
             current = match.group(2)
             total = match.group(3)
             
-            # Extract status after |
             status_parts = line.split('|')
             status = ""
             if len(status_parts) > 1:
-                # Last part after |
                 last_part = status_parts[-1].strip()
-                # Remove model name
                 last_part = re.sub(r'gemini-[^\s]+', '', last_part).strip()
-                # Normalize spinner
                 spinner_match = re.match(r'^(Thinking|Processing)\s*[—\\|/\s]*$', last_part)
                 if spinner_match:
                     status = f"{spinner_match.group(1)}..."
@@ -676,31 +653,28 @@ def clean_log_line(line: str) -> Optional[str]:
                 elif last_part in ['Thinking', 'Processing', 'Sending batch']:
                     status = f"{last_part}..." if last_part != "Sending batch" else "Sending batch..."
             
-            # Build progress line
             if status:
                 return f"    Progress: {percent}% ({current}/{total} lines) - {status}"
             else:
                 return f"    Progress: {percent}% ({current}/{total} lines)"
     
-    # Success message
     if "✅" in line or "Translation completed successfully" in line:
         return "    ✓ Translation completed successfully!"
 
-    # Fallback: Progress format
     prog_match = re.match(r'^\s*Progress:\s*(\d+)%\s*\((\d+)/(\d+)\s*lines?\)\s*-?\s*(.*)$', line.strip())
     if prog_match:
         percent, current, total, status = prog_match.groups()
         status = status.strip()
-        # Collapse spinner
         spin = re.match(r'^(Thinking|Processing)\s*[—\\|/\s]*$', status)
         if spin:
             status = f"{spin.group(1)}..."
         return f"    Progress: {percent}% ({current}/{total} lines) - {status}" if status else f"    Progress: {percent}% ({current}/{total} lines)"
 
-    # Return other messages
     return line.strip()
 
 
+# Heuristic for log labels only (≥7 min --> 'episode', else 'scene')
+# It's all in the little details you know ;)
 def detect_episode_or_scene(video_path: Path) -> tuple[str, Optional[float]]:
     """Detect if video is an episode or scene based on duration (7 min threshold)."""
     duration = get_video_duration(video_path)
@@ -714,35 +688,56 @@ def detect_episode_or_scene(video_path: Path) -> tuple[str, Optional[float]]:
 
 def open_in_lossless_cut(video_paths: List[Path], log_callback=None) -> bool:
     """Open video file(s) in LosslessCut application (cross-platform).
-    
+
+    When several paths are passed in one process invocation, LosslessCut often
+    opens only one. For multiple files we launch the app first, wait briefly,
+    then open each path in sequence so each gets its own window / tab behavior.
+
     Args:
         video_paths: List of Path objects for video files to open
         log_callback: Optional logging function
-        
+
     Returns:
         True if successful, False otherwise
     """
     lossless_cut = get_app_executable("LosslessCut")
-    
+
     if not lossless_cut:
         if log_callback:
             log_callback("Error: LosslessCut not found. Please install it from https://github.com/mifi/lossless-cut")
         return False
-    
+
+    if not video_paths:
+        return False
+
     try:
         system = platform.system()
         path_strings = [str(p) for p in video_paths]
-        
-        if system == "Darwin":
-            # macOS: open -a
-            subprocess.run(["open", "-a", str(lossless_cut), *path_strings])
-        elif system == "Windows":
-            # Windows: run executable
-            subprocess.Popen([str(lossless_cut), *path_strings])
+        exe = str(lossless_cut)
+
+        def _open_multi_sequential() -> None:
+            # Stagger (this is a new word for me) 
+            # so the first instance is ready before we hand it more files
+            delay_s = 0.8
+            if system == "Darwin":
+                subprocess.run(["open", "-a", exe], check=False)
+                time.sleep(delay_s)
+                for p in path_strings:
+                    subprocess.run(["open", "-a", exe, p], check=False)
+            else:
+                subprocess.Popen([exe])
+                time.sleep(delay_s)
+                for p in path_strings:
+                    subprocess.Popen([exe, p])
+
+        if len(path_strings) == 1:
+            if system == "Darwin":
+                subprocess.run(["open", "-a", exe, path_strings[0]], check=False)
+            else:
+                subprocess.Popen([exe, path_strings[0]])
         else:
-            # Linux: run executable
-            subprocess.Popen([str(lossless_cut), *path_strings])
-        
+            _open_multi_sequential()
+
         if log_callback:
             count = len(video_paths)
             if count == 1:
@@ -799,13 +794,22 @@ def parse_episode_range(range_str: str) -> List[int]:
     return episodes
 
 
+# Point of Improvement: more flexibility! I want to be able to customize it more freely, e.g.,
+# LLC's output file name template: select variables e.g., 
+# FILENAME, EXT, EPOCH_MS, SEG_LABEL, EXPORT_COUNT, CUT_FROM, CUT_TO, CUT_DURATION, SEG_NUM, SELECTED_SEG_NUM, SEG_SUFFIX, SEG_TAGS.XX
+# most of these are not relevant, but for example the customizability here lies in that we make certain variables, and you can then say,
+# Output file name template: "${FILENAME}_0${SEG_NUM}${EXT}"" --> which would then result in, in this example, "2172_01.mkv"
+# There's many way one can save the same episode, e.g., let's say episode 6 of season 3 of GTST
+# examples: "GTST 3x06", "GTST.S03.E06", "GTST-S30E6", "GTST_S3_E06" etc. you can go on and on
+# by making a more flexible output file name template, you can achieve that
+# but we do need to make sure it's still easy to say "okay the commands i'm pasting in the command box match this string of episode(+season) numbers"
 def _sanitize_filename(name: str) -> str:
     """Sanitize string for use as filename stem. Disallow / \\ : * ? " < > |"""
     if not name:
         return ""
     invalid = r'/\:*?"<>|'
     result = "".join(c if c not in invalid else "_" for c in name.strip())
-    return " ".join(result.split())  # collapse multiple spaces
+    return " ".join(result.split())
 
 
 def build_save_names(
@@ -837,7 +841,6 @@ def build_save_names(
             return [safe_name or "1"]
         return [f"{prefix}{i + 1}" if safe_name else str(i + 1) for i in range(count)]
 
-    # Episode(s) mode
     if use_s01e:
         episodes = parse_episode_range(spec)
         if not episodes:
@@ -847,7 +850,6 @@ def build_save_names(
             episodes.extend(range(last + 1, last + 1 + (count - len(episodes))))
         return [f"{prefix}S{season:02d}E{e:02d}" for e in episodes[:count]]
 
-    # Episode(s) + numbers
     nums = parse_episode_range(spec)
     if not nums:
         nums = list(range(1, count + 1))
@@ -882,7 +884,6 @@ def _add_headers_for_bare_url(url_or_cmd: str) -> str:
         f'-H {shlex.quote("Accept: */*")}',
         f'-H {shlex.quote("Origin: " + origin)}',
     ]
-    # Quote URL for params
     return f"{' '.join(headers)} \"{url}\""
 
 
@@ -899,10 +900,9 @@ def _drop_n_m3u8_output_options(args: List[str]) -> List[str]:
         a = args[i]
         a_lower = a.lower()
         if a_lower in drop_flags:
-            # Skip flag and value
             if a_lower in ("-m", "-M", "--save-name", "--save-dir", "--tmp-dir", "--check-segments-count",
                           "--select-video", "--select-audio", "--select-subtitle"):
-                i += 2  # skip value (avoid bounds: don't skip past end)
+                i += 2  
                 if i > len(args):
                     i = len(args)
             else:
@@ -936,6 +936,7 @@ def _parse_n_m3u8dl_progress(line: str) -> Optional[str]:
     if not clean:
         return None
 
+    # I am attempting at making a better progress bar, but so far both formats suck
     # Format 1: Unicode progress bar lines (contains "━")
     bar_idx = clean.find('━')
     if bar_idx >= 0:
@@ -1021,6 +1022,7 @@ def download_episodes(
         return False
 
     # Filter HAR and empty lines
+    # Pretty sure I'm no longer using this
     lines = []
     for line in commands_text.strip().split('\n'):
         line = line.strip()
@@ -1034,6 +1036,7 @@ def download_episodes(
         return False
 
     # Build save names
+    # This is once again something the more flexible output file name template could be greatly used
     save_names = build_save_names(mode, name, use_s01e, season, ep_spec, len(lines))
 
     downloaded_files = []
@@ -1052,11 +1055,12 @@ def download_episodes(
         for i, base_command in enumerate(lines):
             save_name = save_names[i] if i < len(save_names) else str(i + 1)
 
-            # Skip empty or comments
             if not base_command or base_command.startswith('#'):
                 continue
 
-            # Strip N_m3u8DL-RE prefix
+            # Strip N_m3u8DL-RE prefix 
+            # We do that because Type B commands (see instructions rentry if you don't know what I mean) already have N_m3u8DL-RE suffix,
+            # whereas Type A only have the .m3u8 playlist URL. To make both "types" happy, I fixed it like this
             if base_command.lower().startswith('n_m3u8dl-re '):
                 base_command = base_command[12:].strip()
 
@@ -1069,7 +1073,6 @@ def download_episodes(
             if progress_callback:
                 progress_callback(i + 1, total, save_name)
 
-            # Parse with shlex
             try:
                 user_args = shlex.split(base_command)
             except ValueError as e:
@@ -1092,8 +1095,7 @@ def download_episodes(
                 "--select-subtitle", "all",
                 "-M", "mkv",
             ]
-            # N_m3u8DL-RE resolves ffmpeg on its own PATH; GUI apps get a minimal PATH. Use the
-            # same resolved binary as the rest of the app (Settings / ffmpeg-full auto-detect).
+           # This is bascially me praying your system and this app will figure out where your ffmpeg(-full) and N_m3u8DL-RE live
             ffmpeg_exe = get_ffmpeg_command()
             if Path(ffmpeg_exe).is_file():
                 app_args = ["--ffmpeg-binary-path", str(Path(ffmpeg_exe).resolve())] + app_args
@@ -1107,22 +1109,20 @@ def download_episodes(
             debug_file.write(f"Running: {base_command[:80]}...\n")
             debug_file.flush()
 
-            # Popen with list for correct args
             try:
                 process = subprocess.Popen(
                     cmd,
                     shell=False,
                     stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,  # Combine stderr into stdout
+                    stderr=subprocess.STDOUT, 
                     text=True,
                     bufsize=1,
                     universal_newlines=True,
                     env=_environ_with_cli_path(),
                 )
 
-                # Stream output
                 output_lines = []
-                last_progress_emit: dict = {}  # stream_label -> last emit time (seconds)
+                last_progress_emit: dict = {}
 
                 while True:
                     line_output = process.stdout.readline()
@@ -1142,17 +1142,19 @@ def download_episodes(
                         if stream_progress_callback:
                             parsed = _parse_n_m3u8dl_progress(line_output)
                             if parsed:
-                                # Use the part before ' · ' as stream key to throttle.
-                                stream_key = parsed.split(' · ')[0]
+                                # Use the part before ' - ' as stream key to throttle
+                                # Not sure if it works tho, this whole progress bar thing are a recurring challenge
+                                stream_key = parsed.split(' - ')[0]
                                 now = time.time()
                                 if now - last_progress_emit.get(stream_key, 0) >= 1.0:
                                     last_progress_emit[stream_key] = now
                                     stream_progress_callback(parsed)
 
-                        # Skip file access warnings
+                        # Skip file access warnings because there's no way back here lol
                         is_file_access_warning = 'The process cannot access the file' in line_output
 
-                        # Log important only
+                        # Log only the important stuff
+                        # There's still a lot messy stuff tho
                         should_log = (
                             not is_progress_bar and
                             not is_file_access_warning and (
@@ -1171,6 +1173,7 @@ def download_episodes(
                             log_callback(f"  {line_output}")
 
                         # Drive the stream-status label with key milestone lines
+                        # Not that it works HAHA
                         if should_log and stream_progress_callback:
                             clean_line = _strip_ansi(line_output)
                             if 'Start downloading' in clean_line:
@@ -1185,11 +1188,10 @@ def download_episodes(
                                 dest = clean_line.split('Muxing to', 1)[-1].strip()
                                 stream_progress_callback(f"Muxing: {dest}")
 
-                # Wait for process
                 returncode = process.wait()
 
                 if returncode == 0:
-                    # Escape glob metachars
+                    # Escape glob glob glob metacharsssssss
                     pattern = save_name.replace("\\", "\\\\").replace("*", "[*]").replace("?", "[?]").replace("[", "[[]")
                     candidates = list(output_dir.glob(f"{pattern}.*"))
                     if candidates:
@@ -1272,7 +1274,7 @@ def extract_subtitles(downloads_dir: Path, subtitles_dir: Path, progress_callbac
                 universal_newlines=True
             )
             
-            # Read stderr
+            # Read stderr (because stderrr actually has it figured out)
             error_lines = []
             while True:
                 line = process.stderr.readline()
@@ -1293,7 +1295,6 @@ def extract_subtitles(downloads_dir: Path, subtitles_dir: Path, progress_callbac
                     if log_callback:
                         log_callback(f"    ⚠ {line}")
             
-            # Wait for process
             returncode = process.wait()
             
             if returncode == 0 and srt_file.exists():
@@ -1325,6 +1326,8 @@ def extract_subtitles(downloads_dir: Path, subtitles_dir: Path, progress_callbac
 # Fix common errors (SRT parsing + 12 fixes)
 # ============================================================================
 
+# Point of improvement: I kind of had great ideas, but I don't think it's really giving what it's supposed to give
+# I kind of just let it be, but I just don't think it's working for me (I personally never use it)
 # Fix key -> (display label, example) for CleanSubtitlesDialog
 CLEAN_SUBTITLES_FIX_ITEMS = [
     ("remove_empty_lines",              "Remove empty lines",                   'Line with only spaces --> [removed]'),
@@ -1344,6 +1347,7 @@ CLEAN_SUBTITLES_FIX_ITEMS = [
 CLEAN_SUBTITLES_FIX_LABELS = {item[0]: item[1] for item in CLEAN_SUBTITLES_FIX_ITEMS}
 
 # Default config for fix logic
+# By default we do this, these are like the boundaries in which we apply CLEAN_SUBTITLES_FIX_ITEMS
 FIX_CONFIG_DEFAULTS = {
     "subtitle_minimum_display_ms": 1000,
     "subtitle_maximum_display_ms": 8000,
@@ -1425,7 +1429,7 @@ def _pp_adjust_timings(entries: List[Dict], audio_path) -> List[Dict]:
     peak_rms = max(rms_windows) if rms_windows else 1.0
     if peak_rms == 0:
         return entries
-    SILENCE_THRESH = 0.07  # 7 % of peak — matches SE source
+    SILENCE_THRESH = 0.07  # 7 % of peak
 
     def rms_at_ms(ms: int) -> float:
         w = int(ms / 25)
@@ -1528,14 +1532,14 @@ def _pp_split_long_lines(entries: List[Dict], max_chars: int = 43) -> List[Dict]
             result.append(e)
             continue
 
-        # Normalize internal spacing so line-length checks are meaningful.
+        # Normalize internal spacing so line-length checks are actually meaningful
         text = re.sub(r"\s+", " ", text).strip()
         words = text.split(" ")
         if len(words) < 2:
             result.append({**e, "text": text})
             continue
 
-        # Choose split point that best balances line lengths.
+        # Choose split point that best balances line lengths
         best_idx = 1
         best_score = float("inf")
         for i in range(1, len(words)):
@@ -3245,6 +3249,13 @@ def _find_whisper_cpp_in_standard_locations() -> Optional[Path]:
         if hit:
             return hit
 
+    # Windows: pip puts whisper-cpp.exe in Python3x\Scripts (GUI PATH often misses this; mirrors macOS ~/Library/Python scan)
+    if sys.platform == "win32":
+        for scripts in _windows_pip_scripts_dirs():
+            hit = _scan_dir_for_whisper_cpp(scripts)
+            if hit:
+                return hit
+
     py_list: List[str] = []
     vpy = _optional_pip_venv_python()
     if vpy:
@@ -4829,6 +4840,20 @@ def _cli_path_extra_dirs() -> List[str]:
         local = os.environ.get("LOCALAPPDATA", "")
         if local:
             dirs.append(str(Path(local) / "Microsoft" / "WindowsApps"))
+            # python.org installer: Python.exe and Scripts (whisper-cpp.exe) are often not on GUI PATH
+            py_base = Path(local) / "Programs" / "Python"
+            if py_base.is_dir():
+                for child in sorted(py_base.glob("Python*"), reverse=True):
+                    if (child / "python.exe").is_file():
+                        dirs.append(str(child.resolve()))
+                    sb = child / "Scripts"
+                    if sb.is_dir():
+                        dirs.append(str(sb.resolve()))
+            roaming = os.environ.get("APPDATA", "")
+            if roaming:
+                for scripts in sorted(Path(roaming).glob("Python/Python*/Scripts"), reverse=True):
+                    if scripts.is_dir():
+                        dirs.append(str(scripts.resolve()))
     else:
         dirs.extend([str(home / ".local" / "bin"), "/usr/local/bin", "/usr/bin"])
     return [d for d in dirs if d and Path(d).exists()]
@@ -4878,6 +4903,95 @@ def _env_for_subprocess_python() -> dict:
     return env
 
 
+def _probe_python_exe(exe: str) -> bool:
+    """True if *exe* runs real CPython (not a Microsoft Store stub). Used for frozen Windows builds."""
+    try:
+        r = subprocess.run(
+            [exe, "-c", "import sys; assert sys.version_info[:2] >= (3, 9)"],
+            capture_output=True,
+            timeout=15,
+            env=_env_for_subprocess_python(),
+        )
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+def _windows_pip_scripts_dirs() -> List[Path]:
+    """Typical ``pip install`` / ``pip install --user`` console_scripts dirs on Windows (often missing from GUI PATH)."""
+    out: List[Path] = []
+    seen: set = set()
+    local = os.environ.get("LOCALAPPDATA", "")
+    if local:
+        for scripts in sorted(Path(local).glob("Programs/Python/Python*/Scripts"), reverse=True):
+            if scripts.is_dir():
+                key = str(scripts.resolve())
+                if key not in seen:
+                    seen.add(key)
+                    out.append(scripts)
+    roaming = os.environ.get("APPDATA", "")
+    if roaming:
+        for scripts in sorted(Path(roaming).glob("Python/Python*/Scripts"), reverse=True):
+            if scripts.is_dir():
+                key = str(scripts.resolve())
+                if key not in seen:
+                    seen.add(key)
+                    out.append(scripts)
+    return out
+
+
+def _try_windows_py_launcher_real_python() -> Optional[str]:
+    """Resolve the real ``python.exe`` behind the ``py`` launcher (works when ``python`` is not on PATH)."""
+    path_str = _environ_with_cli_path().get("PATH", "")
+    py_exe = shutil.which("py", path=path_str)
+    if not py_exe:
+        windir = os.environ.get("WINDIR", "")
+        if windir:
+            candidate = Path(windir) / "py.exe"
+            if candidate.is_file():
+                py_exe = str(candidate.resolve())
+    if not py_exe:
+        return None
+    for args in (["-3", "-c", "import sys; print(sys.executable)"], ["-c", "import sys; print(sys.executable)"]):
+        try:
+            r = subprocess.run(
+                [py_exe] + args,
+                capture_output=True,
+                text=True,
+                timeout=20,
+                env=_env_for_subprocess_python(),
+            )
+            if r.returncode != 0:
+                continue
+            line = (r.stdout or "").strip().splitlines()
+            if not line:
+                continue
+            resolved = line[0].strip()
+            if not resolved or not Path(resolved).is_file():
+                continue
+            if _probe_python_exe(resolved):
+                return resolved
+        except Exception:
+            continue
+    return None
+
+
+def _windows_programs_python_exes() -> List[str]:
+    """``%LOCALAPPDATA%\\Programs\\Python\\Python*\\python.exe`` installs (python.org installer)."""
+    out: List[str] = []
+    local = os.environ.get("LOCALAPPDATA", "")
+    if not local:
+        return out
+    base = Path(local) / "Programs" / "Python"
+    if not base.is_dir():
+        return out
+    for child in sorted(base.glob("Python*"), reverse=True):
+        exe = child / "python.exe"
+        if exe.is_file():
+            out.append(str(exe.resolve()))
+    return out
+
+
 def _find_brew() -> Optional[str]:
     """Locate the Homebrew `brew` executable.
 
@@ -4902,6 +5016,18 @@ def _host_python_for_module_cli() -> Optional[str]:
         return sys.executable
     frozen_exe = Path(sys.executable).resolve()
     path_str = _environ_with_cli_path().get("PATH", "")
+    if sys.platform == "win32":
+        py_launcher = _try_windows_py_launcher_real_python()
+        if py_launcher:
+            return py_launcher
+        for prog_py in _windows_programs_python_exes():
+            try:
+                if Path(prog_py).resolve() == frozen_exe:
+                    continue
+            except OSError:
+                continue
+            if _probe_python_exe(prog_py):
+                return prog_py
     for name in ("python3.12", "python3.11", "python3.10", "python3", "python"):
         candidate = shutil.which(name, path=path_str)
         if not candidate:
@@ -4911,6 +5037,13 @@ def _host_python_for_module_cli() -> Optional[str]:
                 continue
         except OSError:
             continue
+        if sys.platform == "win32":
+            low = candidate.lower()
+            if "windowsapps" in low and low.endswith(("python.exe", "python3.exe")):
+                if not _probe_python_exe(candidate):
+                    continue
+            elif not _probe_python_exe(candidate):
+                continue
         return candidate
     if sys.platform == "darwin":
         for p in (
