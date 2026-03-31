@@ -7,10 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- ...
+
+## [10.4.0-alpha.14] - 2026-03-28
+
 ### Changed
 
-- App icon master is `media/icon-source.png` (1024×1024 iOS-style SP artwork); `media/build_app_icon.sh` defaults to it and emits PNGs suited for macOS `iconutil` (8-bit RGBA).
-- GitHub Actions: release assets **`SP_Workshop-macOS-ARM64.dmg`** / **`SP_Workshop-macOS-x64.dmg`** (`macos-15` + `macos-15-intel`, `hdiutil`), **`SP_Workshop-Windows-x64.zip`** / **`SP_Workshop-Windows-ARM64.zip`** (`windows-latest` + `windows-11-arm`), **`SP_Workshop-Linux-x64.tar.gz`**. README lists downloads per platform.
+- `media/build_app_icon.sh`: small updates aligned with icon pipeline (e.g. defaults for `icon-source.png` / `iconutil` workflow).
+
+### Fixed
+
+- **PEP 668 / Homebrew Python:** In-app optional `pip` installs (`PipInstallWorker`, Whisper.cpp CPU pip path) fall back to a **user-local** virtualenv at `~/VideoProcessing/pip-venv` when the interpreter is externally managed; nothing is bundled inside the app or repo.
+- **Subtitle translation (`gst`):** Augmented `PATH` includes that venv’s `bin`; `find_gst_command` and `python -m gemini_srt_translator` fallback prefer the venv after install. Translator “still not found” messaging points at the venv workflow instead of unreliable `--user` pip on managed Pythons.
+
+## [10.4.0-alpha.13] - 2026-03-28
+
+### Changed
+
+- Application icons refreshed: `media/icon-source.png`, `media/icon.icns`, `media/icon.ico`, `media/icon.png`.
+- GitHub Actions (`.github/workflows/build.yml`): release asset names per platform (**`SP_Workshop-macOS-ARM64.dmg`** / **`SP_Workshop-macOS-x64.dmg`**, Windows x64 + ARM64 zips, Linux `SP_Workshop-Linux-x64.tar.gz`); workflow logging and **Intel (x64) smoke test must pass** (ARM64 still builds/uploads per workflow rules).
+- README: pre-built download naming and related guidance updated to match the workflow.
+
+### Fixed
+
+- Pre-built app / GUI environment: augmented `PATH` so **`gst`** and **N_m3u8DL-RE** resolve when launched outside Terminal; **N_m3u8DL-RE** download pipeline wired to use the resolved **FFmpeg** binary.
 
 ## [10.4.0-alpha.12] - 2026-03-27
 

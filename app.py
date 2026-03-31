@@ -7,7 +7,7 @@ Video Processing GUI Application
 A PyQt5 desktop app that provides a button-based interface for all video processing scripts.
 """
 
-__version__ = "10.4.0-alpha.13"
+__version__ = "10.4.0-alpha.14"
 VERSION_CODENAME = "Rocket Launcher"
 
 import sys
@@ -2156,7 +2156,7 @@ def translate_subtitles(selected_srt_files: List[Path], target_language: str = "
                     pair_index += 1
                     continue
 
-                base_cmd = ["translate", "-i", str(og_file), "-l", target_language, "-o", str(srt_file), "--skip-upgrade", "--batch-size", "30", "--thinking-budget", "0"]
+                base_cmd = ["translate", "-i", str(og_file), "-l", target_language, "-o", str(srt_file), "--skip-upgrade", "--batch-size", "100", "--thinking-budget", "0"]
                 if secondary_key:
                     base_cmd.extend(["-k2", secondary_key])
 
