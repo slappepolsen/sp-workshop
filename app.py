@@ -7,7 +7,7 @@ Video Processing GUI Application
 A PyQt5 desktop app that provides a button-based interface for all video processing scripts.
 """
 
-__version__ = "10.4.0-alpha.14"
+__version__ = "10.4.0-alpha.15"
 VERSION_CODENAME = "Rocket Launcher"
 
 import sys
