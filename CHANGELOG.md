@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - ...
 
+## [10.4.0-alpha.15] - 2026-03-31
+
+### Fixed
+
+- **Pre-built / Finder-launched app:** Process `PATH` is merged at startup with the same extra directories used for subprocess tool discovery (`_merged_cli_path_string` / `_apply_cli_path_to_process_environment` in `main()`), so Homebrew, `~/.local/bin`, and `~/VideoProcessing/pip-venv/bin` behave like Terminal instead of a minimal GUI `PATH`.
+- **Optional pip venv (`~/VideoProcessing/pip-venv`):** Child `python -m pip` runs with `PYTHONHOME` / `PYTHONPATH` removed (`_env_for_subprocess_python`) so pip recognizes the venv and does not hit PEP 668 “externally managed” when the parent is a PyInstaller bundle.
+- **Homebrew detection:** `_find_brew()` resolves `brew` using the augmented `PATH` plus `/opt/homebrew/bin/brew` and `/usr/local/bin/brew`, fixing false “Homebrew not found” / CPU-only Whisper when Homebrew is installed but Finder did not put it on `PATH`.
+- **Tool discovery:** `check_command_exists`, `get_n_m3u8dl_command`, and whisper.cpp binary resolution use the merged `PATH` consistently.
+
+### Changed
+
+- **Whisper CPP installer:** Message when Homebrew is genuinely absent clarifies PATH vs missing install.
+
 ## [10.4.0-alpha.14] - 2026-03-28
 
 ### Changed

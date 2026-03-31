@@ -2990,6 +2990,7 @@ def _get_whisper_python(log_callback=None) -> Optional[Path]:
                 check=True,
                 capture_output=True,
                 timeout=120,
+                env=_env_for_subprocess_python(),
             )
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
             if log_callback:
@@ -3007,6 +3008,7 @@ def _get_whisper_python(log_callback=None) -> Optional[Path]:
             [str(python_exe), "-m", "whisper", "--help"],
             capture_output=True,
             timeout=10,
+            env=_env_for_subprocess_python(),
         )
         if result.returncode != 0:
             raise RuntimeError("whisper not available")
@@ -3018,12 +3020,14 @@ def _get_whisper_python(log_callback=None) -> Optional[Path]:
                 [str(python_exe), "-m", "pip", "install", "-U", "pip"],
                 capture_output=True,
                 timeout=60,
+                env=_env_for_subprocess_python(),
             )
             subprocess.run(
                 [str(python_exe), "-m", "pip", "install", "-U", "openai-whisper"],
                 check=True,
                 capture_output=True,
                 timeout=300,
+                env=_env_for_subprocess_python(),
             )
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
             if log_callback:
@@ -3036,6 +3040,7 @@ def _get_whisper_python(log_callback=None) -> Optional[Path]:
             [str(python_exe), "-c", "import torch"],
             capture_output=True,
             timeout=15,
+            env=_env_for_subprocess_python(),
         )
         if result.returncode != 0:
             raise RuntimeError("torch not available")
@@ -3048,6 +3053,7 @@ def _get_whisper_python(log_callback=None) -> Optional[Path]:
                 check=True,
                 capture_output=True,
                 timeout=600,
+                env=_env_for_subprocess_python(),
             )
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
             if log_callback:
@@ -3106,8 +3112,9 @@ def _get_whisper_cpp_binary(config: Dict) -> Optional[Path]:
             if candidate.exists() and _is_whisper_cpp(candidate):
                 return candidate
 
+    path_str = _merged_cli_path_string()
     for name in ("whisper-cpp", "whisper-cli", "main", "whisper"):
-        found = shutil.which(name)
+        found = shutil.which(name, path=path_str)
         if found:
             p = Path(found)
             if _is_whisper_cpp(p):
@@ -3986,6 +3993,7 @@ def _ensure_optional_pip_venv(host_python: str, log: Callable[[str], None]) -> O
         capture_output=True,
         text=True,
         timeout=120,
+        env=_env_for_subprocess_python(),
     )
     if result.returncode != 0:
         err = (result.stderr or result.stdout or "").strip()
@@ -4010,7 +4018,7 @@ def pip_install_optional_packages(
         )
         return False
     log(f"Installing: {' '.join(packages)}")
-    env = _environ_with_cli_path()
+    env = _env_for_subprocess_python()
 
     def run_pip(py: str) -> subprocess.CompletedProcess:
         return subprocess.run(
@@ -4166,7 +4174,7 @@ class BinaryInstallWorker(QThread):
             return False
 
     def _install_ffmpeg_macos(self) -> bool:
-        brew = shutil.which("brew")
+        brew = _find_brew()
         if not brew:
             self.log_message.emit("Homebrew not found. Install from https://brew.sh then retry.")
             return False
@@ -4317,13 +4325,16 @@ class WhisperCppInstallWorker(QThread):  # pyright: ignore [reportUnreachable]
 
     def run(self):
         try:
-            if sys.platform == "darwin" and shutil.which("brew"):
+            if sys.platform == "darwin" and _find_brew():
                 ok = self._install_whisper_cpp_macos_metal()
                 if not ok:
                     self.log_message.emit("Metal install failed. Falling back to pip (CPU-only)...")
                     ok = self._install_whisper_cpp_pip()
             elif sys.platform == "darwin":
-                self.log_message.emit("Homebrew not found. Installing CPU-only version. For Metal, install from brew.sh and retry.")
+                self.log_message.emit(
+                    "Homebrew not found (not on PATH). Installing CPU-only version. "
+                    "For Metal, install Homebrew from https://brew.sh or open the app from Terminal so PATH includes brew, then retry."
+                )
                 ok = self._install_whisper_cpp_pip()
             else:
                 ok = self._install_whisper_cpp_pip()
@@ -4334,7 +4345,7 @@ class WhisperCppInstallWorker(QThread):  # pyright: ignore [reportUnreachable]
             self.finished.emit(False)
 
     def _install_whisper_cpp_macos_metal(self) -> bool:
-        brew = shutil.which("brew")
+        brew = _find_brew()
         if not brew:
             return False
         self.log_message.emit("Running: brew install whisper-cpp")
@@ -4408,7 +4419,8 @@ def check_command_exists(command: str) -> bool:
         result = subprocess.run(
             ["which", command] if sys.platform != "win32" else ["where", command],
             capture_output=True,
-            timeout=2
+            timeout=2,
+            env=_environ_with_cli_path(),
         )
         return result.returncode == 0
     except Exception:
@@ -4507,7 +4519,8 @@ def get_n_m3u8dl_command(config: Optional[Dict] = None) -> str:
         exe = tools_dir / "N_m3u8DL-RE"
     if exe.exists():
         return str(exe.resolve())
-    return shutil.which("N_m3u8DL-RE") or "N_m3u8DL-RE"
+    path_str = _merged_cli_path_string()
+    return shutil.which("N_m3u8DL-RE", path=path_str) or "N_m3u8DL-RE"
 
 
 def ffmpeg_installed(config: Optional[Dict] = None) -> bool:
@@ -4563,15 +4576,66 @@ def _cli_path_extra_dirs() -> List[str]:
     return [d for d in dirs if d and Path(d).exists()]
 
 
-def _environ_with_cli_path() -> dict:
-    """Copy of os.environ with CLI tool dirs prepended to PATH."""
-    env = os.environ.copy()
+def _merged_cli_path_string() -> str:
+    """Merge :func:`_cli_path_extra_dirs` onto PATH, deduplicated.
+
+    PyInstaller apps started from Finder/Dock/macOS Spotlight get a minimal
+    ``PATH`` (often no ``/opt/homebrew/bin`` or ``~/.local/bin``). Terminal and
+    venv development do not. Using the same merged PATH for the process and
+    for subprocess env avoids ``shutil.which`` / ``which`` missing tools that
+    are installed on the system.
+    """
     extra = _cli_path_extra_dirs()
-    if not extra:
-        return env
     sep = os.pathsep
-    env["PATH"] = f"{sep.join(extra)}{sep}{env.get('PATH', '')}"
+    base = os.environ.get("PATH", "")
+    if not extra:
+        return base
+    base_parts = [p for p in base.split(sep) if p]
+    seen: set = set()
+    ordered: List[str] = []
+    for p in extra + base_parts:
+        if p and p not in seen:
+            seen.add(p)
+            ordered.append(p)
+    return sep.join(ordered)
+
+
+def _apply_cli_path_to_process_environment() -> None:
+    """Set ``os.environ['PATH']`` so the running app matches tool discovery used in Terminal."""
+    os.environ["PATH"] = _merged_cli_path_string()
+
+
+def _environ_with_cli_path() -> dict:
+    """Copy of os.environ with CLI tool dirs merged into PATH (see :func:`_merged_cli_path_string`)."""
+    env = os.environ.copy()
+    env["PATH"] = _merged_cli_path_string()
     return env
+
+
+def _env_for_subprocess_python() -> dict:
+    """Environment for child Python/venv/pip. Drops PYTHONHOME/PYTHONPATH so venv isolation is not overridden (avoids PEP 668 inside ~/VideoProcessing/pip-venv when launched from a frozen app)."""
+    env = _environ_with_cli_path()
+    env.pop("PYTHONHOME", None)
+    env.pop("PYTHONPATH", None)
+    return env
+
+
+def _find_brew() -> Optional[str]:
+    """Locate the Homebrew `brew` executable.
+
+    macOS GUI apps often inherit a minimal PATH (no ``/opt/homebrew/bin``), so
+    plain ``shutil.which("brew")`` misses an installed Homebrew. Uses the same
+    augmented PATH as CLI tool discovery, then common install locations.
+    """
+    path_str = _environ_with_cli_path().get("PATH", "")
+    found = shutil.which("brew", path=path_str)
+    if found:
+        return found
+    for p in ("/opt/homebrew/bin/brew", "/usr/local/bin/brew"):
+        bp = Path(p)
+        if bp.is_file() and os.access(bp, os.X_OK):
+            return str(bp)
+    return None
 
 
 def _host_python_for_module_cli() -> Optional[str]:
@@ -9368,6 +9432,9 @@ class VideoProcessingApp(QMainWindow):
 
 def main():
     """Main entry point."""
+    # Frozen GUI apps inherit a minimal PATH; align with Terminal / venv dev so
+    # which(1), shutil.which, brew, ffmpeg, gst, etc. resolve like subprocess helpers.
+    _apply_cli_path_to_process_environment()
     app = QApplication(sys.argv)
     # Use Fusion style for better stylesheet support on macOS
     app.setStyle('Fusion')
