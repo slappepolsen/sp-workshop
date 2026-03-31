@@ -31,8 +31,21 @@ jobs:
           echo "::error::When create_github_release is true, release_tag must be set (e.g. v10.4.0-alpha.11)"
           exit 1
 
-  build-macos:
+  resolve-ref:
     needs: validate-inputs
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.meta.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+      - id: meta
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  build-macos:
+    needs: [validate-inputs, resolve-ref]
     strategy:
       fail-fast: false
       matrix:
@@ -47,7 +60,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ needs.resolve-ref.outputs.sha }}
 
       - name: Runner architecture
         run: uname -m
@@ -123,20 +136,22 @@ jobs:
           path: ${{ steps.mac_dmg.outputs.dmg }}
 
   build-windows:
-    needs: validate-inputs
+    needs: [validate-inputs, resolve-ref]      
     strategy:
       fail-fast: false
       matrix:
-        include:
+        include:        
           - runner: windows-latest
             win_suffix: x64
+            win_name: "Windows x64"
           - runner: windows-11-arm
             win_suffix: ARM64
+            win_name: "Windows ARM64"
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ needs.resolve-ref.outputs.sha }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -189,12 +204,12 @@ jobs:
           path: dist/SP_Workshop_Windows/
 
   build-linux:
-    needs: validate-inputs
+    needs: [validate-inputs, resolve-ref]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ needs.resolve-ref.outputs.sha }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -281,6 +296,7 @@ jobs:
             SP_Workshop-Linux-x64.tar.gz
           generate_release_notes: true
           draft: false
+          overwrite_files: true
           prerelease: ${{ contains(inputs.release_tag, 'alpha') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

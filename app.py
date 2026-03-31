@@ -7,7 +7,7 @@ Video Processing GUI Application
 A PyQt5 desktop app that provides a button-based interface for all video processing scripts.
 """
 
-__version__ = "10.4.0-alpha.19"
+__version__ = "10.4.0-alpha.20"
 VERSION_CODENAME = "Launcher (for real this time)"
 
 import sys
