@@ -177,6 +177,10 @@ WHISPER_CPP_MODEL_SIZES = {
     "ggml-large-v3-turbo-q5_0.bin": "547 MB",
 }
 
+# whisper-cli: max characters per subtitle line (-ml). With -sow, long cues wrap to two
+# lines without breaking words. Omit by passing -ml or --max-len in whisper_cpp_extra_args.
+WHISPER_CPP_DEFAULT_MAX_LINE_LEN = 42
+
 
 def _whisper_cpp_model_size(filename: str) -> str:
     """Return approximate size string for model filename."""
@@ -1585,6 +1589,30 @@ def _pp_fix_casing(entries: List[Dict]) -> List[Dict]:
     return result
 
 
+def _whisper_cpp_strip_leading_spaces_file(final_srt: Path, log_callback=None) -> None:
+    """Remove leading spaces from each cue text line (whisper.cpp writes this; see ggml-org/whisper.cpp#397).
+
+    Always runs after Whisper CPP writes the SRT, before optional post-processing — not a cosmetic option.
+    """
+    try:
+        raw = final_srt.read_text(encoding="utf-8")
+        entries = _parse_srt(raw)
+        if not entries:
+            return
+        changed = False
+        for e in entries:
+            t = e["text"]
+            nt = "\n".join(line.lstrip(" ") for line in t.split("\n"))
+            if nt != t:
+                e["text"] = nt
+                changed = True
+        if changed:
+            final_srt.write_text(_format_srt(entries), encoding="utf-8")
+    except Exception as ex:
+        if log_callback:
+            log_callback(f"  Leading-space cleanup failed: {ex}")
+
+
 def _whisper_cpp_post_process(
     final_srt,
     audio_path,
@@ -1596,6 +1624,7 @@ def _whisper_cpp_post_process(
     Steps are controlled by individual config keys and the master
     whisper_post_processing_enabled toggle.  audio_path is needed only for
     the adjust-timings step and may be None.
+    Leading spaces are already removed by _whisper_cpp_strip_leading_spaces_file when applicable.
     """
     if not config.get("whisper_post_processing_enabled", False):
         if log_callback:
@@ -3548,17 +3577,20 @@ def transcribe_video_whisper_cpp(
                 vad_args = ["--vad", "-vm", vad_model_path]
         except Exception:
             pass
-        # Default stack: same as pre–alpha.9 — beam 2 / best-of 3 and --no-fallback (-nf).
-        # The alpha.9 experiment (-bs 5 -bo 5, no -nf) changed segment boundaries and led to
-        # overly long single-line cues for many users; extra_args can override if needed.
+        # Default stack: pre–alpha.9 decode (-bs/-bo/-nf) + line wrap: -ml wraps long cues into
+        # two lines; -sow avoids mid-word breaks (only applies when max_len > 0). Set
+        # WHISPER_CPP_DEFAULT_MAX_LINE_LEN or pass -ml/--max-len in whisper_cpp_extra_args to override.
+        _cpp_extra = (config.get("whisper_cpp_extra_args") or "").strip()
+        _skip_builtin_ml = "-ml" in _cpp_extra or "--max-len" in _cpp_extra
         subtitle_edit_args = ["-sow", "-bs", "2", "-bo", "3", "-nf"]
+        if not _skip_builtin_ml:
+            subtitle_edit_args = ["-ml", str(WHISPER_CPP_DEFAULT_MAX_LINE_LEN)] + subtitle_edit_args
         cmd = [
             str(binary), "-m", str(model_path), "-f", str(audio_path),
             "-l", language_code if language_code != "auto" else "auto",
         ] + vad_args + no_gpu_args + subtitle_edit_args + ["--print-progress", "-osrt", "-of", output_stem]
-        extra_args = (config.get("whisper_cpp_extra_args") or "").strip()
-        if extra_args:
-            cmd.extend(extra_args.split())
+        if _cpp_extra:
+            cmd.extend(_cpp_extra.split())
 
         cwd = str(Path(binary).parent)
 
@@ -3641,6 +3673,7 @@ def transcribe_video_whisper_cpp(
 
         # Post-processing uses the audio WAV for timing adjustment — delete it only after.
         if final_srt.exists():
+            _whisper_cpp_strip_leading_spaces_file(final_srt, log_callback)
             _whisper_cpp_post_process(final_srt, audio_path, config, log_callback)
 
         if audio_path.exists():
@@ -6803,6 +6836,9 @@ Whisper CPP (whisper-cli) extra flags
 ======================================
 Note: -l / --language, -m / --model, -f / --file, output format flags
 and VAD flags are already set by the main tab. Only add flags not listed there.
+
+By default the app injects -ml 42 -sow -bs 2 -bo 3 -nf (two-line cue wrap + stable decode).
+If you add -ml or --max-len here, the built-in -ml is omitted so your value is used.
 
 Core decoding
 -------------
