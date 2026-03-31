@@ -3067,8 +3067,205 @@ def _get_whisper_python(log_callback=None) -> Optional[Path]:
 # Transcription engines
 # ============================================================================
 
+def _whisper_cpp_binary_responds_like_cpp(bin_path: Path) -> bool:
+    """True if *bin_path* is whisper.cpp CLI (not Python openai-whisper). Uses ``-h`` output."""
+    try:
+        r = subprocess.run(
+            [str(bin_path), "-h"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            env=_environ_with_cli_path(),
+        )
+        out = (r.stdout or "") + (r.stderr or "")
+        if "output_format" in out:
+            return False
+        return ("-f" in out or "--file" in out) and (
+            "--vad" in out or "-m" in out or "--model" in out
+        )
+    except Exception:
+        return False
+
+
+def _python_scripts_bin(python_exe: str) -> Optional[Path]:
+    """Directory where *python_exe* installs console_scripts (``pip install`` targets)."""
+    try:
+        r = subprocess.run(
+            [python_exe, "-c", "import sysconfig; print(sysconfig.get_path('scripts'))"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            env=_env_for_subprocess_python(),
+        )
+        if r.returncode != 0:
+            return None
+        s = (r.stdout or "").strip()
+        if not s:
+            return None
+        p = Path(s)
+        return p if p.is_dir() else None
+    except Exception:
+        return None
+
+
+def _scan_dir_for_whisper_cpp(bin_dir: Path) -> Optional[Path]:
+    """Return first whisper.cpp CLI in *bin_dir* that validates with ``-h``, else None."""
+    if not bin_dir.is_dir():
+        return None
+    suffix = ".exe" if os.name == "nt" else ""
+    for name in ("whisper-cpp", "whisper-cli", "main", "whisper"):
+        candidate = bin_dir / (name + suffix)
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            if _whisper_cpp_binary_responds_like_cpp(candidate):
+                return candidate.resolve()
+    return None
+
+
+def _whisper_cpp_homebrew_bin_dirs() -> List[Path]:
+    """Typical Homebrew ``whisper-cpp`` bin directories (no need for ``brew`` on PATH)."""
+    out: List[Path] = []
+    seen: set = set()
+    if sys.platform == "darwin":
+        for p in (Path("/opt/homebrew/opt/whisper-cpp/bin"), Path("/usr/local/opt/whisper-cpp/bin")):
+            if p.is_dir():
+                key = str(p.resolve())
+                if key not in seen:
+                    seen.add(key)
+                    out.append(p)
+    elif sys.platform.startswith("linux"):
+        for p in (
+            Path.home() / ".linuxbrew/opt/whisper-cpp/bin",
+            Path("/home/linuxbrew/.linuxbrew/opt/whisper-cpp/bin"),
+        ):
+            if p.is_dir():
+                key = str(p.resolve())
+                if key not in seen:
+                    seen.add(key)
+                    out.append(p)
+    brew = _find_brew()
+    if brew:
+        try:
+            r = subprocess.run(
+                [brew, "--prefix", "whisper-cpp"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                env=_environ_with_cli_path(),
+            )
+            if r.returncode == 0 and (r.stdout or "").strip():
+                b = Path((r.stdout or "").strip()) / "bin"
+                if b.is_dir():
+                    key = str(b.resolve())
+                    if key not in seen:
+                        seen.add(key)
+                        out.append(b)
+        except Exception:
+            pass
+    return out
+
+
+def _whisper_cpp_user_source_build_dirs() -> List[Path]:
+    """Common locations for a local ``cmake`` build of whisper.cpp."""
+    home = Path.home()
+    rels = [
+        "whisper.cpp/build/bin",
+        "whisper.cpp/build/bin/Release",
+        "src/whisper.cpp/build/bin",
+        "Projects/whisper.cpp/build/bin",
+        "dev/whisper.cpp/build/bin",
+        "code/whisper.cpp/build/bin",
+    ]
+    if sys.platform == "win32":
+        rels.extend(["whisper.cpp/build/bin/Release", "whisper.cpp/build/Release"])
+    out: List[Path] = []
+    seen: set = set()
+    for rel in rels:
+        p = home / rel
+        if p.is_dir():
+            key = str(p.resolve())
+            if key not in seen:
+                seen.add(key)
+                out.append(p)
+    return out
+
+
+def _find_whisper_cpp_in_standard_locations() -> Optional[Path]:
+    """Locate whisper.cpp CLI without using ``whisper_cpp_path`` (brew, builds, venvs, pip, PATH)."""
+    # Project venvs (dev)
+    for rel in (".venv", "venv"):
+        exe_dir = Path(__file__).resolve().parent / rel / ("Scripts" if os.name == "nt" else "bin")
+        hit = _scan_dir_for_whisper_cpp(exe_dir)
+        if hit:
+            return hit
+
+    # PyInstaller: ``sys.executable`` is the .app bundle binary — not where pip puts whisper-cpp.
+    if not _is_frozen_pyinstaller():
+        hit = _scan_dir_for_whisper_cpp(Path(sys.executable).resolve().parent)
+        if hit:
+            return hit
+
+    # Homebrew whisper-cpp (Metal on Apple Silicon when installed via brew)
+    for d in _whisper_cpp_homebrew_bin_dirs():
+        hit = _scan_dir_for_whisper_cpp(d)
+        if hit:
+            return hit
+
+    # User-built whisper.cpp from source
+    for d in _whisper_cpp_user_source_build_dirs():
+        hit = _scan_dir_for_whisper_cpp(d)
+        if hit:
+            return hit
+
+    py_list: List[str] = []
+    vpy = _optional_pip_venv_python()
+    if vpy:
+        py_list.append(vpy)
+    hpy = _host_python_for_module_cli()
+    if hpy and hpy not in py_list:
+        py_list.append(hpy)
+    for py in py_list:
+        scripts = _python_scripts_bin(py)
+        if scripts:
+            hit = _scan_dir_for_whisper_cpp(scripts)
+            if hit:
+                return hit
+
+    path_str = _merged_cli_path_string()
+    for name in ("whisper-cpp", "whisper-cli", "main", "whisper"):
+        found = shutil.which(name, path=path_str)
+        if found:
+            p = Path(found)
+            if _whisper_cpp_binary_responds_like_cpp(p):
+                return p.resolve()
+
+    # macOS: ``pip install --user`` often lands in ~/Library/Python/X.Y/bin (not on GUI PATH).
+    if sys.platform == "darwin":
+        lp = Path.home() / "Library" / "Python"
+        if lp.is_dir():
+            for child in sorted(lp.iterdir(), reverse=True):
+                hit = _scan_dir_for_whisper_cpp(child / "bin")
+                if hit:
+                    return hit
+    return None
+
+
+def _autosave_whisper_cpp_path_if_discovered() -> None:
+    """If settings have no ``whisper_cpp_path`` but we find a CLI on disk, save its bin dir."""
+    try:
+        config = load_config()
+        if (config.get("whisper_cpp_path") or "").strip():
+            return
+        exe = _find_whisper_cpp_in_standard_locations()
+        if not exe:
+            return
+        config["whisper_cpp_path"] = str(exe.parent.resolve())
+        save_config(config)
+    except Exception:
+        pass
+
+
 def _get_whisper_cpp_binary(config: Dict) -> Optional[Path]:
-    """Resolve Whisper CPP executable. Config whisper_cpp_path overrides; else check PATH."""
+    """Resolve Whisper CPP executable. Config whisper_cpp_path overrides; else check PATH and pip dirs."""
     user_path = (config.get("whisper_cpp_path") or "").strip()
     if user_path:
         p = Path(user_path).expanduser()
@@ -3079,47 +3276,24 @@ def _get_whisper_cpp_binary(config: Dict) -> Optional[Path]:
                 exe = p / (name + (".exe" if os.name == "nt" else ""))
                 if exe.exists():
                     return exe.resolve()
-    def _is_whisper_cpp(bin_path: Path) -> bool:
-        """Check if binary is whisper.cpp (not Python openai-whisper)."""
-        try:
-            r = subprocess.run(
-                [str(bin_path), "-h"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            out = (r.stdout or "") + (r.stderr or "")
-            # Python whisper has --output_format; reject it
-            if "output_format" in out:
-                return False
-            # Original whisper.cpp has --vad and -f; pip whisper.cpp-cli has -m and -f
-            return ("-f" in out or "--file" in out) and (
-                "--vad" in out or "-m" in out or "--model" in out
-            )
-        except Exception:
-            return False
+    return _find_whisper_cpp_in_standard_locations()
 
-    # Check Python venv first
-    for exe_dir in [
-        Path(sys.executable).resolve().parent,
-        Path(__file__).resolve().parent / ".venv" / ("Scripts" if os.name == "nt" else "bin"),
-        Path(__file__).resolve().parent / "venv" / ("Scripts" if os.name == "nt" else "bin"),
-    ]:
-        if not exe_dir.exists():
-            continue
-        for name in ("whisper-cpp", "whisper-cli", "main", "whisper"):
-            candidate = exe_dir / (name + (".exe" if os.name == "nt" else ""))
-            if candidate.exists() and _is_whisper_cpp(candidate):
-                return candidate
 
-    path_str = _merged_cli_path_string()
-    for name in ("whisper-cpp", "whisper-cli", "main", "whisper"):
-        found = shutil.which(name, path=path_str)
-        if found:
-            p = Path(found)
-            if _is_whisper_cpp(p):
-                return p
-    return None
+def _persist_whisper_cpp_path_after_pip_install(log: Optional[Callable[[str], None]] = None) -> None:
+    """Save discovered whisper.cpp bin dir after ``pip install whisper.cpp-cli`` (needed for frozen .app)."""
+    exe = _find_whisper_cpp_in_standard_locations()
+    if not exe:
+        if log:
+            log(
+                "Whisper CPP was installed but could not be verified (e.g. macOS blocked the binary). "
+                "If you see a Security prompt, allow the binary, or set whisper_cpp_path in settings."
+            )
+        return
+    config = load_config()
+    config["whisper_cpp_path"] = str(exe.parent.resolve())
+    save_config(config)
+    if log:
+        log(f"Recorded Whisper CPP location: {exe.parent}")
 
 
 def _extract_audio_for_transcription(
@@ -3158,6 +3332,40 @@ def _extract_audio_for_transcription(
             log_callback("FFmpeg did not produce audio file.")
         return False
     return True
+
+
+def _find_ggml_metal_resources_dir(binary: Path) -> Optional[Path]:
+    """Directory containing ``ggml-metal.metal`` for the given whisper-cli binary (macOS).
+
+    Pip wheels place shaders under ``site-packages`` while the CLI lives in ``venv/bin``.
+    Homebrew uses ``.../opt/whisper-cpp/share/whisper-cpp``. Embedded builds ship the file
+    next to the binary.
+    """
+    if sys.platform != "darwin":
+        return None
+    try:
+        bin_dir = binary.resolve().parent
+    except OSError:
+        return None
+    if (bin_dir / "ggml-metal.metal").is_file():
+        return bin_dir
+    share = bin_dir.parent / "share" / "whisper-cpp"
+    if share.is_dir():
+        if (share / "ggml-metal.metal").is_file():
+            return share
+        if any(share.glob("ggml*.metal")):
+            return share
+    lib = bin_dir.parent / "lib"
+    if lib.is_dir():
+        for sp in sorted(lib.glob("python*/site-packages"), reverse=True):
+            if not sp.is_dir():
+                continue
+            try:
+                for hit in sp.glob("**/ggml-metal.metal"):
+                    return hit.parent
+            except OSError:
+                continue
+    return None
 
 
 def transcribe_video_whisper_cpp(
@@ -3280,16 +3488,16 @@ def transcribe_video_whisper_cpp(
         # then move the result to the subtitles folder.
         output_stem = str(video_dir / base_name)
 
-        # On macOS: Homebrew/build-from-source often embeds Metal (GGML_METAL_EMBED_LIBRARY=ON),
-        # so ggml-metal.metal may not exist on disk. Try Metal first; fallback to -ng if init fails.
-        metal_dir = None
-        no_gpu_args = []
+        # On macOS: set GGML_METAL_PATH_RESOURCES when shaders live outside the binary dir
+        # (pip: site-packages; Homebrew: opt/.../share/whisper-cpp). Embedded builds need no env.
+        metal_dir: Optional[str] = None
+        no_gpu_args: List[str] = []
         if sys.platform == "darwin":
-            binary_dir = Path(binary).parent
-            metal_path = binary_dir / "ggml-metal.metal"
-            if metal_path.exists():
-                metal_dir = str(binary_dir)  # External file: point GGML_METAL_PATH_RESOURCES at it
-            # Do NOT add -ng when file is missing: embedded Metal builds (Homebrew) work without it.
+            metal_res = _find_ggml_metal_resources_dir(Path(binary))
+            if metal_res:
+                metal_dir = str(metal_res)
+                if log_callback:
+                    log_callback(f"Metal shader path: {metal_dir}")
 
         # VAD: whisper.cpp uses ggml-silero-v6.2.0.bin (ggml format) from ggml-org/whisper-vad.
         # See https://huggingface.co/ggml-org/whisper-vad/discussions/1
@@ -3399,7 +3607,12 @@ def transcribe_video_whisper_cpp(
             t_err.join(timeout=1)
             return proc.returncode, "".join(stderr_lines)
 
-        extra_env = {"GGML_METAL_PATH_RESOURCES": metal_dir} if metal_dir else None
+        extra_env = None
+        if metal_dir:
+            extra_env = {
+                "GGML_METAL_PATH_RESOURCES": metal_dir,
+                "WHISPER_METAL_PATH_RESOURCES": metal_dir,
+            }
         if log_callback:
             log_callback("Transcribing with Whisper CPP...")
         returncode, stderr_text = _run_whisper_streaming(cmd, cwd, extra_env)
@@ -4391,7 +4604,10 @@ class WhisperCppInstallWorker(QThread):  # pyright: ignore [reportUnreachable]
     def _install_whisper_cpp_pip(self) -> bool:
         try:
             py = _host_python_for_module_cli()
-            return pip_install_optional_packages(py, ["whisper.cpp-cli"], self.log_message.emit)
+            ok = pip_install_optional_packages(py, ["whisper.cpp-cli"], self.log_message.emit)
+            if ok:
+                _persist_whisper_cpp_path_after_pip_install(self.log_message.emit)
+            return ok
         except subprocess.TimeoutExpired:
             self.log_message.emit("Installation timed out")
             return False
@@ -4567,6 +4783,13 @@ def _cli_path_extra_dirs() -> List[str]:
                 "/bin",
             ]
         )
+        # pip ``install --user`` console_scripts (often missing from GUI app PATH)
+        lp = home / "Library" / "Python"
+        if lp.is_dir():
+            for child in lp.iterdir():
+                b = child / "bin"
+                if b.is_dir():
+                    dirs.append(str(b))
     elif sys.platform == "win32":
         local = os.environ.get("LOCALAPPDATA", "")
         if local:
@@ -7535,17 +7758,18 @@ class VideoProcessingApp(QMainWindow):
                 close_btn.setEnabled(True) 
                 close_btn.setText("Installed successfully")
                 def auto_close():
-                    if on_success_after_install: 
+                    self.config = load_config()
+                    if on_success_after_install:
                         on_success_after_install()
-                    dlg.accept() 
+                    dlg.accept()
                 QTimer.singleShot(1500, auto_close)
             else:
-                log.append("\nInstallation failed. Click Close, then run: python -m pip install whisper.cpp-cli") 
-                close_btn.setEnabled(True) 
-        close_btn.clicked.connect(dlg.accept) 
-        worker.finished.connect(on_finished) 
-        worker.start() 
-        dlg.exec_()         
+                log.append("\nInstallation failed. Click Close, then run: python -m pip install whisper.cpp-cli")
+                close_btn.setEnabled(True)
+        close_btn.clicked.connect(dlg.accept)
+        worker.finished.connect(on_finished)
+        worker.start()
+        dlg.exec_()
 
     def transcribe_whisper_cpp_from_tab(self):
         """Transcribe using Whisper CPP. Faster, built-in VAD.""" 
@@ -9448,6 +9672,8 @@ def main():
     # Also set window icon (for title bar)
     window.setWindowIcon(icon)
     window.show()
+    # Defer: scan for an existing whisper.cpp install and persist whisper_cpp_path if unset (brew / builds / PATH).
+    QTimer.singleShot(0, _autosave_whisper_cpp_path_if_discovered)
     sys.exit(app.exec_())
 
 

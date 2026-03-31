@@ -7,7 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- ...
+### Added
+
+- **Whisper CPP discovery:** Scans common installs before relying on PATH alone — Homebrew `opt/whisper-cpp/bin` (Apple Silicon and Intel prefixes), `brew --prefix whisper-cpp` when `brew` is found, Linuxbrew locations, and typical source-build folders under `$HOME` (e.g. `whisper.cpp/build/bin`, `src/whisper.cpp/...`). If `whisper_cpp_path` is still empty and a CLI is found, it is written to settings once (runs on the first event-loop tick after the main window is shown).
+- **GitHub Actions** (`.github/workflows/build.yml`): workflow artifact names **`SP-WORKSHOP-windows-x64`**, **`SP-WORKSHOP-windows-ARM64`**, **`SP-WORKSHOP-macos-arm64`**, **`SP-WORKSHOP-macos-intel`**, **`SP-WORKSHOP-linux-x64`** (GitHub serves each download as a `.zip`).
+
+### Fixed
+
+- **Whisper CPP (pre-built macOS app / pip):** Stops install/detect loops by saving `whisper_cpp_path` after a successful `pip install whisper.cpp-cli`, not searching for binaries next to the PyInstaller executable, and including per-user pip script dirs (`~/Library/Python/*/bin` on macOS) in merged `PATH` and discovery. Transcription’s install flow reloads config before retrying transcription.
+- **Release job** (same workflow): assemble step uses the new artifact directory names when zipping/copying release assets.
 
 ## [10.4.0-alpha.15] - 2026-03-31
 

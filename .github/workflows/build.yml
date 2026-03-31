@@ -1,20 +1,22 @@
-name: Build Executables And Release
+# Manual run: builds all platforms and uploads workflow artifacts (SP-WORKSHOP-*).
+# GitHub Release is optional — leave create_github_release false to build/test without publishing a release.
+name: Build and test (optional release)
 
 on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "Git branch or tag to build (e.g. main or v10.4.0-alpha.11)"
+        description: "Git branch or tag to build (e.g. main or your feature branch)"
         required: true
         default: main
         type: string
       create_github_release:
-        description: "Create GitHub Release (macOS DMGs, Windows x64+ARM64 zips, Linux x64 tar.gz)"
+        description: "Publish a GitHub Release with assembled assets. If false (default): builds run and artifacts appear on this workflow run only — no Release."
         required: true
         default: false
         type: boolean
       release_tag:
-        description: "Tag for the release (must already exist on GitHub). Required when create_github_release is true — usually same as ref when releasing a tag."
+        description: "Tag for the release (must already exist on GitHub). Required only when create_github_release is true."
         required: false
         default: ""
         type: string
@@ -117,7 +119,7 @@ jobs:
       - name: Upload macOS DMG (${{ matrix.mac_suffix }})
         uses: actions/upload-artifact@v4
         with:
-          name: macos-dmg-${{ matrix.mac_suffix }}
+          name: SP-WORKSHOP-macos-${{ matrix.mac_suffix }}
           path: ${{ steps.mac_dmg.outputs.dmg }}
 
   build-windows:
@@ -183,7 +185,7 @@ jobs:
       - name: Upload Windows portable (${{ matrix.win_suffix }})
         uses: actions/upload-artifact@v4
         with:
-          name: windows-portable-${{ matrix.win_suffix }}
+          name: SP-WORKSHOP-windows-${{ matrix.win_suffix }}
           path: dist/SP_Workshop_Windows/
 
   build-linux:
@@ -241,7 +243,7 @@ jobs:
       - name: Upload Linux artifact
         uses: actions/upload-artifact@v4
         with:
-          name: linux-x64
+          name: SP-WORKSHOP-linux-x64
           path: dist/SP_Workshop_Linux/
 
   release:
@@ -261,11 +263,11 @@ jobs:
           set -euo pipefail
           ROOT="$GITHUB_WORKSPACE"
           cd artifacts
-          (cd windows-portable-x64 && zip -r "$ROOT/SP_Workshop-Windows-x64.zip" .)
-          (cd windows-portable-ARM64 && zip -r "$ROOT/SP_Workshop-Windows-ARM64.zip" .)
-          cp macos-dmg-arm64/SP_Workshop-macOS-ARM64.dmg "$ROOT/"
-          cp macos-dmg-intel/SP_Workshop-macOS-x64.dmg "$ROOT/"
-          (cd linux-x64 && tar -czvf "$ROOT/SP_Workshop-Linux-x64.tar.gz" .)
+          (cd SP-WORKSHOP-windows-x64 && zip -r "$ROOT/SP_Workshop-Windows-x64.zip" .)
+          (cd SP-WORKSHOP-windows-ARM64 && zip -r "$ROOT/SP_Workshop-Windows-ARM64.zip" .)
+          cp SP-WORKSHOP-macos-arm64/SP_Workshop-macOS-ARM64.dmg "$ROOT/"
+          cp SP-WORKSHOP-macos-intel/SP_Workshop-macOS-x64.dmg "$ROOT/"
+          (cd SP-WORKSHOP-linux-x64 && tar -czvf "$ROOT/SP_Workshop-Linux-x64.tar.gz" .)
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
