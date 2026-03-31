@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [10.4.0-alpha.19] - 2026-03-31
+
+- **Windows (pre-built app / Whisper CPP):** Expand Python/CLI discovery to include root-style python.org installs such as `C:\Python314` (not only `%LocalAppData%`, `%AppData%`, and Program Files). The app now scans `C:\Python*\python.exe` and `C:\Python*\Scripts`, merges those into augmented GUI `PATH`, and can reuse an existing `whisper.cpp-cli` install from that layout instead of failing installation/detection.
+
+## [10.4.0-alpha.18] - 2026-03-31
+
+### Fixed
+
+- **Windows (pre-built app / Whisper CPP):** Stop prepending `%LocalAppData%\Microsoft\WindowsApps` to the merged PATH (it put the Store `python.exe` stub ahead of real installs and caused `pip install` to fail with “Python est introuvable”). Scan `C:\Program Files\Python*\Scripts` and `C:\Program Files (x86)\Python*\Scripts` and per-machine `python.exe` paths. For optional `pip install` from the frozen app, prefer `py -3 -m pip` then `py -m pip`, then `python.exe -m pip`, with the host interpreter’s directory prepended to `PATH` for the subprocess. **Settings** folder override: also resolve `whisper.exe` next to `whisper-cli` / `whisper-cpp` / `main`.
+
+## [10.4.0-alpha.17] - 2026-03-31
+
+### Fixed
+
+- **Windows (pre-built app / Whisper CPP):** Discover `whisper-cpp.exe` under typical pip `Scripts` folders (`%LocalAppData%\Programs\Python\Python*\Scripts`, `%AppData%\Python\Python*\Scripts`) even when the GUI inherits a minimal `PATH`. Merge those locations (and python.org `Programs\Python\...`) into the same augmented `PATH` used for subprocess tool discovery. For `python -m pip` / optional installs from a frozen build, prefer the real interpreter resolved via the `py` launcher and per-user `Programs\Python\Python*\python.exe`, and skip Microsoft Store `WindowsApps\python.exe` stubs that break `pip install whisper.cpp-cli`.
+
 ## [10.4.0-alpha.16] - 2026-03-31
 
 ### Added

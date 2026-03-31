@@ -1,4 +1,4 @@
-<2026-03-31>
+2026-03-31
 
 ## Downloads
 > #### Which download do I need?
@@ -9,7 +9,7 @@
 | Platform | File |
 | -------- | ---- |
 | **Windows x64** | [SP-WORKSHOP-windows-x64.zip](https://github.com/slappepolsen/sp-workshop/releases/download/v10.4.0-alpha.14/SP-WORKSHOP-windows-x64.zip) |
-| **Windows ARM64** | [SP-WORKSHOP-windows-arm64.zip](https://github.com/slappepolsen/sp-workshop/releases/download/v10.4.0-alpha.14/SP-WORKSHOP-windows-arm64.zip) |
+| **Windows ARM64** | [SP-WORKSHOP-windows-ARM64.zip](https://github.com/slappepolsen/sp-workshop/releases/download/v10.4.0-alpha.14/SP-WORKSHOP-windows-ARM64.zip) |
 | **macOS Apple Silicon** | [SP-WORKSHOP-macos-arm64.zip](https://github.com/slappepolsen/sp-workshop/releases/download/v10.4.0-alpha.14/SP-WORKSHOP-macos-arm64.zip) |
 | **macOS Intel** | [SP-WORKSHOP-macos-intel.zip](https://github.com/slappepolsen/sp-workshop/releases/download/v10.4.0-alpha.14/SP-WORKSHOP-macos-intel.zip) |
 | **Linux x64** | [SP-WORKSHOP-linux-x64.zip](https://github.com/slappepolsen/sp-workshop/releases/download/v10.4.0-alpha.14/SP-WORKSHOP-linux-x64.zip) |
@@ -22,6 +22,9 @@
 > This is a pre-release.
 
 ### Fixed
-- Windows: Whisper CPP is found after a normal `pip install` (scans common `Scripts` folders) and in-app pip no longer picks the Microsoft Store `python` stub when a real Python or the `py` launcher is available.
+- Expand Windows Python discovery to include root-style python.org installs (for example `C:\Python314`).
+- Detect `whisper.cpp-cli` in `C:\Python*\Scripts` and reuse existing installs in pre-built app.
+- Use discovered `C:\Python*\python.exe` for frozen-app `python -m pip` flows when GUI PATH is minimal.
+
 
 **Full changelog:** see [`CHANGELOG.md`](https://github.com/slappepolsen/sp-workshop/blob/main/CHANGELOG.md)

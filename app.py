@@ -7,8 +7,8 @@ Video Processing GUI Application
 A PyQt5 desktop app that provides a button-based interface for all video processing scripts.
 """
 
-__version__ = "10.4.0-alpha.17"
-VERSION_CODENAME = "Rocket Launcher"
+__version__ = "10.4.0-alpha.19"
+VERSION_CODENAME = "Launcher (for real this time)"
 
 import sys
 import os
@@ -3312,7 +3312,7 @@ def _get_whisper_cpp_binary(config: Dict) -> Optional[Path]:
         if p.is_file():
             return p.resolve()
         if p.is_dir():
-            for name in ("whisper-cli", "whisper-cpp", "main"):
+            for name in ("whisper-cli", "whisper-cpp", "main", "whisper"):
                 exe = p / (name + (".exe" if os.name == "nt" else ""))
                 if exe.exists():
                     return exe.resolve()
@@ -4278,25 +4278,53 @@ def pip_install_optional_packages(
         return False
     log(f"Installing: {' '.join(packages)}")
     env = _env_for_subprocess_python()
+    # Windows: put this interpreter's directory (and Scripts) first so any child ``python`` lookup
+    # does not hit ``Microsoft\\WindowsApps`` stubs still present later on PATH.
+    if sys.platform == "win32" and host_py:
+        hp = Path(host_py)
+        if hp.is_file():
+            prepend: List[str] = [str(hp.parent.resolve())]
+            sb = _python_scripts_bin(host_py)
+            if sb:
+                prepend.append(str(sb))
+            env["PATH"] = os.pathsep.join(prepend) + os.pathsep + env.get("PATH", "")
 
-    def run_pip(py: str) -> subprocess.CompletedProcess:
+    def run_pip_argv(argv: List[str]) -> subprocess.CompletedProcess:
         return subprocess.run(
-            [py, "-m", "pip", "install"] + packages,
+            argv,
             capture_output=True,
             text=True,
             timeout=600,
             env=env,
         )
 
-    result = run_pip(host_py)
-    if result.returncode == 0:
-        log("✓ Installation complete")
-        return True
-    err = (result.stderr or result.stdout or "").strip()
-    pep668 = "externally-managed-environment" in err or "externally managed" in err.lower()
-    if not pep668:
+    def _pip_err_pep668(text: str) -> bool:
+        t = text or ""
+        return "externally-managed-environment" in t or "externally managed" in t.lower()
+
+    argv_list: List[List[str]] = []
+    if sys.platform == "win32" and _is_frozen_pyinstaller():
+        py_launch = _windows_py_launcher_exe()
+        if py_launch:
+            argv_list.append([py_launch, "-3", "-m", "pip", "install"] + packages)
+            argv_list.append([py_launch, "-m", "pip", "install"] + packages)
+    argv_list.append([host_py, "-m", "pip", "install"] + packages)
+
+    last: Optional[subprocess.CompletedProcess] = None
+    for argv in argv_list:
+        last = run_pip_argv(argv)
+        if last.returncode == 0:
+            log("✓ Installation complete")
+            return True
+        err = (last.stderr or last.stdout or "").strip()
+        if _pip_err_pep668(err):
+            break
+    assert last is not None
+    err = (last.stderr or last.stdout or "").strip()
+    if not _pip_err_pep668(err):
         log(f"pip install failed: {err}")
-        log("Try manually: python -m pip install " + " ".join(packages))
+        log("Try manually: py -3 -m pip install " + " ".join(packages))
+        log("  or: python -m pip install " + " ".join(packages))
         return False
     log(
         "System Python is externally managed (PEP 668). "
@@ -4312,9 +4340,9 @@ def pip_install_optional_packages(
             log(f"  source {vr / 'bin' / 'activate'}")
         log("  python -m pip install " + " ".join(packages))
         return False
-    result = run_pip(venv_py)
-    if result.returncode != 0:
-        err = (result.stderr or result.stdout or "").strip()
+    last = run_pip_argv([venv_py, "-m", "pip", "install"] + packages)
+    if last.returncode != 0:
+        err = (last.stderr or last.stdout or "").strip()
         log(f"pip install failed: {err}")
         return False
     log("✓ Installation complete")
@@ -4837,10 +4865,13 @@ def _cli_path_extra_dirs() -> List[str]:
                 if b.is_dir():
                     dirs.append(str(b))
     elif sys.platform == "win32":
+        # Do NOT prepend WindowsApps: it contains the Microsoft Store ``python.exe`` stub. When that
+        # directory appears before a real ``python.org`` install, ``pip`` and wheel builds invoke
+        # ``python`` and hit "Python est introuvable" / Store redirects. ``py.exe`` lives under
+        # ``%WINDIR%`` (already on the default PATH).
         local = os.environ.get("LOCALAPPDATA", "")
         if local:
-            dirs.append(str(Path(local) / "Microsoft" / "WindowsApps"))
-            # python.org installer: Python.exe and Scripts (whisper-cpp.exe) are often not on GUI PATH
+            # python.org per-user installer
             py_base = Path(local) / "Programs" / "Python"
             if py_base.is_dir():
                 for child in sorted(py_base.glob("Python*"), reverse=True):
@@ -4854,6 +4885,23 @@ def _cli_path_extra_dirs() -> List[str]:
                 for scripts in sorted(Path(roaming).glob("Python/Python*/Scripts"), reverse=True):
                     if scripts.is_dir():
                         dirs.append(str(scripts.resolve()))
+        # python.org "for all users" → Program Files (missing from %LOCALAPPDATA%\Programs\...)
+        for pf in ("C:\\Program Files", "C:\\Program Files (x86)"):
+            pb = Path(pf) / "Python"
+            if pb.is_dir():
+                for child in sorted(pb.glob("Python*"), reverse=True):
+                    if (child / "python.exe").is_file():
+                        dirs.append(str(child.resolve()))
+                    sb = child / "Scripts"
+                    if sb.is_dir():
+                        dirs.append(str(sb.resolve()))
+        # Root-style python.org installs (e.g. C:\Python314).
+        for child in sorted(Path("C:/").glob("Python*"), reverse=True):
+            if (child / "python.exe").is_file():
+                dirs.append(str(child.resolve()))
+            sb = child / "Scripts"
+            if sb.is_dir():
+                dirs.append(str(sb.resolve()))
     else:
         dirs.extend([str(home / ".local" / "bin"), "/usr/local/bin", "/usr/bin"])
     return [d for d in dirs if d and Path(d).exists()]
@@ -4921,27 +4969,36 @@ def _windows_pip_scripts_dirs() -> List[Path]:
     """Typical ``pip install`` / ``pip install --user`` console_scripts dirs on Windows (often missing from GUI PATH)."""
     out: List[Path] = []
     seen: set = set()
+
+    def _add(p: Path) -> None:
+        if not p.is_dir():
+            return
+        key = str(p.resolve())
+        if key not in seen:
+            seen.add(key)
+            out.append(p)
+
     local = os.environ.get("LOCALAPPDATA", "")
     if local:
         for scripts in sorted(Path(local).glob("Programs/Python/Python*/Scripts"), reverse=True):
-            if scripts.is_dir():
-                key = str(scripts.resolve())
-                if key not in seen:
-                    seen.add(key)
-                    out.append(scripts)
+            _add(scripts)
     roaming = os.environ.get("APPDATA", "")
     if roaming:
         for scripts in sorted(Path(roaming).glob("Python/Python*/Scripts"), reverse=True):
-            if scripts.is_dir():
-                key = str(scripts.resolve())
-                if key not in seen:
-                    seen.add(key)
-                    out.append(scripts)
+            _add(scripts)
+    for pf in ("C:\\Program Files", "C:\\Program Files (x86)"):
+        pb = Path(pf) / "Python"
+        if pb.is_dir():
+            for scripts in sorted(pb.glob("Python*/Scripts"), reverse=True):
+                _add(scripts)
+    # Some users install python.org as C:\Python3xx (outside Program Files / LocalAppData).
+    for scripts in sorted(Path("C:/").glob("Python*/Scripts"), reverse=True):
+        _add(scripts)
     return out
 
 
-def _try_windows_py_launcher_real_python() -> Optional[str]:
-    """Resolve the real ``python.exe`` behind the ``py`` launcher (works when ``python`` is not on PATH)."""
+def _windows_py_launcher_exe() -> Optional[str]:
+    """Path to ``py.exe`` (Python launcher), or None."""
     path_str = _environ_with_cli_path().get("PATH", "")
     py_exe = shutil.which("py", path=path_str)
     if not py_exe:
@@ -4950,6 +5007,12 @@ def _try_windows_py_launcher_real_python() -> Optional[str]:
             candidate = Path(windir) / "py.exe"
             if candidate.is_file():
                 py_exe = str(candidate.resolve())
+    return py_exe
+
+
+def _try_windows_py_launcher_real_python() -> Optional[str]:
+    """Resolve the real ``python.exe`` behind the ``py`` launcher (works when ``python`` is not on PATH)."""
+    py_exe = _windows_py_launcher_exe()
     if not py_exe:
         return None
     for args in (["-3", "-c", "import sys; print(sys.executable)"], ["-c", "import sys; print(sys.executable)"]):
@@ -4977,18 +5040,24 @@ def _try_windows_py_launcher_real_python() -> Optional[str]:
 
 
 def _windows_programs_python_exes() -> List[str]:
-    """``%LOCALAPPDATA%\\Programs\\Python\\Python*\\python.exe`` installs (python.org installer)."""
+    """python.org installs: per-user under LocalAppData and per-machine under Program Files."""
     out: List[str] = []
     local = os.environ.get("LOCALAPPDATA", "")
-    if not local:
-        return out
-    base = Path(local) / "Programs" / "Python"
-    if not base.is_dir():
-        return out
-    for child in sorted(base.glob("Python*"), reverse=True):
-        exe = child / "python.exe"
-        if exe.is_file():
-            out.append(str(exe.resolve()))
+    if local:
+        base = Path(local) / "Programs" / "Python"
+        if base.is_dir():
+            for child in sorted(base.glob("Python*"), reverse=True):
+                exe = child / "python.exe"
+                if exe.is_file():
+                    out.append(str(exe.resolve()))
+    for pf in ("C:\\Program Files", "C:\\Program Files (x86)"):
+        pb = Path(pf) / "Python"
+        if not pb.is_dir():
+            continue
+        for child in sorted(pb.glob("Python*"), reverse=True):
+            exe = child / "python.exe"
+            if exe.is_file():
+                out.append(str(exe.resolve()))
     return out
 
 
