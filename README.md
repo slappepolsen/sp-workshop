@@ -24,7 +24,6 @@ SP Workshop is built for:
 
 | Function | Description |
 |--------|-------------|
-| **Download** | Batch download episodes using N_m3u8DL-RE, add local videos, open files in LosslessCut for trimming |
 | **Subtitles** | Extract subtitles from MKV files, clean formatting, translate subtitles |
 | **Process Video** | Burn subtitles into video with optional watermarks, output at 720p or 1080p |
 | **Transcription** | Generate subtitles from audio using Whisper when no subtitles exist |
@@ -50,7 +49,7 @@ Download SP Workshop from:
 ### EASIEST: How to run app using pre-built app from Releases (macOS, Windows, Linux)
 
 Go to [Releases](https://github.com/slappepolsen/sp-workshop/releases)
-**Using a pre-built app?** You only need **FFmpeg** on your system (required) and **N_m3u8DL-RE** (optional, for (batch) downloads).
+**Using a pre-built app?** You only need **FFmpeg** on your system (required) and **N_m3u8DL-RE** (optional, for downloads).
 
 Pre-built assets (PyInstaller in CI), similar layout to projects like Subtitle Edit:
 
