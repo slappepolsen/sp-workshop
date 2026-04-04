@@ -7,7 +7,7 @@ Video Processing GUI Application
 A PyQt5 desktop app that provides a button-based interface for all video processing scripts.
 """
 
-__version__ = "10.4.0-alpha.21"
+__version__ = "10.4.0-alpha.22"
 VERSION_CODENAME = "Rocket Launcher"
 
 import sys
@@ -3836,7 +3836,7 @@ def transcribe_video_vad(
     try:
         import torch
         import pysrt
-    except ImportError as e:
+    except Exception as e:
         if log_callback:
             log_callback(f"Missing dependency: {e}. Install with: pip install torch torchaudio torchcodec pysrt openai-whisper")
         return False
@@ -4153,7 +4153,7 @@ class VadWhisperBackend:
             import torch   # noqa: F401
             import pysrt   # noqa: F401
             return True
-        except ImportError:
+        except Exception:
             return False
 
     def transcribe(self, video_path: Path, language_code: str, model: str,
@@ -4695,11 +4695,22 @@ class WhisperCppInstallWorker(QThread):  # pyright: ignore [reportUnreachable]
 # ============================================================================
 
 def check_python_package(package_name: str) -> bool:
-    """Check if a Python package is installed."""
+    """Check if a Python package is installed (import-safe: DLL/OSError on Windows returns False)."""
     try:
         __import__(package_name)
         return True
-    except ImportError:
+    except Exception:
+        return False
+
+
+_TRANSCRIBE_LONG_MODULE_NAMES = ("torch", "torchaudio", "torchcodec", "pysrt", "whisper")
+
+
+def transcribe_long_dependencies_installed() -> bool:
+    """True if optional long-transcription stack imports without error (e.g. WinError 1114 on torch)."""
+    try:
+        return all(check_python_package(m) for m in _TRANSCRIBE_LONG_MODULE_NAMES)
+    except Exception:
         return False
 
 
@@ -5467,9 +5478,10 @@ class SetupWizard(QDialog):
         self.vlc_installed = check_app_exists("VLC")
         self.lossless_installed = check_app_exists("LosslessCut")
         self.subtitle_edit_installed = check_app_exists("SubtitleEdit")
-        self.transcribe_long_installed = all(
-            check_python_package(p) for p in ("torch", "torchaudio", "torchcodec", "pysrt")
-        )
+        try:
+            self.transcribe_long_installed = transcribe_long_dependencies_installed()
+        except Exception:
+            self.transcribe_long_installed = False
         self.whisper_cpp_installed = _get_whisper_cpp_binary(self.config) is not None
         
         self.want_batch_download = True
@@ -5734,9 +5746,10 @@ class SetupWizard(QDialog):
         self.gst_installed = find_gst_command() is not None
         self.ffmpeg_installed = ffmpeg_installed(self.config)
         self.n_m3u8_installed = n_m3u8dl_installed(self.config)
-        self.transcribe_long_installed = all(
-            check_python_package(p) for p in ("torch", "torchaudio", "torchcodec", "pysrt")
-        )
+        try:
+            self.transcribe_long_installed = transcribe_long_dependencies_installed()
+        except Exception:
+            self.transcribe_long_installed = False
         self.whisper_cpp_installed = _get_whisper_cpp_binary(self.config) is not None
         self.all_required_installed = self._compute_all_required_installed()
         self.required_content.setHtml(self.get_required_html())
@@ -5765,7 +5778,7 @@ class SetupWizard(QDialog):
             btn.clicked.connect(lambda: self._do_pip_install(["gemini-srt-translator"]))
             self.install_buttons_layout.addWidget(btn)
         if self.want_transcribe_long and not self.transcribe_long_installed:
-            btn = QPushButton("Install transcribe-long deps (~2–3 GB)")
+            btn = QPushButton("Install advanced transcription (optional, ~2–3 GB)")
             btn.clicked.connect(lambda: self._do_pip_install(
                 ["torch", "torchaudio", "torchcodec", "pysrt", "openai-whisper"]
             ))
@@ -5796,13 +5809,16 @@ class SetupWizard(QDialog):
         worker.log_message.connect(lambda m: log.append(m))
         def on_finished(ok):
             worker.wait()
+            try:
+                self._refresh_status_after_install()
+            except Exception:
+                pass
             if ok:
                 log.append("\nInstalled successfully")
                 progress_bar.setVisible(False)
                 close_btn.setEnabled(True)
                 close_btn.setText("Installed successfully")
                 def auto_close():
-                    self._refresh_status_after_install()
                     if on_success_after_install:
                         on_success_after_install()
                     dlg.accept()
@@ -5846,6 +5862,10 @@ class SetupWizard(QDialog):
         worker.log_message.connect(lambda m: log.append(m))
         def on_finished(ok):
             worker.wait()
+            try:
+                self._refresh_status_after_install()
+            except Exception:
+                pass
             if ok:
                 log.append("\nInstalled successfully")
                 progress_bar.setVisible(False)
@@ -5853,7 +5873,6 @@ class SetupWizard(QDialog):
                 close_btn.setText("Installed successfully")
 
                 def auto_close():
-                    self._refresh_status_after_install()
                     dlg.accept()
                 QTimer.singleShot(1500, auto_close)
             else:
@@ -5898,6 +5917,10 @@ class SetupWizard(QDialog):
             worker.log_message.connect(lambda m: log.append(m))
             def on_finished(ok):
                 worker.wait()  # Ensure thread has fully exited before any cleanup (prevents QThread crash)
+                try:
+                    self._refresh_status_after_install()
+                except Exception:
+                    pass
                 if ok:
                     log.append("\nInstalled successfully")
                     progress_bar.setVisible(False)
@@ -5905,7 +5928,6 @@ class SetupWizard(QDialog):
                     close_btn.setText("Installed successfully")
 
                     def auto_close():
-                        self._refresh_status_after_install()
                         dlg.accept()
                     QTimer.singleShot(1500, auto_close)
                 else:
@@ -7879,12 +7901,7 @@ class VideoProcessingApp(QMainWindow):
         if missing:
             QMessageBox.warning(self, "File Not Found", f"File(s) do not exist:\n{missing[0]}")
             return
-        try:
-            import torch  # noqa: F401
-            import torchaudio  # noqa: F401
-            import torchcodec  # noqa: F401
-            import pysrt  # noqa: F401
-        except ImportError as e:
+        if not transcribe_long_dependencies_installed():
             reply = QMessageBox.question(
                 self,
                 "Missing Dependencies",

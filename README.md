@@ -7,14 +7,17 @@
 
 <img src="media/icon.png" width="80" height="80" alt="icon"/>
 
-## Quick Start
+## Quick Start (if you know your way around a Terminal)
+
+If not, go to [Installation](#installation).
 
 1. Install Python (3.12 recommended)
 
-2. Open a terminal in the project folder and run:
+2. Open a Terminal in the project folder and run:
 
-   pip install -r requirements.txt
-   python app.py
+   `pip install -r requirements.txt`
+
+   `python app.py`
 
    (On macOS/Linux you may need: python3 app.py)
 
@@ -54,28 +57,56 @@ SP Workshop is built for:
 > **Note**
 > During Python setup, keep the option to add Python to PATH enabled (wording varies by version and OS). This allows Terminal or Command Prompt to find `python` / `python3` when you run a command.
 
-Download SP Workshop from:
-👉 [GitHub Releases](https://github.com/slappepolsen/sp-workshop/releases)
+---
 
-> **Tip**
-> On the page you are on, look at the right-hand side. Under **Releases**, you will see a version number (e.g., `10.3.0-alpha.2`) + a label **Latest**. Click on that.
+### Installation option 1 (Recommended): Download the source code and run
 
-### EASIEST: How to run app using pre-built app from Releases (macOS, Windows, Linux)
+This is the most reliable way to run the app.
 
-Go to [Releases](https://github.com/slappepolsen/sp-workshop/releases)
-**Using a pre-built app?** You only need **FFmpeg** on your system (required) and **N_m3u8DL-RE** (optional, for downloads).
+#### Step 1: Download the source code
 
-Pre-built assets (PyInstaller in CI), similar layout to projects like Subtitle Edit:
+1. Go to:
+   https://github.com/slappepolsen/sp-workshop/releases
 
-| Platform | Download |
+2. Open the first release on the page.
+
+3. Under **Assets**, click **Source code (zip)**.
+
+4. Open the downloaded file.
+
+5. Extract it (right-click → **Extract All** / **Unzip**).
+
+6. Open the extracted folder (it will be named something like `sp-workshop-main`).
+
+#### Step 2: Run the app
+
+Inside the extracted folder:
+
+- **macOS:** double-click `Start_SP_Workshop.command`
+- **Windows:** double-click `Start_SP_Workshop.bat`
+- **Linux:** run `./Start_SP_Workshop.sh`
+
+---
+
+### Installation option 2: Pre-built app (experimental)
+
+These are ready-made app files. They are easier to try but may not run on every computer. 
+**If you have trouble, use Installation option 1 (download the source code zip) instead.**
+
+#### How to get the app file
+
+1. Open [GitHub Releases](https://github.com/slappepolsen/sp-workshop/releases).
+2. Click the release at the top of the list (the newest one).
+3. Scroll to **Assets**.
+4. Download the file that matches your computer (use the table below).
+
+| Your computer | File name under **Assets** |
 |----------|----------|
 | **macOS Apple Silicon (M1/M2/M3/M4)** | **`SP_Workshop-macOS-ARM64.dmg`** |
 | **macOS Intel (x64)** | **`SP_Workshop-macOS-x64.dmg`** |
 | **Windows x64** | **`SP_Workshop-Windows-x64.zip`** |
 | **Windows ARM64** | **`SP_Workshop-Windows-ARM64.zip`** |
 | **Linux x64** | **`SP_Workshop-Linux-x64.tar.gz`** |
---> **Go to [Releases](https://github.com/slappepolsen/sp-workshop/releases)**
-
 
 #### macOS
 
@@ -96,79 +127,7 @@ Extract the tarball and run the binary, for example:
 
 > **Note:** The **Windows ARM64** job uses GitHub’s **`windows-11-arm`** runner, which is intended for **public** repositories. Private forks may need to drop that matrix leg or use a self-hosted ARM64 runner.
 
-### MORE TECHNICAL: How to run app using Source code / cloned the repo
-
-*Use this section if you downloaded **Source code** or cloned the repo. Pre-built zip/tar users can ignore it.*
-
-Use the launcher instead to start the app automatically.
-
-#### One-click start
-
-- **macOS:** double-click `Start_SP_Workshop.command`
-- **Windows:** double-click `Start_SP_Workshop.bat`
-- **Linux:** run `./Start_SP_Workshop.sh` (or double-click it in file manager if executable)
-
-#### Terminal command start (`spw`)
-
-Pick your OS once below. After that, just type `spw` in terminal from anywhere.
-
-##### macOS
-
-1. Open Terminal and go to the project once:
-   ```bash
-   cd /path/to/sp-workshop
-   ```
-2. Install FFmpeg (required):
-   ```bash
-   brew install ffmpeg-full
-   ```
-3. Add `sp-workshop` and `spw` commands:
-   ```bash
-   echo 'alias sp-workshop="bash \"/path/to/sp-workshop/scripts/run_sp_workshop.sh\""' >> ~/.zshrc
-   echo 'alias spw="sp-workshop"' >> ~/.zshrc
-   source ~/.zshrc
-   ```
-4. Run from anywhere:
-   ```bash
-   spw
-   ```
-
-##### Windows
-
-1. Install FFmpeg and add it to PATH (required): https://www.gyan.dev/ffmpeg/builds/
-2. Open **PowerShell** and run:
-   ```powershell
-   Add-Content $PROFILE 'function sp-workshop { & "C:\path\to\sp-workshop\scripts\run_sp_workshop.ps1" }'
-   Add-Content $PROFILE 'Set-Alias spw sp-workshop'
-   . $PROFILE
-   ```
-3. Run from anywhere:
-   ```powershell
-   spw
-   ```
-
-If PowerShell blocks scripts, run this once:
-
-```powershell
-Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
-```
-
-##### Linux
-
-1. Install FFmpeg (Debian/Ubuntu example):
-   ```bash
-   sudo apt install ffmpeg
-   ```
-2. Add `sp-workshop` and `spw` commands:
-   ```bash
-   echo 'alias sp-workshop="bash \"/path/to/sp-workshop/scripts/run_sp_workshop.sh\""' >> ~/.bashrc
-   echo 'alias spw="sp-workshop"' >> ~/.bashrc
-   source ~/.bashrc
-   ```
-3. Run from anywhere:
-   ```bash
-   spw
-   ```
+---
 
 ## Optional tools
 

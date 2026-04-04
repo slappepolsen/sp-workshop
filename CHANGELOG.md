@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [10.4.0-alpha.22] - 2026-04-03
+
+### Fixed
+
+* Prevent crash when PyTorch fails to load on Windows (DLL error)
+* Optional transcription dependencies now fail gracefully instead of crashing the app
+
+### Changed
+
+* Transcription install flow no longer blocks or terminates app on failure
+* Updated label: "Install advanced transcription (optional, ~2–3 GB)"
+
 ## [10.4.0-alpha.21] - 2026-04-03
 
 ### Added

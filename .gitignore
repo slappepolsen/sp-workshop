@@ -36,6 +36,7 @@ build_venv/
 
 .rulesrules
 rentry.md
+# Developer-only (not published); keep a local copy if you need release/commit commands
 RELEASE_CHECKLIST.md
 BENCHMARKS.md
 run.sh
