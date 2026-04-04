@@ -11,7 +11,7 @@
 
 If not, go to [Installation](#installation).
 
-1. Install Python (3.12 recommended)
+1. Install Python 3.12
 
 2. Open a Terminal in the project folder and run:
 
