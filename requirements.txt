@@ -1,6 +1,7 @@
 # Python packages required for the Video Processing GUI Application
 PyQt5>=5.15.0
 gemini-srt-translator>=3.0.0
+whisper.cpp-cli>=0.0.3; sys_platform != "win32"
 
 # External system programs (must be installed separately):
 # 

@@ -7,15 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [10.4.0-alpha.19] - 2026-03-31
+## [10.4.0-alpha.21] - 2026-04-03
 
-- **Windows (pre-built app / Whisper CPP):** Expand Python/CLI discovery to include root-style python.org installs such as `C:\Python314` (not only `%LocalAppData%`, `%AppData%`, and Program Files). The app now scans `C:\Python*\python.exe` and `C:\Python*\Scripts`, merges those into augmented GUI `PATH`, and can reuse an existing `whisper.cpp-cli` install from that layout instead of failing installation/detection.
+### Added
+
+* Quick Start section at top of README for faster onboarding
+* whisper.cpp-cli added to requirements (macOS/Linux only)
+
+### Changed
+
+* Improved onboarding clarity and first-run experience
+* Run scripts now print guidance before app launch
+
+### Fixed
+
+* Reduced setup confusion for non-technical users
 
 ## [10.4.0-alpha.18] - 2026-03-31
 
 ### Fixed
 
-- **Windows (pre-built app / Whisper CPP):** Stop prepending `%LocalAppData%\Microsoft\WindowsApps` to the merged PATH (it put the Store `python.exe` stub ahead of real installs and caused `pip install` to fail with “Python est introuvable”). Scan `C:\Program Files\Python*\Scripts` and `C:\Program Files (x86)\Python*\Scripts` and per-machine `python.exe` paths. For optional `pip install` from the frozen app, prefer `py -3 -m pip` then `py -m pip`, then `python.exe -m pip`, with the host interpreter’s directory prepended to `PATH` for the subprocess. **Settings** folder override: also resolve `whisper.exe` next to `whisper-cli` / `whisper-cpp` / `main`.
+- **Windows (pre-built app / Whisper CPP):** Stop prepending `%LocalAppData%\Microsoft\WindowsApps` to the merged PATH (it put the Store `python.exe` stub ahead of real installs and caused `pip install` to fail). Scan `C:\Program Files\Python*\Scripts` and `C:\Program Files (x86)\Python*\Scripts` and per-machine `python.exe` paths. For optional `pip install` from the frozen app, prefer `py -3 -m pip` then `py -m pip`, then `python.exe -m pip`, with the host interpreter’s directory prepended to `PATH` for the subprocess. **Settings** folder override: also resolve `whisper.exe` next to `whisper-cli` / `whisper-cpp` / `main`.
 
 ## [10.4.0-alpha.17] - 2026-03-31
 

@@ -46,5 +46,10 @@ if ($needsInstall) {
     New-Item -ItemType File -Path $marker -Force | Out-Null
 }
 
+Write-Host "Setup almost complete."
+Write-Host ""
+Write-Host "If the app doesn't start:"
+Write-Host "It will tell you what's missing (FFmpeg, etc.)"
+Write-Host ""
 Write-Host "Starting SP Workshop..."
 & $venvPython app.py

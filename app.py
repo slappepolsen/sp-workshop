@@ -7,8 +7,8 @@ Video Processing GUI Application
 A PyQt5 desktop app that provides a button-based interface for all video processing scripts.
 """
 
-__version__ = "10.4.0-alpha.20"
-VERSION_CODENAME = "Launcher (for real this time)"
+__version__ = "10.4.0-alpha.21"
+VERSION_CODENAME = "Rocket Launcher"
 
 import sys
 import os
@@ -4895,13 +4895,6 @@ def _cli_path_extra_dirs() -> List[str]:
                     sb = child / "Scripts"
                     if sb.is_dir():
                         dirs.append(str(sb.resolve()))
-        # Root-style python.org installs (e.g. C:\Python314).
-        for child in sorted(Path("C:/").glob("Python*"), reverse=True):
-            if (child / "python.exe").is_file():
-                dirs.append(str(child.resolve()))
-            sb = child / "Scripts"
-            if sb.is_dir():
-                dirs.append(str(sb.resolve()))
     else:
         dirs.extend([str(home / ".local" / "bin"), "/usr/local/bin", "/usr/bin"])
     return [d for d in dirs if d and Path(d).exists()]
@@ -4991,9 +4984,6 @@ def _windows_pip_scripts_dirs() -> List[Path]:
         if pb.is_dir():
             for scripts in sorted(pb.glob("Python*/Scripts"), reverse=True):
                 _add(scripts)
-    # Some users install python.org as C:\Python3xx (outside Program Files / LocalAppData).
-    for scripts in sorted(Path("C:/").glob("Python*/Scripts"), reverse=True):
-        _add(scripts)
     return out
 
 

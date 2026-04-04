@@ -7,6 +7,20 @@
 
 <img src="media/icon.png" width="80" height="80" alt="icon"/>
 
+## Quick Start
+
+1. Install Python (3.12 recommended)
+
+2. Open a terminal in the project folder and run:
+
+   pip install -r requirements.txt
+   python app.py
+
+   (On macOS/Linux you may need: python3 app.py)
+
+3. If something is missing:
+   The app will tell you what to install (FFmpeg, N_m3u8DL-RE, etc.)
+
 ## Video processing studio GUI 🎬 
 
 🌐 SP Workshop is a desktop GUI for extracting, translating, transcribing, and burning subtitles into videos.

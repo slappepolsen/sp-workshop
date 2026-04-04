@@ -41,5 +41,10 @@ if [[ ! -f "$MARKER" || requirements.txt -nt "$MARKER" ]]; then
   touch "$MARKER"
 fi
 
+echo "Setup almost complete."
+echo ""
+echo "If the app doesn't start:"
+echo "It will tell you what's missing (FFmpeg, etc.)"
+echo ""
 echo "Starting SP Workshop..."
 exec "$VENV_PY" app.py
