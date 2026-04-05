@@ -25,14 +25,17 @@ function Invoke-PythonWithArgs([string[]]$extraArgs) {
     & $pythonCmd[0] @allArgs
 }
 
-$baseDir = Join-Path $env:USERPROFILE "VideoProcessingApp"
+$baseDir = Join-Path $env:USERPROFILE "VideoProcessing"
 $sharedVenv = Join-Path $baseDir ".venv"
+$legacyVenv = Join-Path (Join-Path $env:USERPROFILE "VideoProcessingApp") ".venv"
 $projectVenv = Join-Path $projectDir ".venv"
 
 New-Item -ItemType Directory -Path $baseDir -Force | Out-Null
 
 if (Test-Path $sharedVenv) {
     $venvDir = $sharedVenv
+} elseif (Test-Path $legacyVenv) {
+    $venvDir = $legacyVenv
 } elseif (Test-Path $projectVenv) {
     $venvDir = $projectVenv
 } else {
@@ -89,6 +92,10 @@ Write-Host "If the app doesn't start:"
 Write-Host "It will tell you what's missing (FFmpeg, etc.)"
 Write-Host ""
 Write-Host "Starting SP Workshop..."
+
+Remove-Item Env:PYTHONHOME -ErrorAction SilentlyContinue
+Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue
+$env:VIRTUAL_ENV = $venvDir
 
 $venvBin = Join-Path $venvDir "Scripts"
 $env:Path = "$venvBin;$env:Path"

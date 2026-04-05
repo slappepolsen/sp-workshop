@@ -7,7 +7,7 @@ Video Processing GUI Application
 A PyQt5 desktop app that provides a button-based interface for all video processing scripts.
 """
 
-__version__ = "10.4.0-alpha.23"
+__version__ = "10.4.0-alpha.24"
 VERSION_CODENAME = "Rocket Launcher"
 
 import sys
@@ -5115,6 +5115,36 @@ def _apply_cli_path_to_process_environment() -> None:
     os.environ["PATH"] = _merged_cli_path_string()
 
 
+def _ensure_active_venv_bin_first_on_path() -> None:
+    """Prepend the running interpreter's venv ``bin`` / ``Scripts`` ahead of merged PATH.
+
+    :func:`_apply_cli_path_to_process_environment` inserts Homebrew and other
+    tool dirs before components of the inherited PATH. That can leave the active
+    stdlib venv's ``bin`` behind system paths, so pip-installed CLIs and
+    ``shutil.which`` diverge from ``source .venv/bin/activate``. If we are in a
+    venv (``pyvenv.cfg`` next to ``bin`` / ``Scripts``), force that directory to
+    the front of ``PATH`` (same effect as activate).
+    """
+    if getattr(sys, "base_prefix", sys.prefix) == sys.prefix:
+        return
+    bindir = Path(sys.executable).resolve().parent
+    if not (bindir.parent / "pyvenv.cfg").is_file():
+        return
+    sep = os.pathsep
+    path = os.environ.get("PATH", "")
+    bindir_s = str(bindir)
+    if not path:
+        os.environ["PATH"] = bindir_s
+        return
+    parts = [p for p in path.split(sep) if p]
+    try:
+        if parts and Path(parts[0]).resolve() == bindir:
+            return
+    except OSError:
+        pass
+    os.environ["PATH"] = bindir_s + sep + path
+
+
 def _environ_with_cli_path() -> dict:
     """Copy of os.environ with CLI tool dirs merged into PATH (see :func:`_merged_cli_path_string`)."""
     env = os.environ.copy()
@@ -10126,6 +10156,7 @@ def main():
     # Frozen GUI apps inherit a minimal PATH; align with Terminal / venv dev so
     # which(1), shutil.which, brew, ffmpeg, gst, etc. resolve like subprocess helpers.
     _apply_cli_path_to_process_environment()
+    _ensure_active_venv_bin_first_on_path()
     app = QApplication(sys.argv)
     # Use Fusion style for better stylesheet support on macOS
     app.setStyle('Fusion')

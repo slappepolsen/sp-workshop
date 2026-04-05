@@ -22,14 +22,17 @@ if [[ -z "$PYTHON_CMD" ]]; then
   exit 1
 fi
 
-BASE_DIR="$HOME/VideoProcessingApp"
+BASE_DIR="$HOME/VideoProcessing"
 SHARED_VENV="$BASE_DIR/.venv"
+LEGACY_VENV="$HOME/VideoProcessingApp/.venv"
 PROJECT_VENV="$PROJECT_DIR/.venv"
 
 mkdir -p "$BASE_DIR"
 
 if [[ -d "$SHARED_VENV" ]]; then
   VENV_DIR="$SHARED_VENV"
+elif [[ -d "$LEGACY_VENV" ]]; then
+  VENV_DIR="$LEGACY_VENV"
 elif [[ -d "$PROJECT_VENV" ]]; then
   VENV_DIR="$PROJECT_VENV"
 else
@@ -81,5 +84,8 @@ echo "If the app doesn't start:"
 echo "It will tell you what's missing (FFmpeg, etc.)"
 echo ""
 echo "Starting SP Workshop..."
+unset PYTHONHOME
+unset PYTHONPATH
+export VIRTUAL_ENV="$VENV_DIR"
 export PATH="$VENV_DIR/bin:$PATH"
 exec "$VENV_PY" "$PROJECT_DIR/app.py"

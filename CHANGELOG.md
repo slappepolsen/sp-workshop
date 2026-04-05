@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [10.4.0-alpha.24] - 2026-04-06
+
+### Fixed
+
+- **Venv + PATH when launched via scripts:** `main()` merges Homebrew / `~/.local/bin` onto `PATH` before tool discovery; that reordering could leave the active stdlib venv’s `bin` (or `Scripts` on Windows) *behind* those entries, so behavior diverged from `source .venv/bin/activate` (e.g. legacy Whisper / PATH-based CLI checks). After the merge, the running venv’s executable directory is prepended again when `pyvenv.cfg` is present.
+- **Launch scripts:** Export `VIRTUAL_ENV` and clear inherited `PYTHONHOME` / `PYTHONPATH` before starting the app, matching a normal `activate` and avoiding broken site-package resolution when the parent shell set those variables.
+
+### Changed
+
+- **Launch scripts** (`scripts/run_sp_workshop.sh`, `scripts/run_sp_workshop.ps1`): shared venv default location is `~/VideoProcessing/.venv` (new installs), with reuse of legacy `~/VideoProcessingApp/.venv` when present; otherwise an existing project `.venv`, else create under `~/VideoProcessing/.venv`.
+
 ## [10.4.0-alpha.23] - 2026-04-05
 
 ### Changed
