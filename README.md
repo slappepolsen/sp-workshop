@@ -8,8 +8,6 @@
 [![Python](https://img.shields.io/badge/python-3.12-blue)](https://www.python.org/downloads/)
 [![Platform](https://img.shields.io/badge/platform-macOS%20|%20Windows%20|%20Linux-lightgrey)](INSTALL.md#installation)
 
-<img src="media/icon.png" width="80" height="80" alt="icon"/>
-
 Desktop GUI for **extracting**, **translating**, **transcribing**, and **burning** subtitles into videos.
 
 SP Workshop was created to make international WLW / sapphic content more accessible, and it works for any audiovisual media. 
@@ -18,8 +16,7 @@ SP Workshop was created to make international WLW / sapphic content more accessi
 
 - [SP Workshop](#sp-workshop)
 	- [Table of Contents](#table-of-contents)
-	- [Background](#background)
-		- [What the app does](#what-the-app-does)
+	- [What the app does](#what-the-app-does)
 	- [Install](#install)
 	- [Usage](#usage)
 		- [Run from source](#run-from-source)
@@ -27,11 +24,7 @@ SP Workshop was created to make international WLW / sapphic content more accessi
 	- [Contributing](#contributing)
 	- [License](#license)
 
-## Background
-
-Sapphic / WLW stories have always crossed borders. That is beautiful, and necessary, when there is little or no representation in your own country. Much of the work that sustains sapphic audiovisual media preservation depends on tools, platforms, and storage we do not control. Proprietary ecosystems favor convenience over longevity. **SP Workshop** is a free, **local** desktop app that keeps extraction, subtitle work, translation, transcription, remuxing, and burn-in in one place so you switch tools less often. It builds on open-source libraries and runs on your machine, so your files and workflow are not tied to a proprietary platform.
-
-### What the app does
+## What the app does
 
 | Function | Description |
 |----------|-------------|
