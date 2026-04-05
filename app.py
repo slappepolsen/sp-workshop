@@ -7,7 +7,7 @@ Video Processing GUI Application
 A PyQt5 desktop app that provides a button-based interface for all video processing scripts.
 """
 
-__version__ = "10.4.0-alpha.22"
+__version__ = "10.4.0-alpha.23"
 VERSION_CODENAME = "Rocket Launcher"
 
 import sys
@@ -1491,7 +1491,7 @@ def _pp_cleanup(entries: List[Dict]) -> List[Dict]:
 
 
 def _pp_shorten_long_cues(entries: List[Dict], max_ms: int) -> List[Dict]:
-    """Clamp cue duration to max_ms (Subtitle Edit ShortenLongDuration)."""
+    """Clamp cue duration to max_ms."""
     result = [dict(e) for e in entries]
     for e in result:
         dur = e["end_ms"] - e["start_ms"]

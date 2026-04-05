@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [10.4.0-alpha.23] - 2026-04-05
+
 ### Changed
 
 - **Whisper CPP post-processing** defaults to **on**; pipeline reordered to cleanup > periods (600 ms / 1250 ms) > casing > min duration > merge (300 ms gap, 2× line budget, orphan fragments) > sentence-aware split > balance lines > min duration again. New steps: `_pp_cleanup`, `_pp_balance_lines`, `_pp_shorten_long_cues`; merge/split/periods/casing upgraded.
@@ -21,10 +23,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **VAD-assisted transcription:** no longer invokes a bare `whisper` CLI (which failed when the venv’s `bin` was not on `PATH`).
-
-### Notes
-
-- **PyInstaller / frozen builds:** `python -m whisper` uses the bundle executable, which is not CPython; prefer **Whisper CPP** for transcription in frozen apps, or install OpenAI Whisper into a system Python if you rely on legacy OpenAI backends.
 
 ## [10.4.0-alpha.22] - 2026-04-03
 
