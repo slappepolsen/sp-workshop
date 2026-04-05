@@ -37,8 +37,8 @@ SP Workshop was created to make international WLW / sapphic content more accessi
 
 **Requirements:** **Python 3.12** and **FFmpeg** on your `PATH` when running from source. Platform support: **macOS**, **Windows**, and **Linux**.
 
-- **Recommended:** follow **[INSTALL.md](INSTALL.md)** — run from source (most reliable), optional pre-built apps, launcher scripts, and common PATH issues.
-- **Quick path:** download **Source code (zip)** or assets from **[Releases](https://github.com/slappepolsen/sp-workshop/releases)**.
+- **Recommended:** follow **[INSTALL.md](INSTALL.md)**. In short: run from source (most reliable), optional pre-built apps, launcher scripts, and common PATH issues.
+- **Quick start:** download **Source code (zip)** or assets from **[Releases](https://github.com/slappepolsen/sp-workshop/releases)**.
 
 Pre-built apps are **experimental**; if they fail on your machine, use run-from-source instructions in [INSTALL.md](INSTALL.md).
 
