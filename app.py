@@ -30,7 +30,7 @@ import tempfile
 import zipfile
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict, List, Callable
+from typing import Optional, Dict, List, Callable, Tuple
 try:
     from typing import Protocol, runtime_checkable
 except ImportError:
@@ -269,13 +269,14 @@ def load_config() -> Dict:
             "remove_start_dash_non_dialogs": True,
             "strip_leading_spaces": True,
         },
-        "whisper_post_processing_enabled":         False,
+        "whisper_post_processing_enabled":         True,
         "whisper_post_proc_adjust_timings":        True,
         "whisper_post_proc_merge_lines":           True,
         "whisper_post_proc_split_lines":           True,
         "whisper_post_proc_fix_short_duration":    True,
         "whisper_post_proc_add_periods":           True,
         "whisper_post_proc_fix_casing":            True,
+        "whisper_post_proc_balance_lines":         True,
     }
     
     if config_path.exists():
@@ -1440,6 +1441,185 @@ def _format_srt(entries: List[Dict]) -> str:
 # ============================================================================
 # Whisper CPP post-processing helpers
 # ============================================================================
+#
+# Pipeline order and rationale align with Subtitle Edit’s Audio-to-text path:
+# timing adjust (optional) → text cleanup → periods → casing → min duration →
+# merge (incl. orphans) → sentence-aware split → balance adjacent cues →
+# min duration again. See SubtitleEdit/subtitleedit AudioToTextPostProcessor +
+# WhisperTimingFixer (reference only; implementation is local).
+# ============================================================================
+
+_GAP_PERIOD_MS = 600
+_GAP_FORCE_MS = 1250
+_PP_MERGE_GAP_MS = 300
+_PP_ORPHAN_MAX_CHARS = 12
+_PP_ORPHAN_MAX_GAP_MS = 600
+
+
+def _pp_cfg_for_whisper(config: Dict) -> Dict:
+    """Merged fix defaults + user config for line length and display limits."""
+    return {**FIX_CONFIG_DEFAULTS, **config}
+
+
+def _pp_cleanup(entries: List[Dict]) -> List[Dict]:
+    """Trim text, drop empty/junk cues, fix zero-gap or overlapping times."""
+    junk_exact = {"(", "(.", "...", "…"}
+    out: List[Dict] = []
+    for e in entries:
+        text = e.get("text") or ""
+        lines = []
+        for line in text.split("\n"):
+            ln = re.sub(r"\s+", " ", line).strip()
+            if ln:
+                lines.append(ln)
+        text = "\n".join(lines).strip()
+        plain = re.sub(r"<[^>]+>", "", text).strip()
+        if not plain:
+            continue
+        if plain in junk_exact:
+            continue
+        if re.fullmatch(r"[\s\W_]+", plain):
+            continue
+        out.append({"start_ms": e["start_ms"], "end_ms": e["end_ms"], "text": text})
+
+    for i in range(len(out) - 1):
+        if out[i + 1]["start_ms"] <= out[i]["end_ms"]:
+            out[i + 1]["start_ms"] = out[i]["end_ms"] + 1
+        if out[i + 1]["start_ms"] >= out[i + 1]["end_ms"]:
+            out[i + 1]["end_ms"] = out[i + 1]["start_ms"] + 1
+    return out
+
+
+def _pp_shorten_long_cues(entries: List[Dict], max_ms: int) -> List[Dict]:
+    """Clamp cue duration to max_ms (Subtitle Edit ShortenLongDuration)."""
+    result = [dict(e) for e in entries]
+    for e in result:
+        dur = e["end_ms"] - e["start_ms"]
+        if dur > max_ms:
+            e["start_ms"] = e["end_ms"] - max_ms
+    return result
+
+
+def _pp_plain_len(text: str) -> int:
+    return len(re.sub(r"<[^>]+>", "", text))
+
+
+def _pp_ends_sentence_punct(text: str) -> bool:
+    t = re.sub(r"<[^>]+>", "", text).rstrip()
+    if not t:
+        return False
+    return t[-1] in ".!?…"
+
+
+def _pp_try_split_at_sentence(text: str, line_max: int) -> Optional[Tuple[str, str]]:
+    """Prefer breaking after . ? ! , (space after); first line ≤ line_max where possible."""
+    t = re.sub(r"\s+", " ", text).strip()
+    if len(t) <= line_max:
+        return None
+    # Find split positions after sentence punctuation + space
+    best_pos = -1
+    for m in re.finditer(r"(?<=[.!?…,])\s+", t):
+        pos = m.end()
+        if pos <= len(t) and _pp_plain_len(t[:pos].strip()) <= line_max:
+            best_pos = pos
+    if best_pos > 0:
+        a, b = t[:best_pos].strip(), t[best_pos:].strip()
+        if a and b:
+            return (a, b)
+    return None
+
+
+def _pp_word_wrap_two_lines(text: str, line_max: int) -> Tuple[str, str]:
+    """Balance two lines by word; first line as long as possible under line_max."""
+    t = re.sub(r"\s+", " ", text).strip()
+    words = t.split(" ")
+    if len(words) < 2:
+        return t, ""
+    best_idx = 1
+    best_score = float("inf")
+    for i in range(1, len(words)):
+        left = " ".join(words[:i])
+        right = " ".join(words[i:])
+        if len(left) > line_max:
+            continue
+        score = max(len(left), len(right))
+        if score < best_score:
+            best_score = score
+            best_idx = i
+    part1 = " ".join(words[:best_idx]).strip()
+    part2 = " ".join(words[best_idx:]).strip()
+    return part1, part2
+
+
+def _pp_split_long_lines(entries: List[Dict], line_max: int) -> List[Dict]:
+    """Insert \\n in cues: sentence boundaries first, else word wrap."""
+    result: List[Dict] = []
+    for e in entries:
+        text = re.sub(r"\s+", " ", e["text"].strip())
+        if "\n" in e["text"] and len(text) <= line_max * 2 + 2:
+            result.append({**e, "text": e["text"].strip()})
+            continue
+        text = re.sub(r"\n", " ", text).strip()
+        if _pp_plain_len(text) <= line_max:
+            result.append({**e, "text": text})
+            continue
+
+        pair = _pp_try_split_at_sentence(text, line_max)
+        if pair:
+            a, b = pair
+            if _pp_plain_len(a) <= line_max and _pp_plain_len(b) <= line_max:
+                result.append({**e, "text": f"{a}\n{b}"})
+                continue
+        pair = _pp_try_split_at_sentence(text, line_max + 8)
+        if pair:
+            a, b = pair
+            result.append({**e, "text": f"{a}\n{b}"})
+            continue
+
+        w1, w2 = _pp_word_wrap_two_lines(text, line_max)
+        if w1 and w2:
+            result.append({**e, "text": f"{w1}\n{w2}"})
+        else:
+            result.append({**e, "text": text})
+    return result
+
+
+def _pp_balance_lines(entries: List[Dict], line_max: int, balance_gap_ms: int = 300) -> List[Dict]:
+    """Merge adjacent cues when gap is small and first cue has no sentence end; one cue, two lines."""
+    if len(entries) < 2:
+        return entries
+    out: List[Dict] = []
+    i = 0
+    while i < len(entries):
+        if i + 1 >= len(entries):
+            out.append(dict(entries[i]))
+            break
+        p = dict(entries[i])
+        n = entries[i + 1]
+        gap = n["start_ms"] - p["end_ms"]
+        t1 = p["text"].strip()
+        if gap <= balance_gap_ms and t1 and not _pp_ends_sentence_punct(t1):
+            combined = re.sub(r"\s+", " ", (t1 + " " + n["text"].strip())).strip()
+            pair = _pp_try_split_at_sentence(combined, line_max)
+            if not pair or not (pair[0] and pair[1]):
+                pair = None
+            if pair and _pp_plain_len(pair[0]) <= line_max and _pp_plain_len(pair[1]) <= line_max:
+                p["text"] = f"{pair[0]}\n{pair[1]}"
+                p["end_ms"] = n["end_ms"]
+                out.append(p)
+                i += 2
+                continue
+            w1, w2 = _pp_word_wrap_two_lines(combined, line_max)
+            if w1 and w2 and len(w1) <= line_max and len(w2) <= line_max:
+                p["text"] = f"{w1}\n{w2}"
+                p["end_ms"] = n["end_ms"]
+                out.append(p)
+                i += 2
+                continue
+        out.append(p)
+        i += 1
+    return out
+
 
 def _pp_adjust_timings(entries: List[Dict], audio_path) -> List[Dict]:
     """Snap subtitle start times to actual speech/silence boundaries.
@@ -1538,16 +1718,23 @@ def _pp_fix_short_duration(entries: List[Dict], min_ms: int = 1000) -> List[Dict
     return result
 
 
-def _pp_merge_short_lines(entries: List[Dict], max_gap_ms: int = 100, max_chars: int = 86) -> List[Dict]:
-    """Merge consecutive entries that are close together and short.
+def _pp_is_orphan_fragment(text: str) -> bool:
+    """Short following cue (≤12 chars) with no sentence-ending punctuation."""
+    plain = re.sub(r"<[^>]+>", "", text).strip()
+    if len(plain) > _PP_ORPHAN_MAX_CHARS or not plain:
+        return False
+    return plain[-1] not in ".!?…"
 
-    Two entries are merged when gap ≤ max_gap_ms AND their combined text
-    (separated by a space) does not exceed max_chars.  Mirrors
-    AudioToTextPostProcessor.MergeShortLines logic.
-    """
+
+def _pp_merge_short_lines(
+    entries: List[Dict],
+    max_chars: int,
+    max_gap_ms: int = _PP_MERGE_GAP_MS,
+) -> List[Dict]:
+    """Merge consecutive cues when gap is small and budget allows; orphans merge with looser gap."""
     if not entries:
         return entries
-    result = []
+    result: List[Dict] = []
     skip_next = False
     for i in range(len(entries)):
         if skip_next:
@@ -1557,85 +1744,69 @@ def _pp_merge_short_lines(entries: List[Dict], max_gap_ms: int = 100, max_chars:
         if i + 1 < len(entries):
             nxt = entries[i + 1]
             gap = nxt["start_ms"] - e["end_ms"]
-            combined = e["text"].strip() + " " + nxt["text"].strip()
-            if 0 <= gap <= max_gap_ms and len(combined) <= max_chars:
-                e["text"] = combined.strip()
+            combined = (e["text"].strip() + " " + nxt["text"].strip()).strip()
+            clen = len(combined)
+            orphan = _pp_is_orphan_fragment(nxt["text"])
+            normal_ok = 0 <= gap <= max_gap_ms and clen <= max_chars
+            orphan_ok = (
+                orphan
+                and 0 <= gap <= _PP_ORPHAN_MAX_GAP_MS
+                and clen <= max_chars
+            )
+            if normal_ok or orphan_ok:
+                e["text"] = combined
                 e["end_ms"] = nxt["end_ms"]
                 skip_next = True
         result.append(e)
     return result
 
 
-def _pp_split_long_lines(entries: List[Dict], max_chars: int = 43) -> List[Dict]:
-    """Break long text into two lines inside the same subtitle cue.
-
-    Important: this is a line-break step, not a cue-splitting step.
-    Timings stay unchanged; only text formatting is adjusted.
-    """
-    result = []
-    for e in entries:
-        text = e["text"].strip()
-        if len(text) <= max_chars or "\n" in text:
-            result.append(e)
-            continue
-
-        # Normalize internal spacing so line-length checks are actually meaningful
-        text = re.sub(r"\s+", " ", text).strip()
-        words = text.split(" ")
-        if len(words) < 2:
-            result.append({**e, "text": text})
-            continue
-
-        # Choose split point that best balances line lengths
-        best_idx = 1
-        best_score = float("inf")
-        for i in range(1, len(words)):
-            left = " ".join(words[:i])
-            right = " ".join(words[i:])
-            score = max(len(left), len(right))
-            if score < best_score:
-                best_score = score
-                best_idx = i
-
-        part1 = " ".join(words[:best_idx]).strip()
-        part2 = " ".join(words[best_idx:]).strip()
-        if not part1 or not part2:
-            result.append({**e, "text": text})
-            continue
-
-        result.append({**e, "text": f"{part1}\n{part2}"})
-    return result
-
-
-def _pp_add_periods(entries: List[Dict], gap_ms: int = 600) -> List[Dict]:
-    """Add a period at the end of an entry when the gap to the next is > gap_ms.
-
-    Matches AudioToTextPostProcessor.AddPeriods: only adds if the text does not
-    already end with terminal punctuation.
-    """
-    _terminal = set('.!?,:])}')
+def _pp_add_periods(entries: List[Dict]) -> List[Dict]:
+    """Dual threshold: GAP_FORCE always adds end period; GAP_PERIOD adds if sentence likely ended."""
     result = [dict(e) for e in entries]
     for i, e in enumerate(result):
         text = e["text"].rstrip()
-        if not text or text[-1] in _terminal:
+        plain = re.sub(r"<[^>]+>", "", text)
+        if not plain:
+            continue
+        last = plain[-1]
+        if last in ".!?…":
             continue
         if i + 1 < len(result):
             gap = result[i + 1]["start_ms"] - e["end_ms"]
-            if gap > gap_ms:
+            if gap >= _GAP_FORCE_MS:
+                e["text"] = text + "."
+            elif gap >= _GAP_PERIOD_MS:
+                if last in ",:;":
+                    continue
                 e["text"] = text + "."
         else:
-            # Last entry always gets a period
-            e["text"] = text + "."
+            if last not in ".!?…":
+                e["text"] = text + "."
     return result
 
 
 def _pp_fix_casing(entries: List[Dict]) -> List[Dict]:
-    """Capitalise the first letter of each entry's text."""
-    result = []
-    for e in entries:
-        text = e["text"]
-        if text and text[0].islower():
-            text = text[0].upper() + text[1:]
+    """First letter per line; capitalize after . ? ! (no name dictionary)."""
+    result: List[Dict] = []
+    for idx, e in enumerate(entries):
+        lines = e["text"].split("\n")
+        new_lines: List[str] = []
+        for line in lines:
+            s = line.strip()
+            if not s:
+                new_lines.append(line)
+                continue
+            if s[0].islower():
+                s = s[0].upper() + s[1:]
+            s = re.sub(
+                r"([.!?]\s+)(\w)",
+                lambda m: m.group(1) + m.group(2).upper(),
+                s,
+                flags=re.UNICODE,
+            )
+            new_lines.append(s)
+        text = "\n".join(new_lines)
         result.append({**e, "text": text})
     return result
 
@@ -1672,9 +1843,9 @@ def _whisper_cpp_post_process(
 ) -> None:
     """Apply post-processing pipeline to a freshly written whisper.cpp SRT.
 
-    Steps are controlled by individual config keys and the master
-    whisper_post_processing_enabled toggle.  audio_path is needed only for
-    the adjust-timings step and may be None.
+    Order: optional waveform timings → shorten long cues → cleanup → periods →
+    casing → min duration → merge → sentence-aware split → balance → min duration.
+    Steps are gated by whisper_post_processing_enabled and per-step flags.
     Leading spaces are already removed by _whisper_cpp_strip_leading_spaces_file when applicable.
     """
     if not config.get("whisper_post_processing_enabled", False):
@@ -1687,23 +1858,40 @@ def _whisper_cpp_post_process(
         if not entries:
             return
 
+        cfg = _pp_cfg_for_whisper(config)
+        line_max = int(cfg.get("subtitle_line_max_length", 43))
+        min_ms = int(cfg.get("subtitle_minimum_display_ms", 1000))
+        max_disp = int(cfg.get("subtitle_maximum_display_ms", 8000))
+
         if config.get("whisper_post_proc_adjust_timings", True) and audio_path and Path(audio_path).exists():
             entries = _pp_adjust_timings(entries, audio_path)
 
-        if config.get("whisper_post_proc_fix_short_duration", True):
-            entries = _pp_fix_short_duration(entries)
-
-        if config.get("whisper_post_proc_merge_lines", True):
-            entries = _pp_merge_short_lines(entries)
-
-        if config.get("whisper_post_proc_split_lines", True):
-            entries = _pp_split_long_lines(entries)
+        entries = _pp_shorten_long_cues(entries, max_disp)
+        entries = _pp_cleanup(entries)
+        if not entries:
+            return
 
         if config.get("whisper_post_proc_add_periods", True):
             entries = _pp_add_periods(entries)
 
         if config.get("whisper_post_proc_fix_casing", True):
             entries = _pp_fix_casing(entries)
+
+        if config.get("whisper_post_proc_fix_short_duration", True):
+            entries = _pp_fix_short_duration(entries, min_ms)
+
+        max_merge_chars = line_max * 2
+        if config.get("whisper_post_proc_merge_lines", True):
+            entries = _pp_merge_short_lines(entries, max_merge_chars, _PP_MERGE_GAP_MS)
+
+        if config.get("whisper_post_proc_split_lines", True):
+            entries = _pp_split_long_lines(entries, line_max)
+
+        if config.get("whisper_post_proc_balance_lines", True):
+            entries = _pp_balance_lines(entries, line_max, balance_gap_ms=_PP_MERGE_GAP_MS)
+
+        if config.get("whisper_post_proc_fix_short_duration", True):
+            entries = _pp_fix_short_duration(entries, min_ms)
 
         final_srt.write_text(_format_srt(entries), encoding="utf-8")
         if log_callback:
@@ -5394,12 +5582,13 @@ class WhisperPostProcessingDialog(QDialog):
     """Dialog to configure per-step Whisper post-processing options."""
 
     _OPTIONS = [
-        ("whisper_post_proc_adjust_timings",     "Adjust timings",      "Snap subtitle boundaries to speech/silence using the audio waveform"),
-        ("whisper_post_proc_merge_lines",         "Merge short lines",   "Merge adjacent short subtitles when the gap is ≤ 100 ms"),
-        ("whisper_post_proc_split_lines",         "Break long lines",   "Insert a line break in long subtitles (keeps one subtitle cue)"),
-        ("whisper_post_proc_fix_short_duration",  "Fix short duration",  "Extend subtitles displayed for less than 1 second"),
-        ("whisper_post_proc_add_periods",         "Add periods",         "Add a period when the gap to the next subtitle is > 600 ms"),
-        ("whisper_post_proc_fix_casing",          "Fix casing",          "Capitalise the first letter of each subtitle"),
+        ("whisper_post_proc_adjust_timings",     "Adjust timings",       "Snap subtitle boundaries to speech/silence using the audio waveform"),
+        ("whisper_post_proc_add_periods",        "Add periods",          "600 ms / 1250 ms gap thresholds; avoid double punctuation"),
+        ("whisper_post_proc_fix_casing",         "Fix casing",           "Capitalise line starts and after . ? !"),
+        ("whisper_post_proc_fix_short_duration", "Fix short duration",   "Extend subtitles displayed for less than 1 second"),
+        ("whisper_post_proc_merge_lines",        "Merge short lines",    "Gap ≤ 300 ms, budget 2× max line length; merge orphan fragments ≤12 chars"),
+        ("whisper_post_proc_split_lines",        "Break long lines",     "Prefer sentence boundaries, else word wrap (one cue, two lines)"),
+        ("whisper_post_proc_balance_lines",      "Balance lines",        "Merge adjacent tight cues into two balanced lines when it fits"),
     ]
 
     def __init__(self, parent=None, config: Optional[Dict] = None):
@@ -7618,7 +7807,7 @@ class VideoProcessingApp(QMainWindow):
         # Post-processing toggle + options gear
         self.transcribe_post_proc_cb = QCheckBox("Post-processing")
         self.transcribe_post_proc_cb.setToolTip("Apply post-processing steps after transcription (adjust timings, merge lines, etc.)")
-        self.transcribe_post_proc_cb.setChecked(self.config.get("whisper_post_processing_enabled", False))
+        self.transcribe_post_proc_cb.setChecked(self.config.get("whisper_post_processing_enabled", True))
         self.transcribe_post_proc_cb.toggled.connect(self._on_post_proc_toggled)
         post_proc_gear = QPushButton("⚙")
         post_proc_gear.setFixedWidth(28)

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Whisper CPP post-processing** defaults to **on**; pipeline reordered to cleanup > periods (600 ms / 1250 ms) > casing > min duration > merge (300 ms gap, 2× line budget, orphan fragments) > sentence-aware split > balance lines > min duration again. New steps: `_pp_cleanup`, `_pp_balance_lines`, `_pp_shorten_long_cues`; merge/split/periods/casing upgraded.
 - **DL UI (N_m3u8DL-RE)**: stream progress is no longer appended to the log; now rendered aas a live stateful stream panel with parsed N/M segs progress, stable per-stream grouping, throttled updates and per-task reset during batch processes.
 - **Launch scripts** (`scripts/run_sp_workshop.sh`, `scripts/run_sp_workshop.ps1`): virtualenv resolution order: use `~/VideoProcessingApp/.venv` if it exists, else an existing project `.venv`, else create a new venv at `~/VideoProcessingApp/.venv`. Dependency installs run only when the SHA-256 hash of `requirements.txt` concatenated with `requirements-whisper-ai.txt` changes; the hash is stored in `.requirements_hash` inside the chosen venv. `PATH` includes that venv’s `bin` / `Scripts` before starting the app.
 - **OpenAI Whisper (legacy backends):** transcription uses `sys.executable -m whisper` with the same interpreter as the GUI. Removed `_get_whisper_python()` and the automatic `~/whisper-env` bootstrap.
@@ -243,7 +244,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - PyQt5 graceful fail: friendly message and pip instructions when PyQt5 is missing (instead of raw ImportError traceback)
 
 ### Changed
-- FFmpeg resolver used everywhere: process_video, split_audio_channels, and convert_audio_format now use get_ffmpeg_command() (config → tools dir → PATH)
+- FFmpeg resolver used everywhere: process_video, split_audio_channels, and convert_audio_format now use get_ffmpeg_command() (config > tools dir > PATH)
 - Whisper CPP Metal: remove auto-download of ggml-metal.metal; use CPU when file absent, log clear message for Metal setup
 
 ## [10.4.0-alpha.4] - 2026-03-03
@@ -514,7 +515,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Translation target language selection (8 languages: English, French, Spanish, Catalan, German, Italian, Portuguese, Dutch).
 - ISO 639 language suffix support (.eng.srt, .fra.srt, etc.) for VLC and Jellyfin auto-detection.
 - Settings UI for configuring translation preferences with "Translation Target Language" dropdown and "Use ISO 639 language suffixes" checkbox.
-- Smart subtitle filename handling that auto-replaces existing language suffixes (e.g., video.spa.srt → video.eng.srt).
+- Smart subtitle filename handling that auto-replaces existing language suffixes (e.g., video.spa.srt > video.eng.srt).
 - Video processor now matches ISO 639 suffixed subtitle files with priority for exact match first.
 - `ISO_639_CODES` constant with 14 language mappings.
 
@@ -778,7 +779,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Batch download episodes from commands text.
 - Extract subtitles from MKV files.
-- Clean subtitle color tags (VTT → SRT conversion).
+- Clean subtitle color tags (VTT > SRT conversion).
 - Translate subtitles using Gemini SRT Translator.
 - Process videos: burn subtitles + watermark at 720p or 1080p.
 - Manual video file addition.
