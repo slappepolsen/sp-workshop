@@ -72,7 +72,10 @@ pip install -r requirements.txt
 python app.py
 ```
 
-You can also use the launcher scripts after dependencies are installed: **macOS** `Start_SP_Workshop.command`, **Windows** `Start_SP_Workshop.bat`, **Linux** `./Start_SP_Workshop.sh` (see [INSTALL.md](INSTALL.md)).
+You can also use the launcher scripts after dependencies are installed: 
+* **macOS** `Start_SP_Workshop.command`
+* * **Windows** `Start_SP_Workshop.bat`
+  * * **Linux** `./Start_SP_Workshop.sh` (see [INSTALL.md](INSTALL.md)).
 
 If `python3.12` is not available as a command, install Python 3.12 from [python.org](https://www.python.org/downloads/) and ensure it is on `PATH`, or use `py -3.12` on Windows.
 
