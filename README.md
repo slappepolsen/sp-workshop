@@ -1,5 +1,6 @@
 # SP Workshop
 
+[![standard-readme compliant](https://img.shields.io/badge/readme%20style-standard-brightgreen.svg?style=flat-square)](https://github.com/RichardLitt/standard-readme)
 [![Release](https://img.shields.io/github/v/release/slappepolsen/sp-workshop)](https://github.com/slappepolsen/sp-workshop/releases)
 [![License](https://img.shields.io/github/license/slappepolsen/sp-workshop)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.12-blue)](https://www.python.org/downloads/)
@@ -7,9 +8,28 @@
 
 <img src="media/icon.png" width="80" height="80" alt="icon"/>
 
-SP Workshop is a desktop GUI for **extracting**, **translating**, **transcribing**, and **burning** subtitles into videos. It was created to make international WLW / sapphic content more accessible, and it works for any audiovisual media.
+Desktop GUI for **extracting**, **translating**, **transcribing**, and **burning** subtitles into videos.
 
-## What it does
+SP Workshop was created to make international WLW / sapphic content more accessible, and it works for any audiovisual media. 
+
+## Table of Contents
+
+- [SP Workshop](#sp-workshop)
+	- [Table of Contents](#table-of-contents)
+	- [Background](#background)
+		- [What the app does](#what-the-app-does)
+	- [Install](#install)
+	- [Usage](#usage)
+		- [Run from source](#run-from-source)
+		- [Pre-built app (experimental)](#pre-built-app-experimental)
+	- [Contributing](#contributing)
+	- [License](#license)
+
+## Background
+
+Sapphic / WLW stories have always crossed borders. That is beautiful, and necessary, when there is little or no representation in your own country. Much of the work that sustains sapphic audiovisual media preservation depends on tools, platforms, and storage we do not control. Proprietary ecosystems favor convenience over longevity. **SP Workshop** is a free, **local** desktop app that keeps extraction, subtitle work, translation, transcription, remuxing, and burn-in in one place so you switch tools less often. It builds on open-source libraries and runs on your machine, so your files and workflow are not tied to a proprietary platform.
+
+### What the app does
 
 | Function | Description |
 |----------|-------------|
@@ -18,42 +38,62 @@ SP Workshop is a desktop GUI for **extracting**, **translating**, **transcribing
 | **Transcription** | Generate subtitles from audio using Whisper when no subtitles exist |
 | **Remuxing** | Tree-based file and track view, add external SRT files, remux MKV or MP4, split audio tracks |
 
-## Who it’s for
+## Install
 
-- Subtitle editors and translators  
-- Archivists and fandom preservation projects  
-- Anyone who wants subtitles in the language they actually want  
+**Requirements:** **Python 3.12** and **FFmpeg** on your `PATH` when running from source. Platform support: **macOS**, **Windows**, and **Linux**.
 
-## Get started
+- **Recommended:** follow **[INSTALL.md](INSTALL.md)** — run from source (most reliable), optional pre-built apps, launcher scripts, and common PATH issues.
+- **Quick path:** download **Source code (zip)** or assets from **[Releases](https://github.com/slappepolsen/sp-workshop/releases)**.
 
-- **Latest downloads and release assets:** [Releases](https://github.com/slappepolsen/sp-workshop/releases)  
-- **Full setup (source zip, pre-built apps, optional tools, per-OS notes):** [INSTALL.md](INSTALL.md)  
-- **Quick start from source**
+Pre-built apps are **experimental**; if they fail on your machine, use run-from-source instructions in [INSTALL.md](INSTALL.md).
 
-  Requires **Python 3.12** and **FFmpeg**. Full setup: [INSTALL.md](INSTALL.md).
+## Usage
 
-  ```bash
-  cd /path/to/sp-workshop
+### Run from source
 
-  python3.12 -m venv .venv
-  source .venv/bin/activate
+From the project directory:
 
-  pip install -r requirements.txt
-  python3 app.py
-  ```
+**macOS / Linux**
 
-  On **Windows**, use `py -3.12 -m venv .venv`, then `.venv\Scripts\activate`, then `python app.py`. If `python3.12` is not a command on your system, install Python 3.12 from [python.org](https://www.python.org/downloads/) and ensure it is on `PATH`, or use `python` / `python3` only when that points to 3.12.
+```bash
+cd /path/to/sp-workshop
 
-## Notes
+python3.12 -m venv .venv
+source .venv/bin/activate
 
-- **Pre-built apps** are experimental; if they fail on your machine, run from source (see [INSTALL.md](INSTALL.md)).  
+pip install -r requirements.txt
+python3 app.py
+```
+
+**Windows**
+
+```bat
+cd \path\to\sp-workshop
+
+py -3.12 -m venv .venv
+.venv\Scripts\activate
+
+pip install -r requirements.txt
+python app.py
+```
+
+You can also use the launcher scripts after dependencies are installed: **macOS** `Start_SP_Workshop.command`, **Windows** `Start_SP_Workshop.bat`, **Linux** `./Start_SP_Workshop.sh` (see [INSTALL.md](INSTALL.md)).
+
+If `python3.12` is not available as a command, install Python 3.12 from [python.org](https://www.python.org/downloads/) and ensure it is on `PATH`, or use `py -3.12` on Windows.
+
+### Pre-built app (experimental)
+
+Download the DMG, ZIP, or tarball for your OS from **[Releases](https://github.com/slappepolsen/sp-workshop/releases)**. Details, filenames, and Gatekeeper / SmartScreen notes are in **[INSTALL.md](INSTALL.md#pre-built-app-experimental)**.
+
+## Contributing
+
+Issues and pull requests are welcome on [GitHub](https://github.com/slappepolsen/sp-workshop).
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+Copyright (C) 2026 slappepolsen
 
-Made with ❤️ by [@slappepolsen](https://x.com/slappepolsen)
+This project is licensed under the GNU Affero General Public License v3.0.
+See the [LICENSE](LICENSE) file for details.
 
-[![Follow](https://img.shields.io/twitter/follow/slappepolsen?style=social)](https://x.com/slappepolsen)
-
-![Developer Banner 13](https://ishan-rest.vercel.app/svg/banner/dev13/slappepolsen)
+**Made with ❤️ by [@slappepolsen](https://x.com/slappepolsen)**
