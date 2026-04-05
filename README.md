@@ -83,7 +83,7 @@ You can also use the launcher scripts after dependencies are installed: **macOS*
 
 If `python3.12` is not available as a command, install Python 3.12 from [python.org](https://www.python.org/downloads/) and ensure it is on `PATH`, or use `py -3.12` on Windows.
 
-#### Pre-built app (experimental)
+### Pre-built app (experimental)
 
 Download the DMG, ZIP, or tarball for your OS from **[Releases](https://github.com/slappepolsen/sp-workshop/releases)**. Details, filenames, and Gatekeeper / SmartScreen notes are in **[INSTALL.md](INSTALL.md#pre-built-app-experimental)**.
 
