@@ -25,25 +25,62 @@ function Invoke-PythonWithArgs([string[]]$extraArgs) {
     & $pythonCmd[0] @allArgs
 }
 
-if (-not (Test-Path ".venv")) {
+$baseDir = Join-Path $env:USERPROFILE "VideoProcessingApp"
+$sharedVenv = Join-Path $baseDir ".venv"
+$projectVenv = Join-Path $projectDir ".venv"
+
+New-Item -ItemType Directory -Path $baseDir -Force | Out-Null
+
+if (Test-Path $sharedVenv) {
+    $venvDir = $sharedVenv
+} elseif (Test-Path $projectVenv) {
+    $venvDir = $projectVenv
+} else {
+    $venvDir = $sharedVenv
     Write-Host "Creating virtual environment..."
-    Invoke-PythonWithArgs @("-m", "venv", ".venv")
+    Invoke-PythonWithArgs @("-m", "venv", $venvDir)
 }
 
-$venvPython = Join-Path $projectDir ".venv\Scripts\python.exe"
+$venvPython = Join-Path $venvDir "Scripts\python.exe"
+
 if (-not (Test-Path $venvPython)) {
-    Write-Host "Virtual environment is missing Python. Recreating .venv..."
-    Remove-Item ".venv" -Recurse -Force -ErrorAction SilentlyContinue
-    Invoke-PythonWithArgs @("-m", "venv", ".venv")
+    Write-Host "Virtual environment is missing Python. Recreating venv..."
+    Remove-Item $venvDir -Recurse -Force -ErrorAction SilentlyContinue
+    Invoke-PythonWithArgs @("-m", "venv", $venvDir)
+    $venvPython = Join-Path $venvDir "Scripts\python.exe"
 }
 
-$marker = Join-Path $projectDir ".venv\.requirements_installed"
-$requirements = Join-Path $projectDir "requirements.txt"
-$needsInstall = (-not (Test-Path $marker)) -or ((Get-Item $requirements).LastWriteTime -gt (Get-Item $marker).LastWriteTime)
+$reqHashFile = Join-Path $venvDir ".requirements_hash"
+$reqMain = Join-Path $projectDir "requirements.txt"
+$reqWhisper = Join-Path $projectDir "requirements-whisper-ai.txt"
+
+$env:SP_PROJECT_DIR = $projectDir
+$hashScript = @'
+import hashlib
+import os
+from pathlib import Path
+p = Path(os.environ["SP_PROJECT_DIR"])
+main = (p / "requirements.txt").read_bytes()
+wh = (p / "requirements-whisper-ai.txt").read_bytes()
+print(hashlib.sha256(main + wh).hexdigest())
+'@
+
+$newHash = (& $venvPython -c $hashScript).Trim()
+
+$needsInstall = $true
+if (Test-Path $reqHashFile) {
+    $oldHash = (Get-Content -Path $reqHashFile -Raw).Trim()
+    if ($oldHash -eq $newHash) {
+        $needsInstall = $false
+    }
+}
+
 if ($needsInstall) {
     Write-Host "Installing requirements..."
-    & $venvPython -m pip install -r requirements.txt
-    New-Item -ItemType File -Path $marker -Force | Out-Null
+    & $venvPython -m pip install --upgrade pip
+    # Whisper-ai first: torch only; then main (torchvision, openai-whisper, etc.)
+    & $venvPython -m pip install -r $reqWhisper -r $reqMain
+    [System.IO.File]::WriteAllText($reqHashFile, $newHash)
 }
 
 Write-Host "Setup almost complete."
@@ -52,4 +89,8 @@ Write-Host "If the app doesn't start:"
 Write-Host "It will tell you what's missing (FFmpeg, etc.)"
 Write-Host ""
 Write-Host "Starting SP Workshop..."
-& $venvPython app.py
+
+$venvBin = Join-Path $venvDir "Scripts"
+$env:Path = "$venvBin;$env:Path"
+
+& $venvPython (Join-Path $projectDir "app.py")

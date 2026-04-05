@@ -3001,99 +3001,18 @@ def remux_mkv_with_srt_batch(folder_path: Path, output_format: str = "mkv",
     return success_count > 0
 
 
-def _get_whisper_python(log_callback=None) -> Optional[Path]:
-    """Return Path to Python in ~/whisper-env, creating venv and installing whisper/torch if missing."""
-    env_dir = Path.home() / "whisper-env"
-    if sys.platform == "win32":
-        python_exe = env_dir / "Scripts" / "python.exe"
-    else:
-        python_exe = env_dir / "bin" / "python"
-
-    if not env_dir.exists():
-        if log_callback:
-            log_callback("Creating virtual environment...")
-        try:
-            py = _host_python_for_module_cli()
-            if not py:
-                if log_callback:
-                    log_callback("No system Python found to create whisper-env (bundled app cannot use its own binary as python).")
-                return None
-            subprocess.run(
-                [py, "-m", "venv", str(env_dir)],
-                check=True,
-                capture_output=True,
-                timeout=120,
-                env=_env_for_subprocess_python(),
-            )
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-            if log_callback:
-                log_callback(f"Failed to create whisper-env: {e}")
-            return None
-
-    if not python_exe.exists():
-        if log_callback:
-            log_callback(f"whisper-env Python not found at {python_exe}")
-        return None
-
-    # Ensure whisper is installed
+def _openai_whisper_cli_ok() -> bool:
+    """True if ``python -m whisper`` works in the current interpreter (no separate ``whisper`` CLI on PATH)."""
     try:
-        result = subprocess.run(
-            [str(python_exe), "-m", "whisper", "--help"],
-            capture_output=True,
-            timeout=10,
-            env=_env_for_subprocess_python(),
-        )
-        if result.returncode != 0:
-            raise RuntimeError("whisper not available")
-    except Exception:
-        if log_callback:
-            log_callback("Installing Whisper (first time setup)...")
-        try:
-            subprocess.run(
-                [str(python_exe), "-m", "pip", "install", "-U", "pip"],
-                capture_output=True,
-                timeout=60,
-                env=_env_for_subprocess_python(),
-            )
-            subprocess.run(
-                [str(python_exe), "-m", "pip", "install", "-U", "openai-whisper"],
-                check=True,
-                capture_output=True,
-                timeout=300,
-                env=_env_for_subprocess_python(),
-            )
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-            if log_callback:
-                log_callback(f"Failed to install Whisper: {e}")
-            return None
-
-    # Ensure torch is installed
-    try:
-        result = subprocess.run(
-            [str(python_exe), "-c", "import torch"],
+        r = subprocess.run(
+            [sys.executable, "-m", "whisper", "--help"],
             capture_output=True,
             timeout=15,
             env=_env_for_subprocess_python(),
         )
-        if result.returncode != 0:
-            raise RuntimeError("torch not available")
+        return r.returncode == 0
     except Exception:
-        if log_callback:
-            log_callback("Installing PyTorch (first time setup)...")
-        try:
-            subprocess.run(
-                [str(python_exe), "-m", "pip", "install", "torch", "torchvision", "torchaudio"],
-                check=True,
-                capture_output=True,
-                timeout=600,
-                env=_env_for_subprocess_python(),
-            )
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-            if log_callback:
-                log_callback(f"Failed to install PyTorch: {e}")
-            return None
-
-    return python_exe
+        return False
 
 
 # ============================================================================
@@ -3724,10 +3643,12 @@ def transcribe_video(video_path: Path, language_code: str, model: str, whisper_o
             log_callback("Error: FFmpeg not found. Please install it and add to PATH.")
         return False
 
-    whisper_python = _get_whisper_python(log_callback)
-    if not whisper_python:
+    if not _openai_whisper_cli_ok():
         if log_callback:
-            log_callback("Error: Could not set up Whisper environment.")
+            log_callback(
+                "Error: OpenAI Whisper is not available in this Python environment. "
+                "Use the app launcher (installs torch + requirements.txt) or: pip install -r requirements-whisper-ai.txt -r requirements.txt"
+            )
         return False
 
     try:
@@ -3761,7 +3682,7 @@ def transcribe_video(video_path: Path, language_code: str, model: str, whisper_o
         # whisper writes <audio_stem>.<format> into --output_dir; we use video_dir
         # for the temp output then move the SRT to the subtitles folder.
         whisper_cmd = [
-            str(whisper_python), "-m", "whisper", str(audio_path),
+            sys.executable, "-m", "whisper", str(audio_path),
             "--model", model,
             "--fp16", "False",
             "--output_format", output_format,
@@ -3782,6 +3703,7 @@ def transcribe_video(video_path: Path, language_code: str, model: str, whisper_o
             capture_output=True,
             text=True,
             timeout=3600,
+            env=_env_for_subprocess_python(),
         )
 
         if log_callback:
@@ -3829,7 +3751,7 @@ def transcribe_video_vad(
 ) -> bool:
     """Transcribe a long video using Silero VAD + Whisper per segment to reduce hallucination.
     Best for files over ~5 minutes. Writes SRT next to the input file.
-    Requires: torch, torchaudio, torchcodec, pysrt, openai-whisper (pip install torch torchaudio torchcodec pysrt openai-whisper).
+    Requires: torch, torchaudio, torchcodec, pysrt, openai-whisper (pip install -r requirements-whisper-ai.txt -r requirements.txt).
     """
     from decimal import Decimal
 
@@ -3838,7 +3760,7 @@ def transcribe_video_vad(
         import pysrt
     except Exception as e:
         if log_callback:
-            log_callback(f"Missing dependency: {e}. Install with: pip install torch torchaudio torchcodec pysrt openai-whisper")
+            log_callback(f"Missing dependency: {e}. Install with: pip install -r requirements-whisper-ai.txt -r requirements.txt")
         return False
 
     if not video_path.exists():
@@ -3934,7 +3856,7 @@ def transcribe_video_vad(
             )
 
             whisper_cmd = [
-                "whisper",
+                sys.executable, "-m", "whisper",
                 str(seg_wav),
                 "--model", model,
                 "--output_format", "srt",
@@ -3947,7 +3869,12 @@ def transcribe_video_vad(
             if language_code != "auto":
                 whisper_cmd += ["--language", language_code]
 
-            result = subprocess.run(whisper_cmd, capture_output=True, text=True)
+            result = subprocess.run(
+                whisper_cmd,
+                capture_output=True,
+                text=True,
+                env=_env_for_subprocess_python(),
+            )
             if result.returncode != 0:
                 if log_callback:
                     log_callback(f"Whisper error for segment {i + 1}: {result.stderr or result.stdout}")
@@ -4131,7 +4058,7 @@ class OpenAIWhisperBackend:
     backend_id = "standard"
 
     def is_available(self, config: Dict) -> bool:  # noqa: ARG002
-        return _get_whisper_python(None) is not None
+        return _openai_whisper_cli_ok()
 
     def transcribe(self, video_path: Path, language_code: str, model: str,
                    config: Dict, progress_callback=None, log_callback=None) -> bool:
@@ -4152,9 +4079,9 @@ class VadWhisperBackend:
         try:
             import torch   # noqa: F401
             import pysrt   # noqa: F401
-            return True
         except Exception:
             return False
+        return _openai_whisper_cli_ok()
 
     def transcribe(self, video_path: Path, language_code: str, model: str,
                    config: Dict, progress_callback=None, log_callback=None) -> bool:
@@ -4262,6 +4189,19 @@ def _ensure_optional_pip_venv(host_python: str, log: Callable[[str], None]) -> O
     if not py:
         log("venv created but Python executable not found")
     return py
+
+
+_PROJECT_ROOT = Path(__file__).resolve().parent
+
+
+def _pip_requirements_transcribe_stack() -> List[str]:
+    """Arguments for ``pip install``: torch first (``requirements-whisper-ai.txt``), then ``requirements.txt``."""
+    return [
+        "-r",
+        str(_PROJECT_ROOT / "requirements-whisper-ai.txt"),
+        "-r",
+        str(_PROJECT_ROOT / "requirements.txt"),
+    ]
 
 
 def pip_install_optional_packages(
@@ -5779,9 +5719,7 @@ class SetupWizard(QDialog):
             self.install_buttons_layout.addWidget(btn)
         if self.want_transcribe_long and not self.transcribe_long_installed:
             btn = QPushButton("Install advanced transcription (optional, ~2–3 GB)")
-            btn.clicked.connect(lambda: self._do_pip_install(
-                ["torch", "torchaudio", "torchcodec", "pysrt", "openai-whisper"]
-            ))
+            btn.clicked.connect(lambda: self._do_pip_install(_pip_requirements_transcribe_stack()))
             self.install_buttons_layout.addWidget(btn)
         if not self.whisper_cpp_installed:
             btn = QPushButton("Install Whisper CPP")
@@ -5833,7 +5771,7 @@ class SetupWizard(QDialog):
 
     def _do_pip_install(self, packages: List[str]):
         """Run pip install in a worker and show progress."""
-        if "torch" in packages:
+        if "torch" in packages or any("requirements-whisper-ai.txt" in str(p) for p in packages):
             reply = QMessageBox.question(
                 self,
                 "Large Download",
@@ -6074,7 +6012,7 @@ class SetupWizard(QDialog):
         if self.want_translator and not self.gst_installed:
             parts.append(("<b>gemini-srt-translator</b>", "<code>python -m pip install gemini-srt-translator</code>"))
         if self.want_transcribe_long and not self.transcribe_long_installed:
-            parts.append(("<b>Transcription (Local AI)</b>", "<code>python -m pip install torch torchaudio torchcodec pysrt openai-whisper</code>"))
+            parts.append(("<b>Transcription (Local AI)</b>", "<code>python -m pip install -r requirements-whisper-ai.txt -r requirements.txt</code>"))
         if not self.whisper_cpp_installed:
             parts.append(("<b>Whisper CPP</b>", "<code>python -m pip install whisper.cpp-cli</code>"))
         if not parts:
@@ -6124,7 +6062,7 @@ class SetupWizard(QDialog):
             if self.want_translator and not self.gst_installed:
                 missing.append("gemini-srt-translator")
             if self.want_transcribe_long and not self.transcribe_long_installed:
-                missing.append("torch, torchaudio, torchcodec, pysrt, openai-whisper")
+                missing.append("transcription stack (requirements-whisper-ai.txt + requirements.txt)")
             html += "<p style='color: #aa0000;'><b>⚠ Some required components are missing.</b></p>"
             html += "<p><b>Missing:</b> " + ", ".join(missing) + "</p>"
             html += "<p>Install from Step 3, or run <code>python -m pip install &lt;package&gt;</code> in your terminal. Then restart the app.</p>"
@@ -7905,7 +7843,8 @@ class VideoProcessingApp(QMainWindow):
             reply = QMessageBox.question(
                 self,
                 "Missing Dependencies",
-                "This feature requires torch, torchaudio, torchcodec, pysrt, openai-whisper (~2–3 GB download).\n\n"
+                "This feature requires PyTorch and related packages (~2–3 GB). Use the app launcher, or:\n"
+                "python -m pip install -r requirements-whisper-ai.txt -r requirements.txt\n\n"
                 "Would you like us to install them for you?",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.Yes,
@@ -7923,7 +7862,7 @@ class VideoProcessingApp(QMainWindow):
                 layout.addWidget(close_btn)
                 dlg.setLayout(layout)
                 worker = PipInstallWorker(
-                    ["torch", "torchaudio", "torchcodec", "pysrt", "openai-whisper"],
+                    _pip_requirements_transcribe_stack(),
                     parent=dlg,
                 )
                 worker.log_message.connect(lambda m: log.append(m))
@@ -7933,7 +7872,7 @@ class VideoProcessingApp(QMainWindow):
                         dlg.accept()
                         self.transcribe_long_from_tab()  # Retry
                     else:
-                        log.append("\nInstallation failed. Click Close and try: python -m pip install torch torchaudio torchcodec pysrt openai-whisper")
+                        log.append("\nInstallation failed. Click Close and try: python -m pip install -r requirements-whisper-ai.txt -r requirements.txt")
                         close_btn.setEnabled(True)
                 close_btn.clicked.connect(dlg.accept)
                 worker.finished.connect(on_finished)

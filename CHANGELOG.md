@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Launch scripts** (`scripts/run_sp_workshop.sh`, `scripts/run_sp_workshop.ps1`): virtualenv resolution order: use `~/VideoProcessingApp/.venv` if it exists, else an existing project `.venv`, else create a new venv at `~/VideoProcessingApp/.venv`. Dependency installs run only when the SHA-256 hash of `requirements.txt` concatenated with `requirements-whisper-ai.txt` changes; the hash is stored in `.requirements_hash` inside the chosen venv. `PATH` includes that venv’s `bin` / `Scripts` before starting the app.
+- **OpenAI Whisper (legacy backends):** transcription uses `sys.executable -m whisper` with the same interpreter as the GUI. Removed `_get_whisper_python()` and the automatic `~/whisper-env` bootstrap.
+
+### Added
+
+- **`requirements-whisper-ai.txt`:** only **PyTorch** (`torch`), the large wheel; installed before `requirements.txt` so the rest of the stack resolves against it. Other OpenAI/VAD deps (`openai-whisper`, `torchvision`, `torchaudio`, `torchcodec`, `pysrt`) live in **`requirements.txt`**.
+
+### Fixed
+
+- **VAD-assisted transcription:** no longer invokes a bare `whisper` CLI (which failed when the venv’s `bin` was not on `PATH`).
+
+### Notes
+
+- **PyInstaller / frozen builds:** `python -m whisper` uses the bundle executable, which is not CPython; prefer **Whisper CPP** for transcription in frozen apps, or install OpenAI Whisper into a system Python if you rely on legacy OpenAI backends.
+
 ## [10.4.0-alpha.22] - 2026-04-03
 
 ### Fixed

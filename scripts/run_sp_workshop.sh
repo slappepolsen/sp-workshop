@@ -22,23 +22,57 @@ if [[ -z "$PYTHON_CMD" ]]; then
   exit 1
 fi
 
-if [[ ! -d ".venv" ]]; then
+BASE_DIR="$HOME/VideoProcessingApp"
+SHARED_VENV="$BASE_DIR/.venv"
+PROJECT_VENV="$PROJECT_DIR/.venv"
+
+mkdir -p "$BASE_DIR"
+
+if [[ -d "$SHARED_VENV" ]]; then
+  VENV_DIR="$SHARED_VENV"
+elif [[ -d "$PROJECT_VENV" ]]; then
+  VENV_DIR="$PROJECT_VENV"
+else
+  VENV_DIR="$SHARED_VENV"
   echo "Creating virtual environment..."
-  "$PYTHON_CMD" -m venv .venv
+  "$PYTHON_CMD" -m venv "$VENV_DIR"
 fi
 
-VENV_PY="$PROJECT_DIR/.venv/bin/python"
+VENV_PY="$VENV_DIR/bin/python"
 if [[ ! -x "$VENV_PY" ]]; then
-  echo "Virtual environment is missing Python. Recreating .venv..."
-  rm -rf .venv
-  "$PYTHON_CMD" -m venv .venv
+  echo "Virtual environment is missing Python. Recreating venv..."
+  rm -rf "$VENV_DIR"
+  "$PYTHON_CMD" -m venv "$VENV_DIR"
+  VENV_PY="$VENV_DIR/bin/python"
 fi
 
-MARKER="$PROJECT_DIR/.venv/.requirements_installed"
-if [[ ! -f "$MARKER" || requirements.txt -nt "$MARKER" ]]; then
+REQ_HASH_FILE="$VENV_DIR/.requirements_hash"
+REQ_MAIN="$PROJECT_DIR/requirements.txt"
+REQ_WHISPER="$PROJECT_DIR/requirements-whisper-ai.txt"
+
+export SP_PROJECT_DIR="$PROJECT_DIR"
+NEW_HASH=$("$VENV_PY" - <<'PY'
+import hashlib
+import os
+from pathlib import Path
+
+p = Path(os.environ["SP_PROJECT_DIR"])
+main = (p / "requirements.txt").read_bytes()
+wh = (p / "requirements-whisper-ai.txt").read_bytes()
+print(hashlib.sha256(main + wh).hexdigest())
+PY
+)
+
+OLD_HASH=""
+if [[ -f "$REQ_HASH_FILE" ]]; then
+  OLD_HASH="$(tr -d '\n' <"$REQ_HASH_FILE")"
+fi
+if [[ "$NEW_HASH" != "$OLD_HASH" ]]; then
   echo "Installing requirements..."
-  "$VENV_PY" -m pip install -r requirements.txt
-  touch "$MARKER"
+  "$VENV_PY" -m pip install --upgrade pip
+  # Whisper-ai first: only torch (large); then main so torchvision/torchaudio/openai-whisper resolve against it
+  "$VENV_PY" -m pip install -r "$REQ_WHISPER" -r "$REQ_MAIN"
+  printf '%s' "$NEW_HASH" > "$REQ_HASH_FILE"
 fi
 
 echo "Setup almost complete."
@@ -47,4 +81,5 @@ echo "If the app doesn't start:"
 echo "It will tell you what's missing (FFmpeg, etc.)"
 echo ""
 echo "Starting SP Workshop..."
-exec "$VENV_PY" app.py
+export PATH="$VENV_DIR/bin:$PATH"
+exec "$VENV_PY" "$PROJECT_DIR/app.py"
