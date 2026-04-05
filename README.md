@@ -7,7 +7,7 @@
 
 <img src="media/icon.png" width="80" height="80" alt="icon"/>
 
-## Quick Start (if you know your way around a Terminal)
+## Quick Start (if you already know your way around a Terminal)
 
 If not, go to [Installation](#installation).
 
@@ -19,7 +19,7 @@ If not, go to [Installation](#installation).
 
    `python app.py`
 
-   (On macOS/Linux you may need: python3 app.py)
+   (On macOS/Linux you may need: `python3 app.py`)
 
 3. If something is missing:
    The app will tell you what to install (FFmpeg, N_m3u8DL-RE, etc.)
