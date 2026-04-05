@@ -925,6 +925,36 @@ def _strip_ansi(text: str) -> str:
     return re.sub(r'\x1b\[[0-9;]*m', '', text)
 
 
+def _line_looks_like_n_m3u8dl_progress_line(line: str) -> bool:
+    """True for live progress lines (Unicode bar or N/M segs), excluding them from log/debug spam."""
+    clean = _strip_ansi(line).replace("\r", "")
+    if "━" in clean:
+        return True
+    if re.search(r"\b\d+/\d+\s+segs\b", clean, re.IGNORECASE):
+        return True
+    return False
+
+
+def _n_m3u8dl_progress_throttle_key(parsed: str) -> str:
+    """Key for 1s throttling in download_episodes; matches MainWindow._download_progress_key logic."""
+    if not parsed or not str(parsed).strip():
+        return "__empty__"
+    s = str(parsed).strip()
+    if (
+        s.startswith("Downloading:")
+        or s.startswith("Muxing:")
+        or s.startswith("Merging")
+        or s.startswith("Decrypting")
+    ):
+        return "__phase__"
+    if " · " in s:
+        head = s.split(" · ", 1)[0].strip()
+        head = re.sub(r"^[↓\s]+", "", head)
+        if head:
+            return head
+    return s
+
+
 def _parse_n_m3u8dl_progress(line: str) -> Optional[str]:
     """Parse an N_m3u8DL-RE progress bar line into a compact status string.
 
@@ -951,6 +981,27 @@ def _parse_n_m3u8dl_progress(line: str) -> Optional[str]:
         eta_match = re.search(r'\d{2}:\d{2}:\d{2}|--:--:--', after_bar)
         eta = eta_match.group(0) if eta_match else '--:--:--'
         return f"{label} · {segments} segs · {speed} · ETA {eta}"
+
+    # Format 3: no Unicode bar; label is text before "N/M segs", tail used like Format 1's after_bar
+    seg_m3 = re.search(r"\b(\d+/\d+\s+segs)\b", clean, re.IGNORECASE)
+    if seg_m3 and "━" not in clean:
+        label = clean[: seg_m3.start()].strip()
+        label = re.sub(r"(?:\s*[·|])+\s*$", "", label).strip()
+        label = re.sub(r"^[↓\s]+", "", label).strip()
+        if label:
+            segs_s = seg_m3.group(1).strip()
+            tail = clean[seg_m3.end() :].lstrip()
+            if tail.startswith("·"):
+                tail = tail[1:].lstrip()
+            speed_match = re.search(
+                r"[\d.]+\s*[KMG]?(?:Bps|B/s|bps)|^[\d.]+Bps$",
+                tail,
+                re.IGNORECASE,
+            )
+            speed = speed_match.group(0).strip() if speed_match else "-"
+            eta_match = re.search(r"\d{2}:\d{2}:\d{2}|--:--:--", tail)
+            eta = eta_match.group(0) if eta_match else "--:--:--"
+            return f"{label} · {segs_s} · {speed} · ETA {eta}"
 
     # Format 2: INFO lines in the style:
     # "INFO : Vid ... | 3023 Kbps | ... | 214 Segments | Main | ~28m26s"
@@ -1128,8 +1179,8 @@ def download_episodes(
                     line_output = process.stdout.readline()
                     if not line_output:
                         break
-                    is_progress_bar = '━' in line_output
-                    if not is_progress_bar:
+                    is_progress_line = _line_looks_like_n_m3u8dl_progress_line(line_output)
+                    if not is_progress_line:
                         cleaned = _strip_ansi(line_output)
                         debug_file.write(cleaned)
                         debug_file.flush()
@@ -1137,14 +1188,10 @@ def download_episodes(
                     if line_output:
                         output_lines.append(line_output)
 
-                        is_progress_bar = '━' in line_output
-
                         if stream_progress_callback:
                             parsed = _parse_n_m3u8dl_progress(line_output)
                             if parsed:
-                                # Use the part before ' - ' as stream key to throttle
-                                # Not sure if it works tho, this whole progress bar thing are a recurring challenge
-                                stream_key = parsed.split(' - ')[0]
+                                stream_key = _n_m3u8dl_progress_throttle_key(parsed)
                                 now = time.time()
                                 if now - last_progress_emit.get(stream_key, 0) >= 1.0:
                                     last_progress_emit[stream_key] = now
@@ -1156,7 +1203,7 @@ def download_episodes(
                         # Log only the important stuff
                         # There's still a lot messy stuff tho
                         should_log = (
-                            not is_progress_bar and
+                            not is_progress_line and
                             not is_file_access_warning and (
                                 'INFO' in line_output or
                                 'WARN' in line_output or
@@ -9053,6 +9100,28 @@ class VideoProcessingApp(QMainWindow):
         download_buttons.addWidget(open_lossless_btn)
         download_tab_layout.addLayout(download_buttons)
 
+        self._download_stream_progress = {}
+        live_progress_group = QGroupBox("Live status")
+        live_progress_group.setStyleSheet(
+            "QGroupBox { font-weight: bold; font-size: 11px; } "
+            "QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }"
+        )
+        live_progress_layout = QVBoxLayout()
+        live_progress_layout.setContentsMargins(8, 12, 8, 8)
+        live_progress_layout.setSpacing(4)
+        self.download_stream_progress_label = QLabel("—")
+        _dp_font = QFont("Menlo", 9) if platform.system() == "Darwin" else QFont("Consolas", 9)
+        self.download_stream_progress_label.setFont(_dp_font)
+        self.download_stream_progress_label.setWordWrap(True)
+        self.download_stream_progress_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.download_stream_progress_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self.download_stream_progress_label.setStyleSheet("color: #333;")
+        self.download_stream_progress_label.setMinimumHeight(44)
+        self.download_stream_progress_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+        live_progress_layout.addWidget(self.download_stream_progress_label)
+        live_progress_group.setLayout(live_progress_layout)
+        download_tab_layout.addWidget(live_progress_group)
+
         download_log_group, self.download_log_output = self._make_log_panel(
             placeholder="Logs will appear here after processing starts"
         )
@@ -9381,6 +9450,10 @@ class VideoProcessingApp(QMainWindow):
         is_download = func_name in ["download_episodes", "download_with_detection"]
         self.progress_group.setVisible(not is_download)
 
+        if is_download:
+            self._download_stream_progress = {}
+            self.download_stream_progress_label.setText("—")
+
         if not is_download:
             # Configure progress bar
             self.progress_bar.setRange(0, 100)
@@ -9433,6 +9506,11 @@ class VideoProcessingApp(QMainWindow):
     
     def on_progress_update(self, current: int, total: int, filename: str):
         """Handle progress update."""
+        # Each batch download task emits one update before its subprocess; clear stale live rows.
+        if self.current_operation == "Downloading episodes":
+            self._download_stream_progress = {}
+            self.download_stream_progress_label.setText("—")
+
         # Extract % from filename
         file_percentage = None
         if filename and '(' in filename and '%' in filename:
@@ -9474,10 +9552,22 @@ class VideoProcessingApp(QMainWindow):
             status_msg += f" ({current}/{total})"
         self.statusBar().showMessage(status_msg)
     
+    def _download_progress_key(self, message: str) -> str:
+        """Map a compact progress line to a stable dict key (see plan: phase vs stream head)."""
+        return _n_m3u8dl_progress_throttle_key(message)
+
     def on_download_stream_progress(self, message: str):
-        """Route download stream progress into the Download log only."""
-        if message:
-            self.log_download(f"  ↓  {message}")
+        """Update live multi-stream status (not appended to the download log)."""
+        if not message:
+            return
+        key = self._download_progress_key(message)
+        self._download_stream_progress[key] = message
+        ordered = sorted(
+            self._download_stream_progress.items(),
+            key=lambda kv: (0 if kv[0] == "__phase__" else 1, kv[0].lower()),
+        )
+        lines = [f"↓ {text}" for _, text in ordered]
+        self.download_stream_progress_label.setText("\n".join(lines))
 
     def on_script_finished(self, success: bool):
         """Handle script completion."""
@@ -9494,6 +9584,8 @@ class VideoProcessingApp(QMainWindow):
         self.stop_btn.setText("Stop")
         self.transcribe_stop_btn.setEnabled(False)
         self.transcribe_stop_btn.setText("Stop")
+        self._download_stream_progress = {}
+        self.download_stream_progress_label.setText("—")
         if success:
             self.log("✓ Operation completed successfully.")
         else:

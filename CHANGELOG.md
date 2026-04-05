@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **DL UI (N_m3u8DL-RE)**: stream progress is no longer appended to the log; now rendered aas a live stateful stream panel with parsed N/M segs progress, stable per-stream grouping, throttled updates and per-task reset during batch processes.
 - **Launch scripts** (`scripts/run_sp_workshop.sh`, `scripts/run_sp_workshop.ps1`): virtualenv resolution order: use `~/VideoProcessingApp/.venv` if it exists, else an existing project `.venv`, else create a new venv at `~/VideoProcessingApp/.venv`. Dependency installs run only when the SHA-256 hash of `requirements.txt` concatenated with `requirements-whisper-ai.txt` changes; the hash is stored in `.requirements_hash` inside the chosen venv. `PATH` includes that venv’s `bin` / `Scripts` before starting the app.
 - **OpenAI Whisper (legacy backends):** transcription uses `sys.executable -m whisper` with the same interpreter as the GUI. Removed `_get_whisper_python()` and the automatic `~/whisper-env` bootstrap.
 
@@ -28,29 +29,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-* Prevent crash when PyTorch fails to load on Windows (DLL error)
-* Optional transcription dependencies now fail gracefully instead of crashing the app
+- Prevent crash when PyTorch fails to load on Windows (DLL error)
+- Optional transcription dependencies now fail gracefully instead of crashing the app
 
 ### Changed
 
-* Transcription install flow no longer blocks or terminates app on failure
-* Updated label: "Install advanced transcription (optional, ~2–3 GB)"
+- Transcription install flow no longer blocks or terminates app on failure
+- Updated label: "Install advanced transcription (optional, ~2–3 GB)"
 
 ## [10.4.0-alpha.21] - 2026-04-03
 
 ### Added
 
-* Quick Start section at top of README for faster onboarding
-* whisper.cpp-cli added to requirements (macOS/Linux only)
+- Quick Start section at top of README for faster onboarding
+- whisper.cpp-cli added to requirements (macOS/Linux only)
 
 ### Changed
 
-* Improved onboarding clarity and first-run experience
-* Run scripts now print guidance before app launch
+- Improved onboarding clarity and first-run experience
+- Run scripts now print guidance before app launch
 
 ### Fixed
 
-* Reduced setup confusion for non-technical users
+- Reduced setup confusion for non-technical users
 
 ## [10.4.0-alpha.18] - 2026-03-31
 
