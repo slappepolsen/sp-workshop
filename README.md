@@ -33,6 +33,7 @@ SP Workshop was created to make international WLW / sapphic content more accessi
 | **Transcription** | Generate subtitles from audio using Whisper when no subtitles exist |
 | **Remuxing** | Tree-based file and track view, add external SRT files, remux MKV or MP4, split audio tracks |
 
+
 ## Install
 
 **Requirements:** **Python 3.12** and **FFmpeg** on your `PATH` when running from source. Platform support: **macOS**, **Windows**, and **Linux**.
@@ -72,10 +73,7 @@ pip install -r requirements.txt
 python app.py
 ```
 
-You can also use the launcher scripts after dependencies are installed: 
-* **macOS** `Start_SP_Workshop.command`
-* * **Windows** `Start_SP_Workshop.bat`
-  * * **Linux** `./Start_SP_Workshop.sh` (see [INSTALL.md](INSTALL.md)).
+You can also use the **launcher scripts** after dependencies are installed (see [INSTALL.md](INSTALL.md)).
 
 If `python3.12` is not available as a command, install Python 3.12 from [python.org](https://www.python.org/downloads/) and ensure it is on `PATH`, or use `py -3.12` on Windows.
 
