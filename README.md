@@ -1,141 +1,52 @@
 # SP Workshop
 
-[![Release](https://img.shields.io/github/v/release/slappepolsen/sp-workshop)](../../releases)
+[![Release](https://img.shields.io/github/v/release/slappepolsen/sp-workshop)](https://github.com/slappepolsen/sp-workshop/releases)
 [![License](https://img.shields.io/github/license/slappepolsen/sp-workshop)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.9--3.12-blue)](https://www.python.org)
-[![Platform](https://img.shields.io/badge/platform-macOS%20|%20Windows%20|%20Linux-lightgrey)](#installation)
+[![Python](https://img.shields.io/badge/python-3.12-blue)](https://www.python.org/downloads/)
+[![Platform](https://img.shields.io/badge/platform-macOS%20|%20Windows%20|%20Linux-lightgrey)](INSTALL.md#installation)
 
 <img src="media/icon.png" width="80" height="80" alt="icon"/>
 
-## Quick Start (if you already know your way around a Terminal)
+SP Workshop is a desktop GUI for **extracting**, **translating**, **transcribing**, and **burning** subtitles into videos. It was created to make international WLW / sapphic content more accessible, and it works for any audiovisual media.
 
-If not, go to [Installation](#installation).
-
-1. Install Python 3.12
-
-2. Open a Terminal in the project folder and run:
-
-   `pip install -r requirements.txt`
-
-   `python app.py`
-
-   (On macOS/Linux you may need: `python3 app.py`)
-
-3. If something is missing:
-   The app will tell you what to install (FFmpeg, N_m3u8DL-RE, etc.)
-
-## Video processing studio GUI 🎬 
-
-🌐 SP Workshop is a desktop GUI for extracting, translating, transcribing, and burning subtitles into videos.
-
-🏳️‍🌈 It was created to make international WLW / sapphic content more accessible, but it works for any audiovisual media.
-
-#### Intended users
-SP Workshop is built for:
-
-- Subtitle editors and translators
-- Archivists and fandom preservation projects
-- Anyone who wants subtitles in the language they actually want
-
-## Features
+## What it does
 
 | Function | Description |
-|--------|-------------|
+|----------|-------------|
 | **Subtitles** | Extract subtitles from MKV files, clean formatting, translate subtitles |
 | **Process Video** | Burn subtitles into video with optional watermarks, output at 720p or 1080p |
 | **Transcription** | Generate subtitles from audio using Whisper when no subtitles exist |
 | **Remuxing** | Tree-based file and track view, add external SRT files, remux MKV or MP4, split audio tracks |
 
+## Who it’s for
 
-## Installation
+- Subtitle editors and translators  
+- Archivists and fandom preservation projects  
+- Anyone who wants subtitles in the language they actually want  
 
-### Prerequisites
+## Get started
 
-- **Python 3.9–3.12** (3.12 recommended; 3.13+ causes Qt errors on macOS)
-  Download from [python.org](https://www.python.org/downloads/) and make sure it is added to PATH during installation.
+- **Latest downloads and release assets:** [Releases](https://github.com/slappepolsen/sp-workshop/releases)  
+- **Full setup (source zip, pre-built apps, optional tools, per-OS notes):** [INSTALL.md](INSTALL.md)  
+- **Quick start from source**
 
-> **Note**
-> During Python setup, keep the option to add Python to PATH enabled (wording varies by version and OS). This allows Terminal or Command Prompt to find `python` / `python3` when you run a command.
+  Requires **Python 3.12** and **FFmpeg**. Full setup: [INSTALL.md](INSTALL.md).
 
----
+  ```bash
+  cd /path/to/sp-workshop
 
-### Installation option 1 (Recommended): Download the source code and run
+  python3.12 -m venv .venv
+  source .venv/bin/activate
 
-This is the most reliable way to run the app.
+  pip install -r requirements.txt
+  python3 app.py
+  ```
 
-#### Step 1: Download the source code
+  On **Windows**, use `py -3.12 -m venv .venv`, then `.venv\Scripts\activate`, then `python app.py`. If `python3.12` is not a command on your system, install Python 3.12 from [python.org](https://www.python.org/downloads/) and ensure it is on `PATH`, or use `python` / `python3` only when that points to 3.12.
 
-1. Go to:
-   https://github.com/slappepolsen/sp-workshop/releases
+## Notes
 
-2. Open the first release on the page.
-
-3. Under **Assets**, click **Source code (zip)**.
-
-4. Open the downloaded file.
-
-5. Extract it (right-click → **Extract All** / **Unzip**).
-
-6. Open the extracted folder (it will be named something like `sp-workshop-<version>`).
-
-#### Step 2: Run the app
-
-Inside the extracted folder:
-
-- **macOS:** double-click `Start_SP_Workshop.command`
-- **Windows:** double-click `Start_SP_Workshop.bat`
-- **Linux:** run `./Start_SP_Workshop.sh`
-
----
-
-### Installation option 2: Pre-built app (experimental)
-
-These are ready-made app files. They are easier to try but may not run on every computer. 
-**If you have trouble, use Installation option 1 (download the source code zip) instead.**
-
-#### How to get the app file
-
-1. Open [GitHub Releases](https://github.com/slappepolsen/sp-workshop/releases).
-2. Click the release at the top of the list (the newest one).
-3. Scroll to **Assets**.
-4. Download the file that matches your computer (use the table below).
-
-| Your computer | File name under **Assets** |
-|----------|----------|
-| **macOS Apple Silicon (M1/M2/M3/M4)** | **`SP_Workshop-macOS-ARM64.dmg`** |
-| **macOS Intel (x64)** | **`SP_Workshop-macOS-x64.dmg`** |
-| **Windows x64** | **`SP_Workshop-Windows-x64.zip`** |
-| **Windows ARM64** | **`SP_Workshop-Windows-ARM64.zip`** |
-| **Linux x64** | **`SP_Workshop-Linux-x64.tar.gz`** |
-
-#### macOS
-
-Open the **`.dmg`** for your CPU, drag **`SP_Workshop.app`** to **Applications** (or run it from the disk image), then open the app. The ARM64 build does not run on Intel Macs (and vice versa).
-
-Gatekeeper may warn the first time: Control-click (or right-click) the app > **Open**, or **System Settings > Privacy & Security > Open Anyway**.
-
-#### Windows
-
-Unzip **`SP_Workshop-Windows-x64.zip`** or **`SP_Workshop-Windows-ARM64.zip`** (match your PC architecture), then run **`SP_Workshop.exe`**.
-Windows SmartScreen may block unsigned downloads: click **More info** > **Run anyway** if you trust the release.
-
-#### Linux (x64)
-
-Extract the tarball and run the binary, for example:
-
-`tar -xzf SP_Workshop-Linux-x64.tar.gz` then `./SP_Workshop`. If needed: `chmod +x SP_Workshop`.
-
-> **Note:** The **Windows ARM64** job uses GitHub’s **`windows-11-arm`** runner, which is intended for **public** repositories. Private forks may need to drop that matrix leg or use a self-hosted ARM64 runner.
-
----
-
-## Optional tools
-
-- N_m3u8DL-RE (optional, for downloads): https://github.com/nilaoda/N_m3u8DL-RE/releases
-- Add it to PATH or configure path in app settings.
-
----
-
+- **Pre-built apps** are experimental; if they fail on your machine, run from source (see [INSTALL.md](INSTALL.md)).  
 
 ## License
 

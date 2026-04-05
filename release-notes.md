@@ -1,3 +1,7 @@
+Release notes format for a **single** release blurb. For the complete, versioned history of the project, use [`CHANGELOG.md`](CHANGELOG.md).
+
+---
+
 2026-03-31
 
 ## Downloads
@@ -21,10 +25,13 @@
 
 > This is a pre-release.
 
+### Added
+- <...>
+
+### Changed
+- <...>
+
 ### Fixed
-- Expand Windows Python discovery to include root-style python.org installs (for example `C:\Python314`).
-- Detect `whisper.cpp-cli` in `C:\Python*\Scripts` and reuse existing installs in pre-built app.
-- Use discovered `C:\Python*\python.exe` for frozen-app `python -m pip` flows when GUI PATH is minimal.
+- <...>
 
-
-**Full changelog:** see [`CHANGELOG.md`](https://github.com/slappepolsen/sp-workshop/blob/main/CHANGELOG.md)
+**Full changelog:** see [\`CHANGELOG.md\`](https://github.com/slappepolsen/sp-workshop/blob/main/CHANGELOG.md)

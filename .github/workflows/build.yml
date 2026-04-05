@@ -190,6 +190,7 @@ jobs:
           mkdir dist\SP_Workshop_Windows
           copy dist\SP_Workshop.exe dist\SP_Workshop_Windows\
           copy README.md dist\SP_Workshop_Windows\
+          copy INSTALL.md dist\SP_Workshop_Windows\
           copy CHANGELOG.md dist\SP_Workshop_Windows\
           copy LICENSE dist\SP_Workshop_Windows\
           copy requirements.txt dist\SP_Workshop_Windows\
@@ -252,7 +253,7 @@ jobs:
           mkdir -p dist/SP_Workshop_Linux
           cp dist/SP_Workshop dist/SP_Workshop_Linux/
           chmod +x dist/SP_Workshop_Linux/SP_Workshop
-          cp README.md CHANGELOG.md LICENSE requirements.txt dist/SP_Workshop_Linux/
+          cp README.md INSTALL.md CHANGELOG.md LICENSE requirements.txt dist/SP_Workshop_Linux/
           cp media/icon.ico media/icon.png media/flowcharts.png dist/SP_Workshop_Linux/
 
       - name: Upload Linux artifact
@@ -285,7 +286,7 @@ jobs:
           (cd SP-WORKSHOP-linux-x64 && tar -czvf "$ROOT/SP_Workshop-Linux-x64.tar.gz" .)
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.release_tag }}
           files: |
