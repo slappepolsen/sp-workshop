@@ -76,7 +76,7 @@ This is the most reliable way to run the app.
 
 5. Extract it (right-click → **Extract All** / **Unzip**).
 
-6. Open the extracted folder (it will be named something like `sp-workshop-main`).
+6. Open the extracted folder (it will be named something like `sp-workshop-<version>`).
 
 #### Step 2: Run the app
 
