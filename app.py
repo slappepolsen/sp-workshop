@@ -9207,8 +9207,12 @@ class VideoProcessingApp(QMainWindow):
         """Build the Download tab."""
         download_tab = QWidget()
         download_tab_layout = QVBoxLayout()
-        download_tab_layout.setSpacing(LAYOUT_SPACING)
+        download_tab_layout.setSpacing(0)
         download_tab.setLayout(download_tab_layout)
+
+        top = QWidget()
+        top_layout = QVBoxLayout(top)
+        top_layout.setSpacing(LAYOUT_SPACING)
 
         _folder_strip_style = "QPushButton { background: none; color: #777; border: none; padding: 2px 6px; font-size: 10px; } QPushButton:hover { color: #555; text-decoration: underline; } QPushButton:pressed { color: #333; }"
         dl_folder_bar = QFrame()
@@ -9228,7 +9232,7 @@ class VideoProcessingApp(QMainWindow):
         dl_folder_layout.addWidget(dl_open_subtitles_top)
         dl_folder_layout.addWidget(dl_open_output_top)
         dl_folder_layout.addStretch()
-        download_tab_layout.addWidget(dl_folder_bar)
+        top_layout.addWidget(dl_folder_bar)
 
         # Naming/options group
         naming_group = QGroupBox("Naming options")
@@ -9287,7 +9291,7 @@ class VideoProcessingApp(QMainWindow):
 
         naming_layout.addLayout(naming_row1)
         naming_group.setLayout(naming_layout)
-        download_tab_layout.addWidget(naming_group)
+        top_layout.addWidget(naming_group)
 
         # Commands group
         commands_group = QGroupBox()
@@ -9315,12 +9319,12 @@ class VideoProcessingApp(QMainWindow):
         self.commands_text.setPlaceholderText(
             'Paste commands, one per line. See "How to get commands" for format.'
         )
-        self.commands_text.setMinimumHeight(90)
-        self.commands_text.setMaximumHeight(120)
+        self.commands_text.setMinimumHeight(64)
+        self.commands_text.setMaximumHeight(88)
         commands_layout.addWidget(self.commands_text)
         commands_group.setLayout(commands_layout)
-        download_tab_layout.addWidget(commands_group)
-        download_tab_layout.addSpacing(-4)
+        top_layout.addWidget(commands_group)
+        top_layout.addSpacing(-4)
 
         # Action row: Quality → Download (primary) → stretch → Clear → Open in LosslessCut
         download_buttons = QHBoxLayout()
@@ -9362,9 +9366,8 @@ class VideoProcessingApp(QMainWindow):
         download_buttons.addStretch()
         download_buttons.addWidget(clear_btn)
         download_buttons.addWidget(open_lossless_btn)
-        download_tab_layout.addLayout(download_buttons)
+        top_layout.addLayout(download_buttons)
 
-        self._download_stream_progress = {}
         live_progress_group = QGroupBox("Live status")
         live_progress_group.setStyleSheet(
             "QGroupBox { font-weight: bold; font-size: 11px; } "
@@ -9380,16 +9383,26 @@ class VideoProcessingApp(QMainWindow):
         self.download_stream_progress_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.download_stream_progress_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         self.download_stream_progress_label.setStyleSheet("color: #333;")
-        self.download_stream_progress_label.setMinimumHeight(44)
+        self.download_stream_progress_label.setMinimumHeight(36)
         self.download_stream_progress_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         live_progress_layout.addWidget(self.download_stream_progress_label)
         live_progress_group.setLayout(live_progress_layout)
-        download_tab_layout.addWidget(live_progress_group)
+        top_layout.addWidget(live_progress_group)
 
         download_log_group, self.download_log_output = self._make_log_panel(
             placeholder="Logs will appear here after processing starts"
         )
-        download_tab_layout.addWidget(download_log_group, 1)
+        self.download_log_output.setMinimumHeight(DOWNLOAD_LOG_MIN_HEIGHT)
+
+        splitter = QSplitter(Qt.Vertical)
+        splitter.addWidget(top)
+        splitter.addWidget(download_log_group)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        splitter.setCollapsible(0, False)
+        splitter.setCollapsible(1, False)
+        splitter.setSizes([220, 420])
+        download_tab_layout.addWidget(splitter)
 
         return download_tab
 
@@ -9715,7 +9728,6 @@ class VideoProcessingApp(QMainWindow):
         self.progress_group.setVisible(not is_download)
 
         if is_download:
-            self._download_stream_progress = {}
             self.download_stream_progress_label.setText("—")
 
         if not is_download:
@@ -9772,7 +9784,6 @@ class VideoProcessingApp(QMainWindow):
         """Handle progress update."""
         # Each batch download task emits one update before its subprocess; clear stale live rows.
         if self.current_operation == "Downloading episodes":
-            self._download_stream_progress = {}
             self.download_stream_progress_label.setText("—")
 
         # Extract % from filename
@@ -9816,22 +9827,11 @@ class VideoProcessingApp(QMainWindow):
             status_msg += f" ({current}/{total})"
         self.statusBar().showMessage(status_msg)
     
-    def _download_progress_key(self, message: str) -> str:
-        """Map a compact progress line to a stable dict key (see plan: phase vs stream head)."""
-        return _n_m3u8dl_progress_throttle_key(message)
-
     def on_download_stream_progress(self, message: str):
         """Update live multi-stream status (not appended to the download log)."""
         if not message:
             return
-        key = self._download_progress_key(message)
-        self._download_stream_progress[key] = message
-        ordered = sorted(
-            self._download_stream_progress.items(),
-            key=lambda kv: (0 if kv[0] == "__phase__" else 1, kv[0].lower()),
-        )
-        lines = [f"↓ {text}" for _, text in ordered]
-        self.download_stream_progress_label.setText("\n".join(lines))
+        self.download_stream_progress_label.setText(message)
 
     def on_script_finished(self, success: bool):
         """Handle script completion."""
@@ -9848,7 +9848,6 @@ class VideoProcessingApp(QMainWindow):
         self.stop_btn.setText("Stop")
         self.transcribe_stop_btn.setEnabled(False)
         self.transcribe_stop_btn.setText("Stop")
-        self._download_stream_progress = {}
         self.download_stream_progress_label.setText("—")
         if success:
             self.log("✓ Operation completed successfully.")
