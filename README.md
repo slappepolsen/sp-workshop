@@ -83,7 +83,7 @@ Download the DMG, ZIP, or tarball for your OS from **[Releases](https://github.c
 
 ## Contributing
 
-Issues and pull requests are welcome on [GitHub](https://github.com/slappepolsen/sp-workshop).
+[Issues](https://github.com/slappepolsen/sp-workshop/issues) and [pull requests](https://github.com/slappepolsen/sp-workshop/pulls) are welcome.
 
 ## License
 

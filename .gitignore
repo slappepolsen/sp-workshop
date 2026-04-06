@@ -41,6 +41,9 @@ RELEASE_CHECKLIST.md
 BENCHMARKS.md
 run.sh
 
+# Local / draft release notes (tracked copy may live elsewhere)
+docs/release-notes.md
+
 # IDE
 .idea/
 .vscode/
