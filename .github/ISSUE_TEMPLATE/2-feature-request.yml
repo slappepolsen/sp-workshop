@@ -1,0 +1,52 @@
+name: Feature request
+description: Suggest an improvement or new capability
+title: "[Feature]: "
+labels: ["enhancement", "triage"]
+type: feature
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for sharing an idea. Clear context helps us evaluate faster.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: What pain point are you trying to solve?
+      placeholder: "I struggle with ... because ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What would you like to happen?
+      placeholder: "It would help if ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any workaround or alternative approach you already tried?
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional_context
+    attributes:
+      label: Additional context
+      description: Mockups, examples, links, or screenshots.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and did not find the same request.
+          required: true

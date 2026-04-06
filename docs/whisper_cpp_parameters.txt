@@ -1,0 +1,79 @@
+Whisper CPP (whisper-cli) extra flags
+======================================
+Note: -l / --language, -m / --model, -f / --file, output format flags
+and VAD flags are already set by the main tab. Only add flags not listed there.
+
+By default the app injects -ml 42 -sow -bs 2 -bo 3 -nf (two-line cue wrap + stable decode).
+If you add -ml or --max-len here, the built-in -ml is omitted so your value is used.
+
+Core decoding
+-------------
+-t N,   --threads N          [4]      number of threads for computation
+-p N,   --processors N       [1]      number of processors
+-bo N,  --best-of N          [5]      best-of candidates to keep
+-bs N,  --beam-size N        [5]      beam size for beam search
+-tp,    --temperature N      [0.00]   sampling temperature (0-1)
+-tpi,   --temperature-inc N  [0.20]   temperature increment on fallback
+-nf,    --no-fallback        [false]  disable temperature fallback
+-mc N,  --max-context N      [-1]     max text context tokens to store
+-ml N,  --max-len N          [0]      max segment length in characters
+-sow,   --split-on-word      [false]  split on word rather than token
+-ac N,  --audio-ctx N        [0]      audio context size (0 = all)
+
+Quality / filtering thresholds
+-------------------------------
+-wt N,  --word-thold N       [0.01]   word timestamp probability threshold
+-et N,  --entropy-thold N    [2.40]   entropy threshold for decoder fail
+-lpt N, --logprob-thold N    [-1.00]  log probability threshold for fail
+-nth N, --no-speech-thold N  [0.60]   no-speech probability threshold
+
+Output options
+--------------
+-otxt,  --output-txt         [false]  also write a .txt file
+-ovtt,  --output-vtt         [false]  also write a .vtt file
+-olrc,  --output-lrc         [false]  also write a .lrc file
+-oj,    --output-json        [false]  also write a .json file
+-ojf,   --output-json-full   [false]  include token-level detail in JSON
+-nt,    --no-timestamps      [false]  omit timestamps from output
+-ps,    --print-special      [false]  print special tokens
+        --print-confidence   [false]  print confidence scores
+-pp,    --print-progress     [false]  print progress to stderr
+
+Translation / diarization
+-------------------------
+-tr,    --translate          [false]  translate to English
+-di,    --diarize            [false]  stereo audio diarization
+-tdrz,  --tinydiarize        [false]  tinydiarize (requires tdrz model)
+
+Advanced / experimental
+-----------------------
+        --prompt PROMPT      []       initial prompt (max n_text_ctx/2 tokens)
+        --carry-initial-prompt [false] always prepend initial prompt
+-dtw MODEL --dtw MODEL       []       compute token-level timestamps
+-ng,    --no-gpu             [false]  disable GPU
+-fa,    --flash-attn         [true]   enable flash attention
+-nfa,   --no-flash-attn      [false]  disable flash attention
+-sns,   --suppress-nst       [false]  suppress non-speech tokens
+        --suppress-regex REGEX []     regex matching tokens to suppress
+        --grammar GRAMMAR    []       GBNF grammar to guide decoding
+        --grammar-rule RULE  []       top-level GBNF grammar rule name
+        --grammar-penalty N  [100.0]  scale down logits of non-grammar tokens
+-debug, --debug-mode         [false]  dump log_mel and other debug info
+-ls,    --log-score          [false]  log best decoder scores of tokens
+
+Voice Activity Detection (VAD) — set by main tab if model configured
+---------------------------------------------------------------------
+        --vad                [false]  enable VAD
+-vm FNAME, --vad-model FNAME []       VAD model path (.onnx)
+-vt N,  --vad-threshold N    [0.50]   speech probability threshold
+-vspd N, --vad-min-speech-duration-ms N [250]  min speech duration (ms)
+-vsd N,  --vad-min-silence-duration-ms N [100]  min silence to split (ms)
+-vmsd N, --vad-max-speech-duration-s  N [FLT_MAX] auto-split threshold (s)
+-vp N,  --vad-speech-pad-ms N [30]   extend segments by this padding (ms)
+-vo N,  --vad-samples-overlap N [0.10] overlap between segments (s)
+
+Time / clipping
+---------------
+-ot N,  --offset-t N         [0]      time offset in milliseconds
+-on N,  --offset-n N         [0]      segment index offset
+-d  N,  --duration N         [0]      duration of audio to process (ms)

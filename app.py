@@ -77,7 +77,7 @@ try:
         QStyleFactory, QCheckBox, QStackedWidget, QTextBrowser, QComboBox,
         QGraphicsDropShadowEffect, QTabWidget, QSpinBox, QDoubleSpinBox, 
         QScrollArea, QListWidget, QListWidgetItem, QTreeWidget, 
-        QTreeWidgetItem, QHeaderView, QMenu, QFrame, QSizePolicy,
+        QTreeWidgetItem, QHeaderView, QMenu, QFrame, QSizePolicy, QSplitter,
     )
     from PyQt5.QtCore import QThread, pyqtSignal, Qt, QProcess, QUrl, QTimer
     from PyQt5.QtGui import QFont, QIcon, QPainter, QPen, QDesktopServices
@@ -101,6 +101,8 @@ DEFAULT_WHISPER_VOLUME_BOOST = 1.75
 LAYOUT_SPACING = 12
 SECTION_SPACING = 8
 LOG_MIN_HEIGHT = 100
+# Download tab log panel: prefer more vertical space for output (splitter + min height).
+DOWNLOAD_LOG_MIN_HEIGHT = 160
 
 # Whisper languages: (display name, code)
 TRANSCRIBE_LANGUAGES = [
@@ -936,99 +938,217 @@ def _line_looks_like_n_m3u8dl_progress_line(line: str) -> bool:
     return False
 
 
-def _n_m3u8dl_progress_throttle_key(parsed: str) -> str:
-    """Key for 1s throttling in download_episodes; matches MainWindow._download_progress_key logic."""
-    if not parsed or not str(parsed).strip():
-        return "__empty__"
-    s = str(parsed).strip()
-    if (
-        s.startswith("Downloading:")
-        or s.startswith("Muxing:")
-        or s.startswith("Merging")
-        or s.startswith("Decrypting")
-    ):
-        return "__phase__"
-    if " · " in s:
-        head = s.split(" · ", 1)[0].strip()
-        head = re.sub(r"^[↓\s]+", "", head)
-        if head:
-            return head
-    return s
+def _short_label_for_n_m3u8dl_stream(kind: str, rest: str) -> str:
+    """Compact label for one Vid/Aud/Sub line (matches Live status row)."""
+    rest = rest.strip()
+    if kind == "Vid":
+        m = re.search(r"(\d+x\d+)", rest)
+        return f"Vid {m.group(1)}" if m else f"Vid {rest[:48]}"
+    if kind == "Aud":
+        m = re.search(r"(\d+)\s*Kbps", rest, re.IGNORECASE)
+        if m:
+            return f"Aud {m.group(1)} Kbps"
+        m = re.search(r"audio_[a-z]+=(\d+)", rest, re.IGNORECASE)
+        if m:
+            return f"Aud {int(m.group(1)) // 1000} Kbps"
+        return f"Aud {rest[:48]}"
+    if kind == "Sub":
+        m = re.search(r"textstream_[a-z]+=(\d+)", rest, re.IGNORECASE)
+        if m:
+            return f"Sub textstream={m.group(1)}"
+        m = re.search(r"\b(\d{6,})\b", rest)
+        if m:
+            return f"Sub id={m.group(1)}"
+        m = re.search(r"\b([a-z]{2,3})\b", rest, re.IGNORECASE)
+        if m:
+            return f"Sub {m.group(1).lower()}"
+        return f"Sub {rest[:48]}"
+    return f"{kind} {rest[:48]}"
 
 
-def _parse_n_m3u8dl_progress(line: str) -> Optional[str]:
-    """Parse an N_m3u8DL-RE progress bar line into a compact status string.
+def _parse_n_m3u8dl_selected_streams_line(line: str) -> Optional[Tuple[str, str]]:
+    """If line is INFO : Vid|Aud|Sub …, return (kind, short_label)."""
+    clean = _strip_ansi(line).replace("\r", "").strip()
+    if not clean:
+        return None
+    m = re.search(r"INFO\s*:\s*(Vid|Aud|Sub)\s+(.+)$", clean, re.IGNORECASE)
+    if not m:
+        return None
+    kind, rest = m.group(1), m.group(2)
+    pipe = rest.find("|")
+    if pipe >= 0:
+        rest = rest[:pipe].strip()
+    return kind, _short_label_for_n_m3u8dl_stream(kind, rest)
 
-    Returns a formatted string like
-      "Vid 1920x1080 | 5002 Kbps | Main · 23/212 segs · 11.15 MBps · ETA 00:01:35"
-    or None if the line cannot be parsed.
-    """
+
+def _extract_n_m3u8dl_seg_progress(line: str) -> Optional[Tuple[str, int, int]]:
+    """Parse a live progress line into (label_before_segs, current, total). Unicode bar or N/M segs only."""
     clean = _strip_ansi(line).replace("\r", "").strip()
     if not clean:
         return None
 
-    # I am attempting at making a better progress bar, but so far both formats suck
-    # Format 1: Unicode progress bar lines (contains "━")
-    bar_idx = clean.find('━')
+    bar_idx = clean.find("━")
     if bar_idx >= 0:
         label = clean[:bar_idx].strip()
+        label = re.sub(r"^[↓\s]+", "", label).strip()
         if not label:
             return None
-        after_bar = clean[bar_idx:]
-        seg_match = re.search(r'(\d+)/(\d+)', after_bar)
-        segments = seg_match.group(0) if seg_match else '?/?'
-        speed_match = re.search(r'[\d.]+\s*[KMG]?B(?:ps|/s)', after_bar, re.IGNORECASE)
-        speed = speed_match.group(0).strip() if speed_match else '-'
-        eta_match = re.search(r'\d{2}:\d{2}:\d{2}|--:--:--', after_bar)
-        eta = eta_match.group(0) if eta_match else '--:--:--'
-        return f"{label} · {segments} segs · {speed} · ETA {eta}"
+        after = clean[bar_idx:]
+        seg_m = re.search(r"(\d+)\s*/\s*(\d+)", after)
+        if not seg_m:
+            return None
+        return label, int(seg_m.group(1)), int(seg_m.group(2))
 
-    # Format 3: no Unicode bar; label is text before "N/M segs", tail used like Format 1's after_bar
-    seg_m3 = re.search(r"\b(\d+/\d+\s+segs)\b", clean, re.IGNORECASE)
-    if seg_m3 and "━" not in clean:
-        label = clean[: seg_m3.start()].strip()
-        label = re.sub(r"(?:\s*[·|])+\s*$", "", label).strip()
-        label = re.sub(r"^[↓\s]+", "", label).strip()
-        if label:
-            segs_s = seg_m3.group(1).strip()
-            tail = clean[seg_m3.end() :].lstrip()
-            if tail.startswith("·"):
-                tail = tail[1:].lstrip()
-            speed_match = re.search(
-                r"[\d.]+\s*[KMG]?(?:Bps|B/s|bps)|^[\d.]+Bps$",
-                tail,
-                re.IGNORECASE,
-            )
-            speed = speed_match.group(0).strip() if speed_match else "-"
-            eta_match = re.search(r"\d{2}:\d{2}:\d{2}|--:--:--", tail)
-            eta = eta_match.group(0) if eta_match else "--:--:--"
-            return f"{label} · {segs_s} · {speed} · ETA {eta}"
-
-    # Format 2: INFO lines in the style:
-    # "INFO : Vid ... | 3023 Kbps | ... | 214 Segments | Main | ~28m26s"
-    if "|" not in clean or "segment" not in clean.lower():
+    seg_m3 = re.search(r"\b(\d+)\s*/\s*(\d+)\s+segs\b", clean, re.IGNORECASE)
+    if not seg_m3 or "━" in clean:
         return None
-    payload = clean.split("INFO :", 1)[-1].strip()
-    parts = [p.strip() for p in payload.split("|") if p.strip()]
-    if not parts:
+    label = clean[: seg_m3.start()].strip()
+    label = re.sub(r"(?:\s*[·|])+\s*$", "", label).strip()
+    label = re.sub(r"^[↓\s]+", "", label).strip()
+    if not label:
+        return None
+    return label, int(seg_m3.group(1)), int(seg_m3.group(2))
+
+
+def _match_n_m3u8dl_progress_to_slot(progress_label: str, selected: List[str]) -> int:
+    """Pick best matching slot index for a progress line label, or -1."""
+    pl = re.sub(r"^[↓\s]+", "", progress_label).strip()
+    if not pl or not selected:
+        return -1
+
+    def score(sel: str) -> int:
+        sc = 0
+        for prefix in ("Vid", "Aud", "Sub"):
+            if pl.startswith(prefix) and sel.startswith(prefix):
+                sc += 5
+                break
+        else:
+            return 0
+        vm = re.search(r"(\d+x\d+)", pl)
+        if vm and vm.group(1) in sel:
+            sc += 20
+        km = re.search(r"(\d+)\s*Kbps", pl, re.IGNORECASE)
+        if km and km.group(1) in sel.replace(" ", ""):
+            sc += 15
+        am = re.search(r"audio_[a-z]+=(\d+)", pl, re.IGNORECASE)
+        if am:
+            kb = int(am.group(1)) // 1000
+            if str(kb) in sel or f"{kb} Kbps" in sel:
+                sc += 15
+        if pl.startswith("Sub") and sel.startswith("Sub"):
+            langs = re.findall(r"\b([a-z]{2,3})\b", pl, re.IGNORECASE)
+            for lg in langs:
+                if lg.lower() in ("vid", "aud", "sub"):
+                    continue
+                if re.search(rf"\b{re.escape(lg.lower())}\b", sel, re.IGNORECASE):
+                    sc += 12
+            tid = re.search(r"textstream=\s*(\d+)", sel, re.IGNORECASE)
+            if tid and tid.group(1) in pl:
+                sc += 15
+            mid = re.search(r"\b(\d{6,})\b", pl)
+            if mid and mid.group(1) in sel:
+                sc += 10
+        return sc
+
+    best_i, best_s = -1, 0
+    for i, sel in enumerate(selected):
+        s = score(sel)
+        if s > best_s:
+            best_i, best_s = i, s
+    if best_s >= 5:
+        return best_i
+
+    # Fallback: first row matching stream family (Vid/Aud/Sub)
+    for prefix in ("Vid", "Aud", "Sub"):
+        if pl.startswith(prefix):
+            for i, sel in enumerate(selected):
+                if sel.startswith(prefix):
+                    return i
+            break
+    return -1
+
+
+def _render_n_m3u8dl_live_status(selected: List[str], seg_by_slot: Dict[int, Tuple[int, int]]) -> str:
+    """One line per selected stream: label · cur/tot segs."""
+    lines = []
+    for i, lab in enumerate(selected):
+        pair = seg_by_slot.get(i)
+        if pair:
+            cur, tot = pair
+            seg_s = f"{cur}/{tot} segs"
+        else:
+            seg_s = "…"
+        lines.append(f"↓ {lab} · {seg_s}")
+    return "\n".join(lines)
+
+
+def _compact_n_m3u8dl_gui_log_line(raw_line: str, state: Dict[str, object]) -> Optional[str]:
+    """Shorten or drop N_m3u8DL-RE lines in the Download tab log. Full stdout stays in the debug log file."""
+    clean = _strip_ansi(raw_line).replace("\r", "").strip()
+    if not clean:
+        return None
+    low = clean.lower()
+
+    if "extracted, there are" in low:
+        state["after_extracted_before_selected"] = True
+
+    if "selected streams:" in low:
+        state["after_extracted_before_selected"] = False
+        state["in_selected_stream_block"] = True
+        return clean
+
+    if state.get("in_selected_stream_block"):
+        if re.search(r"INFO\s*:\s*(Vid|Aud|Sub)\s+", clean, re.I):
+            return None
+        state["in_selected_stream_block"] = False
+
+    if state.get("after_extracted_before_selected") and re.search(
+        r"INFO\s*:\s*(Vid|Aud|Sub)\s+", clean, re.I
+    ):
         return None
 
-    label = parts[0]
-    bitrate = next((p for p in parts if re.search(r'\b\d+(?:\.\d+)?\s*[KMG]bps\b', p, re.IGNORECASE)), None)
-    segments = next((p for p in parts if re.search(r'\b\d+\s+Segments?\b', p, re.IGNORECASE)), None)
-    eta = next(
-        (p for p in parts if p.startswith("~") or re.search(r'\d{1,2}m\d{1,2}s|--:--:--|\d{2}:\d{2}:\d{2}', p)),
-        None,
-    )
+    if "output is redirected" in low:
+        return None
+    if "n_m3u8dl-re" in low and "beta version" in low:
+        return None
+    if "content matched:" in low:
+        return None
+    if "parsing streams" in low:
+        return None
+    if "writing meta json" in low:
+        return None
+    if "muxafterdone is detected" in low:
+        return None
+    if re.search(r"\btype:\s*cenc\b", low):
+        return None
+    if "pssh(wv):" in low:
+        return None
+    if re.search(r"\bkid:\s*", low):
+        return None
+    if "reading media info" in low:
+        return None
+    if re.search(r"\[0x[0-9a-f]+\]:", clean, re.I):
+        return None
+    if "extracting vtt" in low:
+        return None
+    if "the entire file has been cut into small segments" in low:
+        return None
+    if "WARN" in clean and " => " in clean:
+        return None
 
-    out = [label]
-    if bitrate:
-        out.append(bitrate)
-    if segments:
-        out.append(segments)
-    if eta:
-        out.append(f"ETA {eta}" if eta.startswith("~") else eta)
-    return " · ".join(out)
+    if "loading url:" in low:
+        m = re.search(r"Loading URL:\s*(.+)$", clean, re.I)
+        if m:
+            url = m.group(1).strip()
+            try:
+                tail = (urlparse(url).path or "").rsplit("/", 1)[-1] or url[-56:]
+            except Exception:
+                tail = url[-56:]
+            head = clean[: m.start()].rstrip()
+            short = f"{head} Loading URL: …/{tail}" if head else f"INFO : Loading URL: …/{tail}"
+            return short
+
+    return clean
 
 
 # ============================================================================
@@ -1174,12 +1294,21 @@ def download_episodes(
                 )
 
                 output_lines = []
-                last_progress_emit: dict = {}
+                selected_stream_labels: List[str] = []
+                collecting_selected = False
+                seg_by_slot: Dict[int, Tuple[int, int]] = {}
+                fallback_seg_by_label: Dict[str, Tuple[int, int]] = {}
+                last_panel_emit = 0.0
+                n_m3u8dl_gui_log_state: Dict[str, object] = {
+                    "after_extracted_before_selected": False,
+                    "in_selected_stream_block": False,
+                }
 
                 while True:
                     line_output = process.stdout.readline()
                     if not line_output:
                         break
+                    clean_full = _strip_ansi(line_output).replace("\r", "")
                     is_progress_line = _line_looks_like_n_m3u8dl_progress_line(line_output)
                     if not is_progress_line:
                         cleaned = _strip_ansi(line_output)
@@ -1189,14 +1318,46 @@ def download_episodes(
                     if line_output:
                         output_lines.append(line_output)
 
+                        if "Selected streams:" in clean_full:
+                            selected_stream_labels = []
+                            seg_by_slot = {}
+                            fallback_seg_by_label = {}
+                            collecting_selected = True
+
+                        if collecting_selected:
+                            parsed_sel = _parse_n_m3u8dl_selected_streams_line(line_output)
+                            if parsed_sel:
+                                selected_stream_labels.append(parsed_sel[1])
+                                if stream_progress_callback:
+                                    stream_progress_callback(
+                                        _render_n_m3u8dl_live_status(selected_stream_labels, seg_by_slot)
+                                    )
+                            elif clean_full.strip():
+                                collecting_selected = False
+
                         if stream_progress_callback:
-                            parsed = _parse_n_m3u8dl_progress(line_output)
-                            if parsed:
-                                stream_key = _n_m3u8dl_progress_throttle_key(parsed)
+                            ext = _extract_n_m3u8dl_seg_progress(line_output)
+                            if ext:
+                                label, cur, tot = ext
                                 now = time.time()
-                                if now - last_progress_emit.get(stream_key, 0) >= 1.0:
-                                    last_progress_emit[stream_key] = now
-                                    stream_progress_callback(parsed)
+                                if selected_stream_labels:
+                                    slot = _match_n_m3u8dl_progress_to_slot(label, selected_stream_labels)
+                                    if slot >= 0:
+                                        seg_by_slot[slot] = (cur, tot)
+                                        if now - last_panel_emit >= 0.5:
+                                            last_panel_emit = now
+                                            stream_progress_callback(
+                                                _render_n_m3u8dl_live_status(selected_stream_labels, seg_by_slot)
+                                            )
+                                else:
+                                    fallback_seg_by_label[label] = (cur, tot)
+                                    if now - last_panel_emit >= 0.5:
+                                        last_panel_emit = now
+                                        lines_fb = [
+                                            f"↓ {lb} · {a}/{b} segs"
+                                            for lb, (a, b) in sorted(fallback_seg_by_label.items())
+                                        ]
+                                        stream_progress_callback("\n".join(lines_fb))
 
                         # Skip file access warnings because there's no way back here lol
                         is_file_access_warning = 'The process cannot access the file' in line_output
@@ -1218,23 +1379,9 @@ def download_episodes(
                         )
 
                         if should_log and log_callback:
-                            log_callback(f"  {line_output}")
-
-                        # Drive the stream-status label with key milestone lines
-                        # Not that it works HAHA
-                        if should_log and stream_progress_callback:
-                            clean_line = _strip_ansi(line_output)
-                            if 'Start downloading' in clean_line:
-                                desc = clean_line.split('Start downloading...', 1)[-1].strip()
-                                if desc:
-                                    stream_progress_callback(f"Downloading: {desc[:100]}")
-                            elif 'Binary merging' in clean_line:
-                                stream_progress_callback("Merging segments…")
-                            elif 'Decrypting using' in clean_line:
-                                stream_progress_callback("Decrypting…")
-                            elif 'Muxing to' in clean_line:
-                                dest = clean_line.split('Muxing to', 1)[-1].strip()
-                                stream_progress_callback(f"Muxing: {dest}")
+                            compact = _compact_n_m3u8dl_gui_log_line(line_output, n_m3u8dl_gui_log_state)
+                            if compact is not None:
+                                log_callback(f"  {compact}")
 
                 returncode = process.wait()
 
@@ -5020,6 +5167,30 @@ def _is_frozen_pyinstaller() -> bool:
     return bool(getattr(sys, "frozen", False)) or hasattr(sys, "_MEIPASS")
 
 
+def _whisper_docs_dir() -> Path:
+    """Directory containing ``docs/*.txt`` parameter references (repo root or PyInstaller bundle)."""
+    if _is_frozen_pyinstaller():
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            return Path(meipass) / "docs"
+        return Path(sys.executable).resolve().parent / "docs"
+    return Path(__file__).resolve().parent / "docs"
+
+
+def _load_whisper_docs_text(filename: str) -> str:
+    """Load UTF-8 text from ``docs/<filename>`` for Whisper Options reference panes."""
+    path = _whisper_docs_dir() / filename
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return (
+            "(Could not load Whisper parameter reference.)\n\n"
+            f"Expected file: {path}\n"
+            f"Error: {exc}"
+        )
+    return text.replace("\r\n", "\n")
+
+
 def _cli_path_extra_dirs() -> List[str]:
     """Dirs to prepend to PATH for subprocess CLI discovery.
 
@@ -7249,137 +7420,11 @@ class WhisperOptionsDialog(QDialog):
 
     def get_cpp_parameters_reference(self) -> str:
         """Parameter reference for whisper-cli (whisper.cpp)."""
-        return """\
-Whisper CPP (whisper-cli) extra flags
-======================================
-Note: -l / --language, -m / --model, -f / --file, output format flags
-and VAD flags are already set by the main tab. Only add flags not listed there.
-
-By default the app injects -ml 42 -sow -bs 2 -bo 3 -nf (two-line cue wrap + stable decode).
-If you add -ml or --max-len here, the built-in -ml is omitted so your value is used.
-
-Core decoding
--------------
--t N,   --threads N          [4]      number of threads for computation
--p N,   --processors N       [1]      number of processors
--bo N,  --best-of N          [5]      best-of candidates to keep
--bs N,  --beam-size N        [5]      beam size for beam search
--tp,    --temperature N      [0.00]   sampling temperature (0-1)
--tpi,   --temperature-inc N  [0.20]   temperature increment on fallback
--nf,    --no-fallback        [false]  disable temperature fallback
--mc N,  --max-context N      [-1]     max text context tokens to store
--ml N,  --max-len N          [0]      max segment length in characters
--sow,   --split-on-word      [false]  split on word rather than token
--ac N,  --audio-ctx N        [0]      audio context size (0 = all)
-
-Quality / filtering thresholds
--------------------------------
--wt N,  --word-thold N       [0.01]   word timestamp probability threshold
--et N,  --entropy-thold N    [2.40]   entropy threshold for decoder fail
--lpt N, --logprob-thold N    [-1.00]  log probability threshold for fail
--nth N, --no-speech-thold N  [0.60]   no-speech probability threshold
-
-Output options
---------------
--otxt,  --output-txt         [false]  also write a .txt file
--ovtt,  --output-vtt         [false]  also write a .vtt file
--olrc,  --output-lrc         [false]  also write a .lrc file
--oj,    --output-json        [false]  also write a .json file
--ojf,   --output-json-full   [false]  include token-level detail in JSON
--nt,    --no-timestamps      [false]  omit timestamps from output
--ps,    --print-special      [false]  print special tokens
-        --print-confidence   [false]  print confidence scores
--pp,    --print-progress     [false]  print progress to stderr
-
-Translation / diarization
--------------------------
--tr,    --translate          [false]  translate to English
--di,    --diarize            [false]  stereo audio diarization
--tdrz,  --tinydiarize        [false]  tinydiarize (requires tdrz model)
-
-Advanced / experimental
------------------------
-        --prompt PROMPT      []       initial prompt (max n_text_ctx/2 tokens)
-        --carry-initial-prompt [false] always prepend initial prompt
--dtw MODEL --dtw MODEL       []       compute token-level timestamps
--ng,    --no-gpu             [false]  disable GPU
--fa,    --flash-attn         [true]   enable flash attention
--nfa,   --no-flash-attn      [false]  disable flash attention
--sns,   --suppress-nst       [false]  suppress non-speech tokens
-        --suppress-regex REGEX []     regex matching tokens to suppress
-        --grammar GRAMMAR    []       GBNF grammar to guide decoding
-        --grammar-rule RULE  []       top-level GBNF grammar rule name
-        --grammar-penalty N  [100.0]  scale down logits of non-grammar tokens
--debug, --debug-mode         [false]  dump log_mel and other debug info
--ls,    --log-score          [false]  log best decoder scores of tokens
-
-Voice Activity Detection (VAD) — set by main tab if model configured
----------------------------------------------------------------------
-        --vad                [false]  enable VAD
--vm FNAME, --vad-model FNAME []       VAD model path (.onnx)
--vt N,  --vad-threshold N    [0.50]   speech probability threshold
--vspd N, --vad-min-speech-duration-ms N [250]  min speech duration (ms)
--vsd N,  --vad-min-silence-duration-ms N [100]  min silence to split (ms)
--vmsd N, --vad-max-speech-duration-s  N [FLT_MAX] auto-split threshold (s)
--vp N,  --vad-speech-pad-ms N [30]   extend segments by this padding (ms)
--vo N,  --vad-samples-overlap N [0.10] overlap between segments (s)
-
-Time / clipping
----------------
--ot N,  --offset-t N         [0]      time offset in milliseconds
--on N,  --offset-n N         [0]      segment index offset
--d  N,  --duration N         [0]      duration of audio to process (ms)"""
+        return _load_whisper_docs_text("whisper_cpp_parameters.txt")
 
     def get_parameters_reference(self) -> str:
         """Parameter reference for openai-whisper (Python package)."""
-        return """\
-OpenAI Whisper (python -m whisper) extra flags
-===============================================
-Note: --language, --model, --output_dir, --output_format and --task
-are already set by the main tab. Only add flags not listed there.
-
-Core decoding
--------------
---temperature TEMPERATURE         [0]      sampling temperature; 0 = greedy
---best_of BEST_OF                 [5]      candidates when temperature > 0
---beam_size BEAM_SIZE             [5]      beams in beam search (temperature=0)
---patience PATIENCE               [None]   beam search patience multiplier
---length_penalty LENGTH_PENALTY   [None]   token length penalty (alpha)
-
-Context / prompting
--------------------
---initial_prompt INITIAL_PROMPT            optional prompt for first window
---carry_initial_prompt BOOL       [False]  prepend prompt to every decode()
---condition_on_previous_text BOOL [True]   use prior output as context prompt
---suppress_tokens SUPPRESS_TOKENS [-1]     comma-separated token ids to suppress
-
-Quality / filtering thresholds
--------------------------------
---compression_ratio_threshold N   [2.4]    gzip ratio above = failed decode
---logprob_threshold N             [-1.0]   avg log-prob below = failed decode
---no_speech_threshold N           [0.6]    nospeech prob above = silence
---temperature_increment_on_fallback N [0.2] temp increase when decode fails
-
-Hardware
---------
---device DEVICE                   [cpu]    pytorch device (cpu / cuda / mps)
---fp16 BOOL                       [True]   fp16 inference (faster on GPU)
---threads THREADS                 [0]      torch CPU threads (0 = auto)
-
-Word-level timestamps (experimental)
--------------------------------------
---word_timestamps BOOL            [False]  extract per-word timestamps
---highlight_words BOOL            [False]  underline words in srt/vtt output
---max_line_width N                [None]   max chars per line (needs word_ts)
---max_line_count N                [None]   max lines per segment (needs word_ts)
---max_words_per_line N            [None]   max words per line (needs word_ts)
---prepend_punctuations CHARS               punctuation to attach to next word
---append_punctuations CHARS                punctuation to attach to prev word
---hallucination_silence_threshold N [None] skip silence if hallucination likely
-
-Clipping
---------
---clip_timestamps CLIP_TIMESTAMPS [0]      start,end,... timestamps (seconds)"""
+        return _load_whisper_docs_text("whisper_openai_parameters.txt")
 
     # ── Save ─────────────────────────────────────────────────────────────────
 

@@ -1,0 +1,47 @@
+OpenAI Whisper (python -m whisper) extra flags
+===============================================
+Note: --language, --model, --output_dir, --output_format and --task
+are already set by the main tab. Only add flags not listed there.
+
+Core decoding
+-------------
+--temperature TEMPERATURE         [0]      sampling temperature; 0 = greedy
+--best_of BEST_OF                 [5]      candidates when temperature > 0
+--beam_size BEAM_SIZE             [5]      beams in beam search (temperature=0)
+--patience PATIENCE               [None]   beam search patience multiplier
+--length_penalty LENGTH_PENALTY   [None]   token length penalty (alpha)
+
+Context / prompting
+-------------------
+--initial_prompt INITIAL_PROMPT            optional prompt for first window
+--carry_initial_prompt BOOL       [False]  prepend prompt to every decode()
+--condition_on_previous_text BOOL [True]   use prior output as context prompt
+--suppress_tokens SUPPRESS_TOKENS [-1]     comma-separated token ids to suppress
+
+Quality / filtering thresholds
+-------------------------------
+--compression_ratio_threshold N   [2.4]    gzip ratio above = failed decode
+--logprob_threshold N             [-1.0]   avg log-prob below = failed decode
+--no_speech_threshold N           [0.6]    nospeech prob above = silence
+--temperature_increment_on_fallback N [0.2] temp increase when decode fails
+
+Hardware
+--------
+--device DEVICE                   [cpu]    pytorch device (cpu / cuda / mps)
+--fp16 BOOL                       [True]   fp16 inference (faster on GPU)
+--threads THREADS                 [0]      torch CPU threads (0 = auto)
+
+Word-level timestamps (experimental)
+-------------------------------------
+--word_timestamps BOOL            [False]  extract per-word timestamps
+--highlight_words BOOL            [False]  underline words in srt/vtt output
+--max_line_width N                [None]   max chars per line (needs word_ts)
+--max_line_count N                [None]   max lines per segment (needs word_ts)
+--max_words_per_line N            [None]   max words per line (needs word_ts)
+--prepend_punctuations CHARS               punctuation to attach to next word
+--append_punctuations CHARS                punctuation to attach to prev word
+--hallucination_silence_threshold N [None] skip silence if hallucination likely
+
+Clipping
+--------
+--clip_timestamps CLIP_TIMESTAMPS [0]      start,end,... timestamps (seconds)
