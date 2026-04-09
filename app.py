@@ -737,15 +737,15 @@ def _argos_translate_srt_file(
     target_file.write_text(translated_text, encoding=encoding)
 
 
-# --- Google Translate V1 (gtx) — same HTTP pattern as Subtitle Edit GoogleTranslateV1.cs ---------
+# --- Google Translate V1 (gtx) — translate.googleapis.com translate_a/single?client=gtx ---------
 
 GOOGLE_TRANSLATE_V1_BASE = "https://translate.googleapis.com"
-# Subtitle Edit Chrome/Windows UA on HttpClient default headers
+# Browser-like User-Agent (some endpoints expect a non-empty UA)
 GOOGLE_TRANSLATE_V1_UA = (
     "Mozilla/5.0 (Windows NT 6.1) AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/41.0.2228.0 Safari/537.36"
 )
-# Matches Subtitle Edit MaxCharacters on GoogleTranslateV1
+# Chunk size per request (longer strings are split)
 GOOGLE_TRANSLATE_V1_MAX_CHARS = 1500
 GOOGLE_TRANSLATE_V1_REQUEST_DELAY_SEC = 0.08
 
@@ -763,7 +763,7 @@ def _google_v1_lang_code(code: str) -> str:
 
 
 def _parse_google_translate_v1_response(raw: str) -> str:
-    """Parse JSON from translate_a/single — same nesting as Subtitle Edit (first array → segments → [0] text)."""
+    """Parse JSON from translate_a/single (first array → segments → [0] text)."""
     data = json.loads(raw)
     if not isinstance(data, list) or not data:
         raise GoogleTranslateV1Error("Empty or invalid Google Translate V1 JSON.")
@@ -841,7 +841,7 @@ def google_translate_v1_translate_text(
     target_lang: str,
 ) -> str:
     """
-    Translate a string using the same endpoint as Subtitle Edit (GoogleTranslateV1.cs).
+    Translate a string using translate.googleapis.com translate_a/single (client=gtx).
     No API key; subject to Google's availability and rate limits.
     """
     sl = _google_v1_lang_code(source_lang)
@@ -892,7 +892,7 @@ def translate_subtitles_google_v1(
 
     if log_callback:
         log_callback(
-            "Using Google Translate V1 (gtx) — same HTTP pattern as Subtitle Edit; no API key; network required."
+            "Using Google Translate V1 (gtx); no API key; network required."
         )
 
     def translate_line(line: str) -> str:
@@ -10752,7 +10752,7 @@ class VideoProcessingApp(QMainWindow):
                     "Extend TRANSLATION_TARGET_TO_ARGOS_CODE or pick another target."
                 )
                 return
-            self.log("Google Translate V1: uses translate.googleapis.com translate_a/single (gtx), no API key — same pattern as Subtitle Edit.")
+            self.log("Google Translate V1: translate.googleapis.com translate_a/single (gtx), no API key.")
             self.log(f"Starting subtitle translation for {len(file_paths)} file(s)...")
             self.log(f"Target language: {target_language}, ISO 639 suffixes: {'enabled' if use_iso639 else 'disabled'}")
             self.run_script(
