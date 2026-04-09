@@ -62,12 +62,9 @@ settings.json
 # Logs
 *.log
 
-# Test files
-test_*.py
-*_test.py
-
-# Deprecated (transcription now uses Python; kept locally for reference)
-whisper_auto.sh
+# Ad-hoc root-level scratch test scripts (not the main app)
+/test_*.py
+/*_test.py
 
 # media/ — keep tracked: icon.* (app + PyInstaller), flowcharts.png (release bundles), *.sh (tooling).
 # Ignore source / local-only outputs not needed at runtime.

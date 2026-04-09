@@ -14,8 +14,9 @@ import sys
 import os
 
 import json
-from urllib.parse import urlparse
-from urllib.request import urlopen, urlretrieve
+from urllib.parse import urlparse, urlencode
+from urllib.request import Request, urlopen, urlretrieve
+import urllib.error
 import re
 import shlex
 import subprocess
@@ -30,12 +31,12 @@ import tempfile
 import zipfile
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict, List, Callable, Tuple
+from dataclasses import dataclass
+from typing import Optional, Dict, List, Callable, Tuple, Union
 try:
     from typing import Protocol, runtime_checkable
 except ImportError:
     from typing_extensions import Protocol, runtime_checkable
-
 
 # Enforce Python 3.9–3.12
 if sys.version_info >= (3, 13):
@@ -279,6 +280,9 @@ def load_config() -> Dict:
         "whisper_post_proc_add_periods":           True,
         "whisper_post_proc_fix_casing":            True,
         "whisper_post_proc_balance_lines":         True,
+        "subtitle_translation_engine": "gst",
+        "translation_target_language": "English",
+        "argos_from_lang": "en",
     }
     
     if config_path.exists():
@@ -494,6 +498,507 @@ ISO_639_CODES = {
     "Portuguese": "por", "Portuguese (Brazilian)": "por", "Spanish": "spa",
     "Thai": "tha", "Turkish": "tur",
 }
+
+# Argos local fallback: language codes (ISO 639-1) aligned to TRANSLATION_TARGET_LANGUAGES
+TRANSLATION_TARGET_TO_ARGOS_CODE: Dict[str, str] = {
+    "Catalan": "ca",
+    "Dutch": "nl",
+    "English": "en",
+    "French": "fr",
+    "German": "de",
+    "Greek": "el",
+    "Indonesian": "id",
+    "Italian": "it",
+    "Japanese": "ja",
+    "Korean": "ko",
+    "Mandarin Chinese": "zh",
+    "Polish": "pl",
+    "Portuguese": "pt",
+    "Brazilian": "pt",
+    "Spanish": "es",
+    "Thai": "th",
+    "Turkish": "tr",
+}
+
+
+def translation_target_to_argos_code(target_language: str) -> Optional[str]:
+    return TRANSLATION_TARGET_TO_ARGOS_CODE.get(target_language)
+
+
+def argos_language_combo_choices() -> List[Tuple[str, str]]:
+    """Unique Argos from/to codes with labels for Subtitles-tab combos."""
+    choices: Dict[str, str] = {}
+    for lang in TRANSLATION_TARGET_LANGUAGES:
+        code = TRANSLATION_TARGET_TO_ARGOS_CODE.get(lang)
+        if code and code not in choices:
+            choices[code] = f"{lang} ({code})"
+    return sorted(choices.items(), key=lambda x: x[1].lower())
+
+
+# --- Argos Translate (SRT) — inlined; same process / venv as the GUI ----------------------------
+
+_ARGOS_SRT_TIMESTAMP_RE = re.compile(
+    r"^\s*\d{2}:\d{2}:\d{2}[,.]\d{3}\s+-->\s+\d{2}:\d{2}:\d{2}[,.]\d{3}"
+)
+_ARGOS_SRT_TAG_RE = re.compile(r"(<[^>]+>|{[^}]+})")
+
+
+@dataclass(frozen=True)
+class _ArgosSrtCue:
+    index: Optional[str]
+    timestamp: str
+    text_lines: List[str]
+
+
+@dataclass(frozen=True)
+class _ArgosSrtRawBlock:
+    lines: List[str]
+
+
+class ArgosTranslateError(Exception):
+    """Missing argostranslate or language packages."""
+
+
+def _argos_split_srt_blocks(text: str) -> List[str]:
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n").strip("\n")
+    if not normalized:
+        return []
+    return re.split(r"\n{2,}", normalized)
+
+
+def _argos_parse_srt_block(block: str) -> Union[_ArgosSrtCue, _ArgosSrtRawBlock]:
+    lines = block.split("\n")
+    if not lines:
+        raise ValueError("Empty subtitle block")
+    if len(lines) >= 2 and _ARGOS_SRT_TIMESTAMP_RE.match(lines[1]):
+        return _ArgosSrtCue(index=lines[0], timestamp=lines[1], text_lines=lines[2:])
+    if _ARGOS_SRT_TIMESTAMP_RE.match(lines[0]):
+        return _ArgosSrtCue(index=None, timestamp=lines[0], text_lines=lines[1:])
+    return _ArgosSrtRawBlock(lines=lines)
+
+
+def _argos_protect_srt_tags(text: str) -> Tuple[str, Dict[str, str]]:
+    tags: Dict[str, str] = {}
+
+    def replacer(match: re.Match) -> str:
+        token = f"ZXQTAG{len(tags)}ZXQ"
+        tags[token] = match.group(0)
+        return token
+
+    return _ARGOS_SRT_TAG_RE.sub(replacer, text), tags
+
+
+def _argos_restore_srt_tags(text: str, tags: Dict[str, str]) -> str:
+    restored = text
+    for token, original in tags.items():
+        restored = restored.replace(token, original)
+    return restored
+
+
+def _argos_translate_srt_text_line(line: str, translate_line: Callable[[str], str]) -> str:
+    stripped = line.strip()
+    if not stripped:
+        return line
+    protected, tags = _argos_protect_srt_tags(line)
+    translated = translate_line(protected)
+    translated = _argos_restore_srt_tags(translated, tags)
+    leading_ws = len(line) - len(line.lstrip(" \t"))
+    trailing_ws = len(line) - len(line.rstrip(" \t"))
+    return f"{line[:leading_ws]}{translated.strip()}{line[len(line) - trailing_ws:]}"
+
+
+def _argos_translate_srt_block(block: str, translate_line: Callable[[str], str]) -> str:
+    parsed = _argos_parse_srt_block(block)
+    if isinstance(parsed, _ArgosSrtRawBlock):
+        return "\n".join(_argos_translate_srt_text_line(line, translate_line) for line in parsed.lines)
+    translated_lines = [_argos_translate_srt_text_line(line, translate_line) for line in parsed.text_lines]
+    output_lines: List[str] = []
+    if parsed.index is not None:
+        output_lines.append(parsed.index)
+    output_lines.append(parsed.timestamp)
+    output_lines.extend(translated_lines)
+    return "\n".join(output_lines)
+
+
+def argos_translate_srt_text(text: str, translate_line: Callable[[str], str]) -> str:
+    """Translate SRT cue text with Argos while preserving indices, timestamps, and inline tags."""
+    blocks = _argos_split_srt_blocks(text)
+    translated_blocks = [_argos_translate_srt_block(block, translate_line) for block in blocks]
+    return "\n\n".join(translated_blocks) + ("\n" if translated_blocks else "")
+
+
+def _argos_get_translation(from_code: str, to_code: str):
+    """Return Argos translation object or raise ArgosTranslateError."""
+    try:
+        from argostranslate import translate as argos_translate_mod
+    except ImportError:
+        raise ArgosTranslateError(
+            "argostranslate is not installed in this Python environment. "
+            "Install with: pip install argostranslate (same venv as SP Workshop)."
+        ) from None
+
+    installed = {lang.code: lang for lang in argos_translate_mod.load_installed_languages()}
+    if from_code not in installed:
+        raise ArgosTranslateError(f"Source language {from_code!r} is not installed in Argos.")
+    if to_code not in installed:
+        raise ArgosTranslateError(f"Target language {to_code!r} is not installed in Argos.")
+    translation = installed[from_code].get_translation(installed[to_code])
+    if translation is None:
+        raise ArgosTranslateError(f"No Argos translation package installed from {from_code} to {to_code}.")
+    return translation
+
+
+def _argos_download_install_pair(from_code: str, to_code: str, log_callback=None) -> bool:
+    """Update Argos index, download and install translate package for from_code → to_code."""
+    try:
+        import argostranslate.package as ap
+    except ImportError:
+        return False
+    try:
+        if log_callback:
+            log_callback("Updating Argos package index (network required)…")
+        ap.update_package_index()
+        packages = ap.get_available_packages()
+        match = None
+        for p in packages:
+            ptype = getattr(p, "type", None) or "translate"
+            if ptype != "translate":
+                continue
+            if getattr(p, "from_code", None) == from_code and getattr(p, "to_code", None) == to_code:
+                match = p
+                break
+        if match is None:
+            if log_callback:
+                log_callback(
+                    f"No Argos translate package in the index for {from_code!r} → {to_code!r}. "
+                    "Try another source/target pair or install manually with argospm."
+                )
+            return False
+        if log_callback:
+            log_callback(
+                f"Downloading Argos model {from_code} → {to_code}… (size varies; may take several minutes)"
+            )
+        dl_path = match.download()
+        if log_callback:
+            log_callback("Installing Argos model…")
+        ap.install_from_path(dl_path)
+        if log_callback:
+            log_callback("Argos model installed.")
+        return True
+    except Exception as ex:
+        if log_callback:
+            log_callback(f"Argos package install failed: {ex}")
+        return False
+
+
+def ensure_argos_language_pair(from_code: str, to_code: str, log_callback=None):
+    """Return Argos translation object for from→to, installing the package from the index if missing.
+
+    Called when the user runs Argos translation; may download over the network.
+    Returns None on failure.
+    """
+    from_code = (from_code or "").strip()
+    to_code = (to_code or "").strip()
+    if not from_code or not to_code:
+        if log_callback:
+            log_callback("Argos source and target language codes must be non-empty.")
+        return None
+    try:
+        return _argos_get_translation(from_code, to_code)
+    except ArgosTranslateError as e:
+        msg = str(e)
+        if "pip install argostranslate" in msg or "not installed in this Python" in msg:
+            if log_callback:
+                log_callback(msg)
+            return None
+        if log_callback:
+            log_callback(msg)
+            log_callback(
+                f"Installing Argos package for {from_code} → {to_code} (you chose Argos translation)…"
+            )
+        if not _argos_download_install_pair(from_code, to_code, log_callback):
+            return None
+        try:
+            return _argos_get_translation(from_code, to_code)
+        except ArgosTranslateError as e2:
+            if log_callback:
+                log_callback(str(e2))
+            return None
+
+
+def _argos_translate_srt_file(
+    source_file: Path,
+    target_file: Path,
+    translate_line: Callable[[str], str],
+    encoding: str = "utf-8-sig",
+) -> None:
+    original_text = source_file.read_text(encoding=encoding)
+    translated_text = argos_translate_srt_text(original_text, translate_line)
+    target_file.write_text(translated_text, encoding=encoding)
+
+
+# --- Google Translate V1 (gtx) — same HTTP pattern as Subtitle Edit GoogleTranslateV1.cs ---------
+
+GOOGLE_TRANSLATE_V1_BASE = "https://translate.googleapis.com"
+# Subtitle Edit Chrome/Windows UA on HttpClient default headers
+GOOGLE_TRANSLATE_V1_UA = (
+    "Mozilla/5.0 (Windows NT 6.1) AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/41.0.2228.0 Safari/537.36"
+)
+# Matches Subtitle Edit MaxCharacters on GoogleTranslateV1
+GOOGLE_TRANSLATE_V1_MAX_CHARS = 1500
+GOOGLE_TRANSLATE_V1_REQUEST_DELAY_SEC = 0.08
+
+
+class GoogleTranslateV1Error(Exception):
+    """Network or parse error when calling translate.googleapis.com translate_a/single (gtx)."""
+
+
+def _google_v1_lang_code(code: str) -> str:
+    """Map our ISO-style codes to Google V1 query codes (subset)."""
+    c = (code or "").strip().lower()
+    if c == "zh":
+        return "zh-CN"
+    return c
+
+
+def _parse_google_translate_v1_response(raw: str) -> str:
+    """Parse JSON from translate_a/single — same nesting as Subtitle Edit (first array → segments → [0] text)."""
+    data = json.loads(raw)
+    if not isinstance(data, list) or not data:
+        raise GoogleTranslateV1Error("Empty or invalid Google Translate V1 JSON.")
+    first = data[0]
+    if not isinstance(first, list):
+        raise GoogleTranslateV1Error("Unexpected Google Translate V1 response shape.")
+    parts: List[str] = []
+    for segment in first:
+        if isinstance(segment, list) and segment and isinstance(segment[0], str):
+            parts.append(segment[0])
+    text = "\n".join(parts)
+    text = text.replace("\\n", "\n").replace("\\r", "\r")
+    text = text.replace(" \n", "\n").replace(" \r\n", "\n")
+    return text.strip()
+
+
+def _google_v1_translate_one_request(
+    text: str,
+    sl: str,
+    tl: str,
+    timeout: float = 45.0,
+) -> str:
+    """Single GET to translate_a/single?client=gtx&sl=&tl=&dt=t&q= (no API key)."""
+    query = urlencode(
+        {
+            "client": "gtx",
+            "sl": sl,
+            "tl": tl,
+            "dt": "t",
+            "q": text,
+        }
+    )
+    url = f"{GOOGLE_TRANSLATE_V1_BASE.rstrip('/')}/translate_a/single?{query}"
+    last_err: Optional[Exception] = None
+    for attempt in range(3):
+        try:
+            if attempt:
+                time.sleep(0.35 * attempt)
+            req = Request(
+                url,
+                headers={
+                    "User-Agent": GOOGLE_TRANSLATE_V1_UA,
+                    "Content-Type": "application/json; charset=UTF-8",
+                },
+            )
+            with urlopen(req, timeout=timeout) as resp:
+                raw = resp.read().decode("utf-8", errors="replace").strip()
+            if not raw:
+                raise GoogleTranslateV1Error("Empty response from Google Translate V1.")
+            return _parse_google_translate_v1_response(raw)
+        except urllib.error.HTTPError as e:
+            last_err = e
+            if e.code in (429, 503) and attempt < 2:
+                continue
+            try:
+                body = e.read().decode("utf-8", errors="replace")[:500]
+            except Exception:
+                body = ""
+            raise GoogleTranslateV1Error(
+                f"HTTP {e.code} from Google Translate V1.{(' ' + body) if body else ''}"
+            ) from e
+        except GoogleTranslateV1Error:
+            raise
+        except Exception as e:
+            last_err = e
+            if attempt < 2:
+                continue
+            raise GoogleTranslateV1Error(str(e)) from e
+    raise GoogleTranslateV1Error(str(last_err) if last_err else "Google Translate V1 failed.")
+
+
+def google_translate_v1_translate_text(
+    text: str,
+    source_lang: str,
+    target_lang: str,
+) -> str:
+    """
+    Translate a string using the same endpoint as Subtitle Edit (GoogleTranslateV1.cs).
+    No API key; subject to Google's availability and rate limits.
+    """
+    sl = _google_v1_lang_code(source_lang)
+    tl = _google_v1_lang_code(target_lang)
+    text = text.replace("\r", "").strip()
+    if not text:
+        return ""
+    if len(text) <= GOOGLE_TRANSLATE_V1_MAX_CHARS:
+        time.sleep(GOOGLE_TRANSLATE_V1_REQUEST_DELAY_SEC)
+        return _google_v1_translate_one_request(text, sl, tl)
+    # Rare: one cue line longer than limit — slice in fixed windows
+    out: List[str] = []
+    for i in range(0, len(text), GOOGLE_TRANSLATE_V1_MAX_CHARS):
+        chunk = text[i : i + GOOGLE_TRANSLATE_V1_MAX_CHARS]
+        time.sleep(GOOGLE_TRANSLATE_V1_REQUEST_DELAY_SEC)
+        out.append(_google_v1_translate_one_request(chunk, sl, tl))
+    return "".join(out)
+
+
+def translate_subtitles_google_v1(
+    selected_srt_files: List[Path],
+    target_language: str = "English",
+    use_iso639: bool = False,
+    source_lang: str = "en",
+    progress_callback=None,
+    log_callback=None,
+) -> bool:
+    """Translate subtitles via Google Translate V1 (gtx), in-process; preserves SRT structure like Argos."""
+    if not selected_srt_files:
+        if log_callback:
+            log_callback("No SRT files selected.")
+        return False
+
+    to_code = translation_target_to_argos_code(target_language)
+    if not to_code:
+        if log_callback:
+            log_callback(
+                f'No language code mapped for target "{target_language}". '
+                "Extend TRANSLATION_TARGET_TO_ARGOS_CODE or pick another target."
+            )
+        return False
+
+    from_code = (source_lang or "").strip()
+    if not from_code:
+        if log_callback:
+            log_callback("Source language code is empty. Set Translate from on the Subtitles tab.")
+        return False
+
+    if log_callback:
+        log_callback(
+            "Using Google Translate V1 (gtx) — same HTTP pattern as Subtitle Edit; no API key; network required."
+        )
+
+    def translate_line(line: str) -> str:
+        return google_translate_v1_translate_text(line, from_code, to_code)
+
+    srt_files = [
+        Path(f)
+        for f in selected_srt_files
+        if Path(f).suffix.lower() == ".srt" and not Path(f).name.endswith("_OG.srt")
+    ]
+    total = len(srt_files)
+    success_count = 0
+
+    for idx, srt_file in enumerate(srt_files, start=1):
+        if progress_callback:
+            progress_callback(idx, total, srt_file.name)
+
+        try:
+            iso_match = re.match(r"(.+)\.([a-z]{3})$", srt_file.stem)
+            if iso_match:
+                base_name = iso_match.group(1)
+                og_file = srt_file.parent / f"{base_name}_OG.srt"
+            else:
+                og_file = srt_file.parent / f"{srt_file.stem}_OG.srt"
+
+            if not og_file.exists():
+                srt_file.rename(og_file)
+
+            if log_callback:
+                log_callback(f"Translating (Google V1): {srt_file.name}")
+
+            _argos_translate_srt_file(og_file, srt_file, translate_line, "utf-8-sig")
+
+            translation_success = False
+            if srt_file.exists():
+                try:
+                    file_size = srt_file.stat().st_size
+                    if file_size > 0:
+                        with open(srt_file, "r", encoding="utf-8") as f:
+                            content_preview = f.read(100)
+                            if content_preview.strip():
+                                translation_success = True
+                except Exception:
+                    pass
+
+            if translation_success:
+                final_srt_file = srt_file
+                if use_iso639:
+                    target_iso = ISO_639_CODES.get(target_language, "eng")
+                    source_match = re.match(r"(.+)\.([a-z]{3})$", srt_file.stem)
+                    if source_match:
+                        base_name = source_match.group(1)
+                    else:
+                        base_name = srt_file.stem
+                    final_srt_file = srt_file.parent / f"{base_name}.{target_iso}.srt"
+                    if srt_file != final_srt_file:
+                        srt_file.rename(final_srt_file)
+                        if log_callback:
+                            log_callback(f"    Renamed to: {final_srt_file.name}")
+
+                success_count += 1
+                if log_callback:
+                    log_callback(f"  ✓ Translated: {final_srt_file.name}")
+            else:
+                if log_callback:
+                    log_callback(f"  ✗ Failed (Google V1): {srt_file.name}")
+        except GoogleTranslateV1Error as e:
+            if log_callback:
+                log_callback(f"Error translating {srt_file.name}: {e}")
+        except Exception as e:
+            if log_callback:
+                log_callback(f"Error translating {srt_file.name}: {e}")
+
+    if log_callback:
+        log_callback(f"\nTranslation complete. Translated {success_count}/{total} files.")
+
+    return success_count > 0
+
+
+def _is_gst_overload_or_unavailable(output_lines: List[str]) -> bool:
+    """Detect quota, rate-limit, or service-overload style errors from gst output."""
+    combined = " ".join(output_lines).lower()
+    patterns = (
+        "429",
+        "resource_exhausted",
+        "quota",
+        "rate limit",
+        "exhausted",
+        "too many requests",
+        "503",
+        "service unavailable",
+        "temporarily unavailable",
+        "unavailable",
+        "overloaded",
+        "overload",
+        "try again later",
+        "backend error",
+        "deadline exceeded",
+        "internal error",
+    )
+    return any(p in combined for p in patterns)
+
+
+def _is_quota_limit_error(output_lines: List[str]) -> bool:
+    """Same as overload detection (used for GST API key rotation)."""
+    return _is_gst_overload_or_unavailable(output_lines)
 
 
 # ============================================================================
@@ -2471,13 +2976,6 @@ def clean_subtitles(subtitles_dir: Path, enabled_fixes: Optional[List[str]] = No
     return True
 
 
-def _is_quota_limit_error(output_lines: List[str]) -> bool:
-    """Detect Gemini API quota/rate-limit errors from gst output."""
-    combined = " ".join(output_lines).lower()
-    patterns = ("429", "resource_exhausted", "quota", "rate limit", "exhausted", "too many requests")
-    return any(p in combined for p in patterns)
-
-
 def _get_key_pairs(env_key: Optional[str], api_keys: Optional[List[str]]) -> List[tuple]:
     """Build (primary, secondary) key pairs for gst. gst uses GEMINI_API_KEY env + -k2."""
     keys = list(api_keys) if api_keys else []
@@ -2582,6 +3080,11 @@ def translate_subtitles(selected_srt_files: List[Path], target_language: str = "
 
                 env = os.environ.copy()
                 env["GEMINI_API_KEY"] = primary_key
+                # Windows defaults to cp1252 ("charmap"); Gemini output often has Unicode punctuation
+                # that cannot be encoded there, causing gst to fail when writing/logging. Prefer UTF-8.
+                if sys.platform == "win32":
+                    env.setdefault("PYTHONUTF8", "1")
+                    env.setdefault("PYTHONIOENCODING", "utf-8")
 
                 process = subprocess.Popen(
                     cmd_parts,
@@ -2731,6 +3234,11 @@ def translate_subtitles(selected_srt_files: List[Path], target_language: str = "
                             clean = re.sub(r'\033\[[0-9;]*[a-zA-Z]', '', err_line).replace('\033[F', '').replace('\033[K', '').strip()
                             if clean:
                                 log_callback(f"      {clean}")
+                    if _is_gst_overload_or_unavailable(output_lines):
+                        log_callback(
+                            'GST translation appears overloaded/unavailable. You can retry, or switch '
+                            'Translation Engine to "Argos (local fallback)" and run again.'
+                        )
         except Exception as e:
             if log_callback:
                 log_callback(f"Error translating {srt_file.name}: {e}")
@@ -2739,6 +3247,160 @@ def translate_subtitles(selected_srt_files: List[Path], target_language: str = "
         log_callback(f"\nTranslation complete. Translated {success_count}/{total} files.")
 
     return success_count > 0
+
+
+def translate_subtitles_argos(
+    selected_srt_files: List[Path],
+    target_language: str = "English",
+    use_iso639: bool = False,
+    argos_from_lang: str = "en",
+    progress_callback=None,
+    log_callback=None,
+) -> bool:
+    """Translate subtitles with Argos Translate in-process (same Python as the app)."""
+    if not selected_srt_files:
+        if log_callback:
+            log_callback("No SRT files selected.")
+        return False
+
+    to_code = translation_target_to_argos_code(target_language)
+    if not to_code:
+        if log_callback:
+            log_callback(
+                f'No Argos language code mapped for target "{target_language}". '
+                "Add it to TRANSLATION_TARGET_TO_ARGOS_CODE or pick another target in Settings."
+            )
+        return False
+
+    from_code = (argos_from_lang or "").strip()
+    if not from_code:
+        if log_callback:
+            log_callback("Argos source language code is empty. Set it on the Subtitles tab or in Settings.")
+        return False
+
+    translation = ensure_argos_language_pair(from_code, to_code, log_callback)
+    if translation is None:
+        return False
+
+    translate_line = translation.translate
+
+    if log_callback:
+        log_callback("Using Argos local fallback translator (in-process).")
+
+    srt_files = [
+        Path(f)
+        for f in selected_srt_files
+        if Path(f).suffix.lower() == ".srt" and not Path(f).name.endswith("_OG.srt")
+    ]
+    total = len(srt_files)
+    success_count = 0
+
+    for idx, srt_file in enumerate(srt_files, start=1):
+        if progress_callback:
+            progress_callback(idx, total, srt_file.name)
+
+        try:
+            iso_match = re.match(r"(.+)\.([a-z]{3})$", srt_file.stem)
+            if iso_match:
+                base_name = iso_match.group(1)
+                og_file = srt_file.parent / f"{base_name}_OG.srt"
+            else:
+                og_file = srt_file.parent / f"{srt_file.stem}_OG.srt"
+
+            if not og_file.exists():
+                srt_file.rename(og_file)
+
+            if log_callback:
+                log_callback(f"Translating (Argos): {srt_file.name}")
+
+            _argos_translate_srt_file(og_file, srt_file, translate_line, "utf-8-sig")
+
+            translation_success = False
+            if srt_file.exists():
+                try:
+                    file_size = srt_file.stat().st_size
+                    if file_size > 0:
+                        with open(srt_file, "r", encoding="utf-8") as f:
+                            content_preview = f.read(100)
+                            if content_preview.strip():
+                                translation_success = True
+                except Exception:
+                    pass
+
+            if translation_success:
+                final_srt_file = srt_file
+                if use_iso639:
+                    target_code = ISO_639_CODES.get(target_language, "eng")
+                    source_match = re.match(r"(.+)\.([a-z]{3})$", srt_file.stem)
+                    if source_match:
+                        base_name = source_match.group(1)
+                    else:
+                        base_name = srt_file.stem
+                    final_srt_file = srt_file.parent / f"{base_name}.{target_code}.srt"
+                    if srt_file != final_srt_file:
+                        srt_file.rename(final_srt_file)
+                        if log_callback:
+                            log_callback(f"    Renamed to: {final_srt_file.name}")
+
+                success_count += 1
+                if log_callback:
+                    log_callback(f"  ✓ Translated: {final_srt_file.name}")
+            else:
+                if log_callback:
+                    log_callback(f"  ✗ Failed (Argos): {srt_file.name}")
+        except Exception as e:
+            if log_callback:
+                log_callback(f"Error translating {srt_file.name}: {e}")
+
+    if log_callback:
+        log_callback(f"\nTranslation complete. Translated {success_count}/{total} files.")
+
+    return success_count > 0
+
+
+def run_subtitle_translation(
+    engine: str,
+    selected_srt_files: List[Path],
+    target_language: str = "English",
+    use_iso639: bool = False,
+    api_keys: Optional[List[str]] = None,
+    api_key: Optional[str] = None,
+    api_key2: Optional[str] = None,
+    argos_from_lang: str = "en",
+    progress_callback=None,
+    log_callback=None,
+) -> bool:
+    """Dispatch subtitle translation to GST, Argos, or Google Translate V1 (explicit user choice)."""
+    eng = (engine or "gst").strip().lower()
+    if eng == "argos":
+        return translate_subtitles_argos(
+            selected_srt_files,
+            target_language=target_language,
+            use_iso639=use_iso639,
+            argos_from_lang=argos_from_lang,
+            progress_callback=progress_callback,
+            log_callback=log_callback,
+        )
+    if eng == "google_v1":
+        return translate_subtitles_google_v1(
+            selected_srt_files,
+            target_language=target_language,
+            use_iso639=use_iso639,
+            source_lang=argos_from_lang,
+            progress_callback=progress_callback,
+            log_callback=log_callback,
+        )
+    return translate_subtitles(
+        selected_srt_files,
+        target_language,
+        use_iso639,
+        api_keys,
+        api_key,
+        api_key2,
+        progress_callback,
+        log_callback,
+    )
+
 
 # ============================================================================
 # Video processing pipeline
@@ -7145,23 +7807,13 @@ class SettingsDialog(QDialog):
         translation_group.setStyleSheet("QGroupBox { font-weight: bold; }")
         trans_form = QFormLayout()
         translation_info = QLabel(
-            "Select the target language for subtitle translation. "
-            "Subtitles will be translated from their original language to your selected target."
+            "Translation engine and languages are chosen on the <b>Subtitles</b> tab. "
+            "Here you can enable language codes in translated subtitle filenames."
         )
         translation_info.setWordWrap(True)
         translation_info.setStyleSheet("color: #666;")
         trans_form.addRow("", translation_info)
-        translation_helper = QLabel("Used when clicking \"Translate subtitles\".")
-        translation_helper.setStyleSheet("color: #666; font-size: 10px;")
-        trans_form.addRow("", translation_helper)
-        self.translation_target_combo = QComboBox()
-        for lang in TRANSLATION_TARGET_LANGUAGES:
-            self.translation_target_combo.addItem(lang)
-        current_target = self.config.get("translation_target_language", "English")
-        target_index = self.translation_target_combo.findText(current_target)
-        if target_index >= 0:
-            self.translation_target_combo.setCurrentIndex(target_index)
-        trans_form.addRow("Translation Target:", self.translation_target_combo)
+
         self.iso639_checkbox = QCheckBox("Use ISO 639 language suffixes (.eng.srt, .fra.srt)")
         self.iso639_checkbox.setChecked(self.config.get("use_iso639_suffixes", False))
         iso639_help = QLabel(
@@ -7276,7 +7928,6 @@ class SettingsDialog(QDialog):
         self.config["watermark_720p"] = self.watermark_720p_input.text()
         self.config["watermark_1080p"] = self.watermark_1080p_input.text()
         self.config["use_watermarks"] = self.use_watermarks_checkbox.isChecked()
-        self.config["translation_target_language"] = self.translation_target_combo.currentText()
         self.config["use_iso639_suffixes"] = self.iso639_checkbox.isChecked()
         save_config(self.config)
         self.accept()
@@ -9438,12 +10089,13 @@ class VideoProcessingApp(QMainWindow):
         folder_bar_layout.addStretch()
         layout.addWidget(folder_bar)
 
-        # Process flow: buttons stacked, description on right of each
-        process_frame = QFrame()
-        process_frame.setStyleSheet("QFrame { border: 1px solid #ebebeb; border-radius: 4px; background: #fafafa; }")
-        process_layout = QVBoxLayout(process_frame)
+        # Process flow: one group box (same pattern as Downloads → Naming options), no nested framed panels
+        subtitles_group = QGroupBox("Subtitle options")
+        subtitles_group.setStyleSheet("QGroupBox { font-weight: bold; }")
+        subtitles_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        process_layout = QVBoxLayout()
         process_layout.setSpacing(6)
-        process_layout.setContentsMargins(4, 6, 4, 6)
+        process_layout.setContentsMargins(8, 4, 8, 6)
 
         extract_row = QHBoxLayout()
         extract_btn = QPushButton("Extract subtitles")
@@ -9484,6 +10136,36 @@ class VideoProcessingApp(QMainWindow):
         translate_row.addWidget(translate_desc, 1)
         process_layout.addLayout(translate_row)
 
+        translate_controls_row = QHBoxLayout()
+        translate_controls_row.setSpacing(8)
+        translate_controls_row.addWidget(QLabel("Engine:"))
+        self.subtitle_translation_engine_combo = QComboBox()
+        self.subtitle_translation_engine_combo.addItem("GST (Gemini)", "gst")
+        self.subtitle_translation_engine_combo.addItem("Argos (local fallback)", "argos")
+        self.subtitle_translation_engine_combo.addItem("Google Translate V1 (gtx)", "google_v1")
+        self.subtitle_translation_engine_combo.setMaximumWidth(200)
+        translate_controls_row.addWidget(self.subtitle_translation_engine_combo)
+        self.subtitle_argos_from_label = QLabel("Translate from:")
+        translate_controls_row.addWidget(self.subtitle_argos_from_label)
+        self.subtitle_argos_from_lang_combo = QComboBox()
+        for code, label in argos_language_combo_choices():
+            self.subtitle_argos_from_lang_combo.addItem(label, code)
+        self.subtitle_argos_from_lang_combo.setMinimumWidth(140)
+        translate_controls_row.addWidget(self.subtitle_argos_from_lang_combo, 1)
+        translate_controls_row.addWidget(QLabel("Translate to:"))
+        self.subtitle_translation_target_combo = QComboBox()
+        for lang in TRANSLATION_TARGET_LANGUAGES:
+            self.subtitle_translation_target_combo.addItem(lang)
+        self.subtitle_translation_target_combo.setMinimumWidth(120)
+        translate_controls_row.addWidget(self.subtitle_translation_target_combo, 1)
+        translate_controls_row.addStretch()
+        process_layout.addLayout(translate_controls_row)
+
+        self._refresh_subtitle_translation_panel()
+        self.subtitle_translation_engine_combo.currentIndexChanged.connect(self._on_subtitle_translation_engine_changed)
+        self.subtitle_translation_target_combo.currentIndexChanged.connect(self._on_subtitle_translation_target_changed)
+        self.subtitle_argos_from_lang_combo.currentIndexChanged.connect(self._on_subtitle_argos_from_lang_changed)
+
         burn_row = QHBoxLayout()
         burn_btn = QPushButton("Burn-in subtitles")
         burn_btn.setFixedWidth(BUTTON_WIDTH)
@@ -9509,8 +10191,8 @@ class VideoProcessingApp(QMainWindow):
         burn_row.addWidget(burn_desc, 1)
         process_layout.addLayout(burn_row)
 
-        process_frame.setLayout(process_layout)
-        layout.addWidget(process_frame)
+        subtitles_group.setLayout(process_layout)
+        layout.addWidget(subtitles_group)
 
         progress_group = QGroupBox("PROGRESS")
         progress_group.setStyleSheet("QGroupBox { font-weight: bold; font-size: 11px; }")
@@ -9679,7 +10361,68 @@ class VideoProcessingApp(QMainWindow):
         if dialog.exec_() == QDialog.Accepted:
             self.config = load_config()
             self.log("Settings saved.")
-    
+            self._refresh_subtitle_translation_panel()
+
+    def _refresh_subtitle_translation_panel(self):
+        """Sync Subtitles-tab translation controls from config (engine, target language, source language for Argos/Google V1)."""
+        self.config = load_config()
+        eng = (self.config.get("subtitle_translation_engine") or "gst").strip().lower()
+
+        combo = self.subtitle_translation_engine_combo
+        combo.blockSignals(True)
+        idx = combo.findData(eng)
+        if idx < 0:
+            idx = 0
+        if 0 <= idx < combo.count():
+            combo.setCurrentIndex(idx)
+        combo.blockSignals(False)
+
+        tgt = self.config.get("translation_target_language", "English")
+        tcombo = self.subtitle_translation_target_combo
+        tcombo.blockSignals(True)
+        ti = tcombo.findText(tgt)
+        if ti >= 0:
+            tcombo.setCurrentIndex(ti)
+        tcombo.blockSignals(False)
+
+        from_code = (self.config.get("argos_from_lang") or "en").strip()
+        fcombo = self.subtitle_argos_from_lang_combo
+        fcombo.blockSignals(True)
+        fi = fcombo.findData(from_code)
+        if fi < 0:
+            fi = fcombo.findData("en")
+        if fi >= 0:
+            fcombo.setCurrentIndex(fi)
+        fcombo.blockSignals(False)
+
+        self._update_subtitle_argos_from_visibility()
+
+    def _update_subtitle_argos_from_visibility(self):
+        eng = self.subtitle_translation_engine_combo.currentData()
+        if not eng:
+            eng = "gst"
+        show_from = eng in ("argos", "google_v1")
+        self.subtitle_argos_from_label.setVisible(show_from)
+        self.subtitle_argos_from_lang_combo.setVisible(show_from)
+
+    def _on_subtitle_translation_engine_changed(self, _index: int):
+        eng = self.subtitle_translation_engine_combo.currentData()
+        if not eng:
+            eng = "gst"
+        self.config["subtitle_translation_engine"] = str(eng)
+        save_config(self.config)
+        self._update_subtitle_argos_from_visibility()
+
+    def _on_subtitle_translation_target_changed(self, _index: int):
+        self.config["translation_target_language"] = self.subtitle_translation_target_combo.currentText()
+        save_config(self.config)
+
+    def _on_subtitle_argos_from_lang_changed(self, _index: int):
+        code = self.subtitle_argos_from_lang_combo.currentData()
+        if code:
+            self.config["argos_from_lang"] = str(code)
+            save_config(self.config)
+
     def open_whisper_options(self):
         """Open Whisper advanced options dialog, pre-selected to the current engine."""
         method = self.transcribe_method_combo.currentData()
@@ -9716,6 +10459,7 @@ class VideoProcessingApp(QMainWindow):
             "extract_subtitles": "Extracting subtitles",
             "clean_subtitles": "Cleaning subtitles",
             "translate_subtitles": "Translating subtitles",
+            "run_subtitle_translation": "Translating subtitles",
             "process_video": "Processing videos",
             "remux_mkv_with_srt_batch": "Remuxing videos",
             "transcribe_video": "Transcribing video",
@@ -9954,7 +10698,76 @@ class VideoProcessingApp(QMainWindow):
         self.run_script(clean_subtitles, subtitles_dir, enabled_fixes)
 
     def translate_subtitles(self):
-        """Translate subtitles."""
+        """Translate subtitles (GST, Argos, or Google Translate V1 — engine from Subtitles tab / config)."""
+        self.config = load_config()
+        engine = (self.config.get("subtitle_translation_engine") or "gst").strip().lower()
+
+        file_paths, _ = QFileDialog.getOpenFileNames(
+            self, "Select SRT Files to Translate",
+            str(get_subtitles_dir()),
+            "Subtitle Files (*.srt);;All Files (*)"
+        )
+
+        if not file_paths:
+            return
+
+        target_language = self.config.get("translation_target_language", "English")
+        use_iso639 = self.config.get("use_iso639_suffixes", False)
+
+        if engine == "argos":
+            from_lang = (self.config.get("argos_from_lang") or "en").strip()
+
+            to_code = translation_target_to_argos_code(target_language)
+            if not to_code:
+                self.log(
+                    f"No Argos language code mapped for output language \"{target_language}\". "
+                    "Pick another target in the Subtitles tab (Translate to), or extend TRANSLATION_TARGET_TO_ARGOS_CODE in the app."
+                )
+                return
+
+            self.log(
+                "Argos: checking installed languages; will download the pair from the Argos index if needed (network)."
+            )
+            self.log(f"Starting subtitle translation for {len(file_paths)} file(s)...")
+            self.log(f"Target language: {target_language}, ISO 639 suffixes: {'enabled' if use_iso639 else 'disabled'}")
+            self.run_script(
+                run_subtitle_translation,
+                "argos",
+                file_paths,
+                target_language,
+                use_iso639,
+                None,
+                None,
+                None,
+                from_lang,
+            )
+            return
+
+        if engine == "google_v1":
+            from_lang = (self.config.get("argos_from_lang") or "en").strip()
+            to_code = translation_target_to_argos_code(target_language)
+            if not to_code:
+                self.log(
+                    f"No Google V1 language code mapped for output language \"{target_language}\". "
+                    "Extend TRANSLATION_TARGET_TO_ARGOS_CODE or pick another target."
+                )
+                return
+            self.log("Google Translate V1: uses translate.googleapis.com translate_a/single (gtx), no API key — same pattern as Subtitle Edit.")
+            self.log(f"Starting subtitle translation for {len(file_paths)} file(s)...")
+            self.log(f"Target language: {target_language}, ISO 639 suffixes: {'enabled' if use_iso639 else 'disabled'}")
+            self.run_script(
+                run_subtitle_translation,
+                "google_v1",
+                file_paths,
+                target_language,
+                use_iso639,
+                None,
+                None,
+                None,
+                from_lang,
+            )
+            return
+
         env_key = os.getenv("GEMINI_API_KEY") or os.getenv("GST_API_KEY")
         api_keys = self.config.get("api_keys") or []
         if not api_keys and (self.config.get("api_key") or self.config.get("api_key2")):
@@ -9968,15 +10781,6 @@ class VideoProcessingApp(QMainWindow):
                 "See Settings for instructions.\n\n"
                 "You can also add keys in Settings (API Keys section)."
             )
-            return
-
-        file_paths, _ = QFileDialog.getOpenFileNames(
-            self, "Select SRT Files to Translate",
-            str(get_subtitles_dir()),
-            "Subtitle Files (*.srt);;All Files (*)"
-        )
-
-        if not file_paths:
             return
 
         gst_cmd = find_gst_command()
@@ -10043,14 +10847,16 @@ class VideoProcessingApp(QMainWindow):
                 )
             return
 
-        target_language = self.config.get("translation_target_language", "English")
-        use_iso639 = self.config.get("use_iso639_suffixes", False)
-
+        self.log("Translation engine: GST (Gemini).")
+        self.log(
+            'If Gemini is overloaded or unavailable, switch Engine to "Argos (local fallback)" or '
+            '"Google Translate V1 (gtx)" on this tab and run again.'
+        )
         self.log(f"Starting subtitle translation for {len(file_paths)} file(s)...")
         self.log(f"Target language: {target_language}, ISO 639 suffixes: {'enabled' if use_iso639 else 'disabled'}")
         if api_keys:
             self.log(f"Using {len(api_keys)} API key(s) (quota retry enabled)")
-        self.run_script(translate_subtitles, file_paths, target_language, use_iso639, api_keys)
+        self.run_script(run_subtitle_translation, "gst", file_paths, target_language, use_iso639, api_keys)
     
     def open_burn_in_dialog(self):
         """Open the Burn-in subtitles configuration dialog."""
