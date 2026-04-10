@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [10.4.0-alpha.25] - 2026-04-10
+
+### Added
+
+- **Subtitle translation engines (Subtitles tab):** Choose **GST (Gemini)** (existing), **Argos** (offline, in-process; downloads language packages from the Argos index on first use when needed), or **Google Translate V1 (gtx)** (HTTP to `translate.googleapis.com` `translate_a/single`, no API key; requires network). Settings persist `subtitle_translation_engine`, `translation_target_language`, and `argos_from_lang`.
+- **`requirements.txt`:** `argostranslate` for the Argos path (same venv as the GUI).
+
+### Changed
+
+- **Subtitles tab:** Translation controls show **Translate from** before **Translate to** when the engine needs a source language (Argos / Google V1).
+- **`.gitignore`:** Ad-hoc test script patterns (`test_*.py`, `*_test.py`) apply only at the repository root, so tests elsewhere in the tree are not ignored by name alone.
+
 ## [10.4.0-alpha.24] - 2026-04-06
 
 ### Fixed

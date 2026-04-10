@@ -747,7 +747,7 @@ GOOGLE_TRANSLATE_V1_UA = (
 )
 # Chunk size per request (longer strings are split)
 GOOGLE_TRANSLATE_V1_MAX_CHARS = 1500
-GOOGLE_TRANSLATE_V1_REQUEST_DELAY_SEC = 0.08
+GOOGLE_TRANSLATE_V1_REQUEST_DELAY_SEC = 0.02
 
 
 class GoogleTranslateV1Error(Exception):
@@ -784,7 +784,7 @@ def _google_v1_translate_one_request(
     text: str,
     sl: str,
     tl: str,
-    timeout: float = 45.0,
+    timeout: float = 12.0,
 ) -> str:
     """Single GET to translate_a/single?client=gtx&sl=&tl=&dt=t&q= (no API key)."""
     query = urlencode(
@@ -895,8 +895,29 @@ def translate_subtitles_google_v1(
             "Using Google Translate V1 (gtx); no API key; network required."
         )
 
+    # Tiny per-run cache: subtitle files often repeat short lines ("Okay.", "Yeah.", etc.).
+    # Reusing translations avoids redundant network calls and shortens total runtime.
+    line_cache: Dict[str, str] = {}
+    translated_cue_count = 0
+    current_file_name = ""
+
     def translate_line(line: str) -> str:
-        return google_translate_v1_translate_text(line, from_code, to_code)
+        nonlocal translated_cue_count
+        key = line.strip()
+        if not key:
+            return line
+        translated_cue_count += 1
+        if log_callback and translated_cue_count % 10 == 0:
+            if current_file_name:
+                log_callback(f"    Heartbeat: translated {translated_cue_count} cues ({current_file_name})...")
+            else:
+                log_callback(f"    Heartbeat: translated {translated_cue_count} cues...")
+        cached = line_cache.get(key)
+        if cached is not None:
+            return cached
+        translated = google_translate_v1_translate_text(line, from_code, to_code)
+        line_cache[key] = translated
+        return translated
 
     srt_files = [
         Path(f)
@@ -923,6 +944,7 @@ def translate_subtitles_google_v1(
 
             if log_callback:
                 log_callback(f"Translating (Google V1): {srt_file.name}")
+            current_file_name = srt_file.name
 
             _argos_translate_srt_file(og_file, srt_file, translate_line, "utf-8-sig")
 
