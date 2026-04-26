@@ -35,7 +35,7 @@ body:
     attributes:
       label: App version
       description: Which version are you using?
-      placeholder: "e.g. 10.4.0-alpha.24"
+      placeholder: "e.g. 10.4.0-alpha.26"
     validations:
       required: true
 

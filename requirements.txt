@@ -1,6 +1,6 @@
 # Python packages required for the Video Processing GUI Application
 PyQt5>=5.15.0
-gemini-srt-translator>=3.0.0
+gemini-srt-translator>=3.0.1
 whisper.cpp-cli>=0.0.3; sys_platform != "win32"
 
 # OpenAI Whisper legacy backends + Silero VAD (torch itself is in requirements-whisper-ai.txt)

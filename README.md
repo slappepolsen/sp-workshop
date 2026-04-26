@@ -22,6 +22,7 @@ SP Workshop was created to make international WLW / sapphic content more accessi
 		- [Run from source](#run-from-source)
 		- [Pre-built app (experimental)](#pre-built-app-experimental)
 	- [Contributing](#contributing)
+	- [Heads up](#heads-up)
 	- [License](#license)
 
 ## What the app does
@@ -84,6 +85,16 @@ Download the DMG, ZIP, or tarball for your OS from **[Releases](https://github.c
 ## Contributing
 
 [Issues](https://github.com/slappepolsen/sp-workshop/issues) and [pull requests](https://github.com/slappepolsen/sp-workshop/pulls) are welcome.
+
+## Heads up
+
+- **File size:** the application has a large footprint on disk.
+- **Design:** made by a programmer, not a designer — the goal is function over beauty.
+- **Support:** this is a single-developer personal passion project. Support, responses, updates, enhancements, and bug fixes happen as my free time allows.
+- **Updates:** I have a full-time job, a life, and a finite attention span, so long stretches may pass with no improvements of any kind.
+
+> [!IMPORTANT]
+> **Disclaimer.** I've made every good-faith effort to include nothing insecure, malicious, anti-privacy, or destructive. That said, **use at your own risk**. I made this for myself and want to share it with the wonderful programming and archivist communities, who have been so generous with their time, help, and teaching me their ways.
 
 ## License
 

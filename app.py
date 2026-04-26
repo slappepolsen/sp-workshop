@@ -7,7 +7,7 @@ Video Processing GUI Application
 A PyQt5 desktop app that provides a button-based interface for all video processing scripts.
 """
 
-__version__ = "10.4.0-alpha.24"
+__version__ = "10.4.0-alpha.26"
 VERSION_CODENAME = "Rocket Launcher"
 
 import sys
@@ -8469,8 +8469,15 @@ class VideoProcessingApp(QMainWindow):
         self.transcribe_language_combo.setFixedWidth(_COMBO_W)
         for name, code in TRANSCRIBE_LANGUAGES:
             self.transcribe_language_combo.addItem(name, code)
+        language_request_link = QLabel(
+            '<a href="https://twitter.com/intent/tweet?text=hey%20%40slappepolsen%2C%20i%27ve%20been%20using%20SP%20Workshop%20and%20i%20was%20wondering%20if%20you%20can%20add%20the%20following%20language%20to%20the%20transcription%20tab%3A%20%3Cinsert%20language%3E">Language missing? Request another language</a>'
+        )
+        language_request_link.setOpenExternalLinks(True)
+        language_request_link.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        language_request_link.setToolTip("Open link to request a language")
         lang_row.addWidget(lang_label, 0)
         lang_row.addWidget(self.transcribe_language_combo, 0)
+        lang_row.addWidget(language_request_link, 0)
         lang_row.addStretch()
         file_layout.addLayout(lang_row)
 

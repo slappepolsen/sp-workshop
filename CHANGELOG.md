@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [10.4.0-alpha.26] - 2026-04-26
+
+### Added
+
+- **Transcription tab (Language row):** clickable link next to the language selector — **"Language missing? Request another language"** — that opens a prefilled Twitter/X intent URL so users can request additional transcription languages.
+
+### Changed
+
+- **`requirements.txt`:** bumped `gemini-srt-translator` minimum to `3.0.1`.
+- **README:** added a **Heads up** section with project caveats and a use-at-your-own-risk disclaimer (rendered as a `> [!IMPORTANT]` callout); Table of Contents updated to match.
+
+### Fixed
+
+- **Windows launcher** (`Start_SP_Workshop.bat` / `scripts/run_sp_workshop.ps1`): compute the requirements file SHA-256 in PowerShell instead of `python -c`, removing a Windows command-line quoting edge case that could produce `NameError: name 'SP_PROJECT_DIR' is not defined` and a follow-up PowerShell null `.Trim()` error. Hash format is unchanged (concatenation of the two files, SHA-256 hex), so existing `.requirements_hash` entries still match.
+- Unblock the launcher and project files after download (Zone.Identifier) so script execution is not blocked; `Unblock-File` is invoked from the `.bat` for the main `.ps1` and once for the project tree in `run_sp_workshop.ps1`.
+- Detect the Microsoft Store `python` stub path and show a clear message to install Python 3.12 from python.org instead.
+- Clearer one-line error output when setup fails; `pip` / venv steps now surface non-zero exit codes.
+
 ## [10.4.0-alpha.25] - 2026-04-10
 
 ### Added
