@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [10.4.0-alpha.27] - 2026-05-16
+
+### Changed
+
+- **Whisper.cpp post-processing:** expanded pipeline after transcription such as waveform timing snap, cleanup and whisper-specific normalization, language-aware periods (600 ms / 1250 ms gaps, English skip lists), dictionary name casing from XML/noun lists, CPS- and min-gap-aware short-cue fixes, proportional split of overlong cues, two sentence-boundary refinement passes, continuation-based merge with short orphan handling, and line balancing.
+- **Whisper name dictionaries:** point at a folder via `whisper_name_dictionary_dir` in settings or `SP_WORKSHOP_NAME_DICTIONARIES`, and an older dictionary-path settings key is migrated on load when the new key is empty.
+
 ## [10.4.0-alpha.26] - 2026-04-26
 
 ### Added
