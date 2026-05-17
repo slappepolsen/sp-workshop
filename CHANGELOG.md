@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [10.4.1-alpha.1] - 2026-05-16
+
+### Added
+
+- **Dark mode!!!** Settings > Appearance > Theme (Light / Dark)
+
 ## [10.4.0-alpha.27] - 2026-05-16
 
 ### Changed

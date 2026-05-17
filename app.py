@@ -7,8 +7,8 @@ Video Processing GUI Application
 A PyQt5 desktop app that provides a button-based interface for all video processing scripts.
 """
 
-__version__ = "10.4.0-alpha.27"
-VERSION_CODENAME = "Even more transcription improvements"
+__version__ = "10.4.1-alpha.1"
+VERSION_CODENAME = "Dark mode !!!!!!!"
 
 import sys
 import os
@@ -83,7 +83,7 @@ try:
         QTreeWidgetItem, QHeaderView, QMenu, QFrame, QSizePolicy, QSplitter,
     )
     from PyQt5.QtCore import QThread, pyqtSignal, Qt, QProcess, QUrl, QTimer
-    from PyQt5.QtGui import QFont, QIcon, QPainter, QPen, QDesktopServices
+    from PyQt5.QtGui import QFont, QIcon, QPainter, QPen, QPixmap, QDesktopServices, QColor, QPalette
 except ImportError as e:
     print("SP Workshop needs PyQt5.")
     print("Activate your virtual environment, then run: pip install PyQt5")
@@ -222,6 +222,558 @@ class OutlinedLabel(QLabel):
 
 
 # ============================================================================
+# UI themes (light / dark)
+# ============================================================================
+
+UI_THEMES = ("light", "dark")
+
+LIGHT_THEME = {
+    "window": "#ffffff",
+    "window_text": "#222222",
+    "surface": "#f5f5f5",
+    "surface_alt": "#e8e8e8",
+    "border": "#e0e0e0",
+    "border_light": "#dddddd",
+    "text": "#222222",
+    "text_muted": "#666666",
+    "text_faint": "#888888",
+    "input_bg": "#ffffff",
+    "input_border": "#cccccc",
+    "log_bg": "#f5f5f5",
+    "log_text": "#222222",
+    "log_border": "#dddddd",
+    "tab_bg": "#ececec",
+    "tab_selected": "#ffffff",
+    "selection_bg": "#c46ea1",
+    "selection_text": "#ffffff",
+    "disabled_text": "#999999",
+    "link": "#777777",
+    "link_hover": "#555555",
+    "link_pressed": "#333333",
+    "scroll": "#c0c0c0",
+    "scroll_hover": "#a0a0a0",
+    "gear_btn_bg": "#f5f5f5",
+    "gear_btn_border": "#cccccc",
+    "action_bar_border": "#e0e0e0",
+    "empty_panel_bg": "#f5f5f5",
+    "empty_panel_border": "#dddddd",
+    "danger_btn_bg": "#fff5f4",
+    "danger_btn_border": "#e8c0bb",
+    "danger_btn_text": "#c0392b",
+    "danger_btn_hover": "#fde8e6",
+    "secondary_btn_bg": "#f9f9f9",
+    "secondary_btn_border": "#cccccc",
+    "secondary_btn_text": "#555555",
+    "secondary_btn_hover": "#efefef",
+    "outline_accent_fg": "#f48a32",
+    "outline_accent_border": "#f48a32",
+    "outline_accent_bg": "#ffffff",
+    "outline_accent_hover": "#fff4ec",
+    "link_accent": "#0066cc",
+    "accent_btn_text": "#ffffff",
+    "about_title": "#b42075",
+    "about_version": "#666666",
+    "about_body": "#333333",
+    "about_creator_accent": "#df4300",
+    "stop_btn_bg": "#cc0000",
+    "stop_btn_hover": "#990000",
+    "stop_btn_pressed": "#660000",
+    "stop_btn_disabled_bg": "#cccccc",
+    "stop_btn_disabled_text": "#666666",
+}
+
+DARK_THEME = {
+    "window": "#1e1e1e",
+    "window_text": "#d4d4d4",
+    "surface": "#2d2d2d",
+    "surface_alt": "#383838",
+    "border": "#404040",
+    "border_light": "#4a4a4a",
+    "text": "#d4d4d4",
+    "text_muted": "#9a9a9a",
+    "text_faint": "#787878",
+    "input_bg": "#2d2d2d",
+    "input_border": "#505050",
+    "log_bg": "#252526",
+    "log_text": "#d4d4d4",
+    "log_border": "#3c3c3c",
+    "tab_bg": "#2d2d2d",
+    "tab_selected": "#1e1e1e",
+    "selection_bg": "#b42075",
+    "selection_text": "#ffffff",
+    "disabled_text": "#707070",
+    "link": "#9a9a9a",
+    "link_hover": "#c8c8c8",
+    "link_pressed": "#e0e0e0",
+    "scroll": "#505050",
+    "scroll_hover": "#686868",
+    "gear_btn_bg": "#383838",
+    "gear_btn_border": "#505050",
+    "action_bar_border": "#404040",
+    "empty_panel_bg": "#252526",
+    "empty_panel_border": "#3c3c3c",
+    "danger_btn_bg": "#352828",
+    "danger_btn_border": "#5c4040",
+    "danger_btn_text": "#c08080",
+    "danger_btn_hover": "#422f2f",
+    "secondary_btn_bg": "#383838",
+    "secondary_btn_border": "#505050",
+    "secondary_btn_text": "#b0b0b0",
+    "secondary_btn_hover": "#424242",
+    "outline_accent_fg": "#c89260",
+    "outline_accent_border": "#8a6040",
+    "outline_accent_bg": "#383838",
+    "outline_accent_hover": "#424038",
+    "link_accent": "#7a9ec8",
+    "accent_btn_text": "#e8e4e6",
+    "about_title": "#c46ea1",
+    "about_version": "#909090",
+    "about_body": "#c8c8c8",
+    "about_creator_accent": "#c07848",
+    "stop_btn_bg": "#8a3030",
+    "stop_btn_hover": "#6e2828",
+    "stop_btn_pressed": "#552020",
+    "stop_btn_disabled_bg": "#404040",
+    "stop_btn_disabled_text": "#707070",
+}
+
+ACCENT_ROLE_COLORS = {
+    "light": {
+        "download": "#df4300",
+        "subtitle": "#f48a32",
+        "process": "#ffab68",
+        "remux": "#dc7bb3",
+        "transcribe": "#c46ea1",
+        "header": "#b42075",
+    },
+    "dark": {
+        "download": "#a85828",
+        "subtitle": "#946838",
+        "process": "#887850",
+        "remux": "#7a5568",
+        "transcribe": "#705068",
+        "header": "#683852",
+    },
+}
+
+
+def normalize_ui_theme(value: Optional[str]) -> str:
+    """Return ``light`` or ``dark``."""
+    if isinstance(value, str) and value.strip().lower() == "dark":
+        return "dark"
+    return "light"
+
+
+def get_theme_tokens(theme_name: str) -> Dict[str, str]:
+    return DARK_THEME if normalize_ui_theme(theme_name) == "dark" else LIGHT_THEME
+
+
+def mark_log_text_edit(text_edit: QTextEdit) -> None:
+    """Mark a read-only log ``QTextEdit`` for theme styling."""
+    text_edit.setProperty("logPanel", True)
+
+
+def checkbox_checkmark_asset_path(theme_name: str) -> str:
+    """Return absolute path to a cached checkmark PNG for QSS ``indicator:checked``."""
+    theme = normalize_ui_theme(theme_name)
+    t = get_theme_tokens(theme)
+    cache_dir = get_config_path().parent / "ui_assets"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    path = cache_dir / f"checkbox_check_{theme}.png"
+    if not path.exists():
+        size = 14
+        pix = QPixmap(size, size)
+        pix.fill(Qt.transparent)
+        painter = QPainter(pix)
+        painter.setRenderHint(QPainter.Antialiasing)
+        pen = QPen(QColor(t["selection_bg"]))
+        pen.setWidthF(2.2)
+        pen.setCapStyle(Qt.RoundCap)
+        pen.setJoinStyle(Qt.RoundJoin)
+        painter.setPen(pen)
+        painter.drawLine(3, 7, 6, 10)
+        painter.drawLine(6, 10, 11, 4)
+        painter.end()
+        pix.save(str(path), "PNG")
+    return str(path.resolve()).replace("\\", "/")
+
+
+def build_app_stylesheet(theme_name: str) -> str:
+    """Build the application-wide Qt stylesheet for *theme_name*."""
+    t = get_theme_tokens(theme_name)
+    checkmark = checkbox_checkmark_asset_path(theme_name)
+    return f"""
+QWidget {{
+    background-color: {t['window']};
+    color: {t['window_text']};
+}}
+QMainWindow, QDialog {{
+    background-color: {t['window']};
+    color: {t['window_text']};
+}}
+QGroupBox {{
+    font-weight: bold;
+    border: 1px solid {t['border']};
+    border-radius: 4px;
+    margin-top: 8px;
+    padding-top: 8px;
+}}
+QGroupBox::title {{
+    subcontrol-origin: margin;
+    left: 8px;
+    padding: 0 4px;
+    color: {t['text']};
+}}
+QLabel {{
+    color: {t['text']};
+    background: transparent;
+}}
+QLabel[themeMuted="true"] {{
+    color: {t['text_muted']};
+}}
+QLineEdit, QTextEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
+    background-color: {t['input_bg']};
+    color: {t['text']};
+    border: 1px solid {t['input_border']};
+    border-radius: 3px;
+    padding: 3px 5px;
+    selection-background-color: {t['selection_bg']};
+    selection-color: {t['selection_text']};
+}}
+QTextEdit[logPanel="true"], QPlainTextEdit[logPanel="true"] {{
+    background-color: {t['log_bg']};
+    color: {t['log_text']};
+    border: 1px solid {t['log_border']};
+    border-radius: 3px;
+}}
+QComboBox QAbstractItemView {{
+    background-color: {t['input_bg']};
+    color: {t['text']};
+    border: 1px solid {t['input_border']};
+    selection-background-color: {t['selection_bg']};
+    selection-color: {t['selection_text']};
+}}
+QTabWidget::pane {{
+    border: 1px solid {t['border']};
+    background: {t['window']};
+}}
+QTabBar::tab {{
+    background: {t['tab_bg']};
+    color: {t['text_muted']};
+    border: 1px solid {t['border']};
+    padding: 6px 12px;
+    margin-right: 2px;
+}}
+QTabBar::tab:selected {{
+    background: {t['tab_selected']};
+    color: {t['text']};
+    border-bottom-color: {t['tab_selected']};
+}}
+QTabBar::tab:hover {{
+    color: {t['text']};
+}}
+QPushButton {{
+    background-color: {t['surface_alt']};
+    color: {t['text']};
+    border: 1px solid {t['input_border']};
+    border-radius: 4px;
+    padding: 5px 12px;
+}}
+QPushButton:hover {{
+    background-color: {t['surface']};
+}}
+QPushButton:pressed {{
+    background-color: {t['border']};
+}}
+QPushButton:disabled {{
+    color: {t['disabled_text']};
+}}
+QCheckBox, QRadioButton {{
+    color: {t['text']};
+    spacing: 6px;
+}}
+QCheckBox::indicator, QRadioButton::indicator {{
+    width: 14px;
+    height: 14px;
+    border: 1px solid {t['input_border']};
+    background: {t['input_bg']};
+    border-radius: 2px;
+}}
+QCheckBox::indicator:checked {{
+    background-color: {t['input_bg']};
+    border: 2px solid {t['selection_bg']};
+    image: url({checkmark});
+}}
+QCheckBox::indicator:disabled {{
+    background-color: {t['surface']};
+    border-color: {t['border']};
+}}
+QCheckBox::indicator:checked:disabled {{
+    background-color: {t['surface']};
+    border-color: {t['border']};
+    image: url({checkmark});
+}}
+QRadioButton::indicator {{
+    border-radius: 7px;
+}}
+QRadioButton::indicator:checked {{
+    background-color: {t['selection_bg']};
+    border: 1px solid {t['selection_bg']};
+}}
+QProgressBar {{
+    border: 1px solid {t['border']};
+    border-radius: 3px;
+    text-align: center;
+    color: {t['text']};
+    background: {t['surface']};
+}}
+QProgressBar::chunk {{
+    background-color: {t['selection_bg']};
+}}
+QStatusBar {{
+    background: {t['surface']};
+    color: {t['text_muted']};
+}}
+QMenu {{
+    background-color: {t['window']};
+    color: {t['text']};
+    border: 1px solid {t['border']};
+}}
+QMenu::item:selected {{
+    background-color: {t['selection_bg']};
+    color: {t['selection_text']};
+}}
+QScrollBar:vertical {{
+    background: {t['surface']};
+    width: 12px;
+    margin: 0;
+}}
+QScrollBar::handle:vertical {{
+    background: {t['scroll']};
+    min-height: 24px;
+    border-radius: 4px;
+}}
+QScrollBar::handle:vertical:hover {{
+    background: {t['scroll_hover']};
+}}
+QScrollBar:horizontal {{
+    background: {t['surface']};
+    height: 12px;
+}}
+QScrollBar::handle:horizontal {{
+    background: {t['scroll']};
+    min-width: 24px;
+    border-radius: 4px;
+}}
+QScrollBar::handle:horizontal:hover {{
+    background: {t['scroll_hover']};
+}}
+QListWidget, QTreeWidget, QTextBrowser {{
+    background-color: {t['input_bg']};
+    color: {t['text']};
+    border: 1px solid {t['input_border']};
+    alternate-background-color: {t['surface']};
+}}
+QHeaderView::section {{
+    background-color: {t['surface_alt']};
+    color: {t['text']};
+    border: 1px solid {t['border']};
+    padding: 4px;
+}}
+QSplitter::handle {{
+    background: {t['border']};
+}}
+QFrame#folderBar {{
+    background-color: {t['surface']};
+    border-bottom: 1px solid {t['border']};
+}}
+QPushButton#folderLinkBtn {{
+    background: transparent;
+    border: none;
+    color: {t['link']};
+    padding: 2px 6px;
+    font-size: 10px;
+}}
+QPushButton#folderLinkBtn:hover {{
+    color: {t['link_hover']};
+    text-decoration: underline;
+}}
+QPushButton#folderLinkBtn:pressed {{
+    color: {t['link_pressed']};
+}}
+QFrame#actionBar {{
+    border-top: 1px solid {t['action_bar_border']};
+}}
+QPushButton#gearBtn {{
+    background-color: {t['gear_btn_bg']};
+    color: {t['text']};
+    border: 1px solid {t['gear_btn_border']};
+    border-radius: 4px;
+    font-size: 11px;
+    padding: 4px 10px;
+}}
+QPushButton#gearBtn:hover {{
+    background-color: {t['surface']};
+    border-color: {t['border_light']};
+}}
+QPushButton#gearBtn:pressed {{
+    background-color: {t['border']};
+}}
+QLabel#emptyStateLabel {{
+    color: {t['text_faint']};
+    font-size: 12px;
+    padding: 24px;
+    background-color: {t['empty_panel_bg']};
+    border: 1px solid {t['empty_panel_border']};
+    border-radius: 3px;
+}}
+QTreeWidget#remuxFilesTree {{
+    background-color: {t['log_bg']};
+    color: {t['log_text']};
+    border: 1px solid {t['log_border']};
+    border-radius: 3px;
+    font-size: 11px;
+}}
+QTreeWidget#remuxFilesTree::item {{
+    padding: 3px;
+}}
+QTreeWidget#remuxFilesTree::item:selected {{
+    background-color: {t['selection_bg']};
+    color: {t['selection_text']};
+}}
+QPushButton#dangerSecondaryBtn {{
+    background-color: {t['danger_btn_bg']};
+    color: {t['danger_btn_text']};
+    border: 1px solid {t['danger_btn_border']};
+    border-radius: 3px;
+    padding: 4px 10px;
+    font-weight: normal;
+}}
+QPushButton#dangerSecondaryBtn:hover {{
+    background-color: {t['danger_btn_hover']};
+}}
+QPushButton#neutralSecondaryBtn {{
+    background-color: {t['secondary_btn_bg']};
+    color: {t['secondary_btn_text']};
+    border: 1px solid {t['secondary_btn_border']};
+    border-radius: 3px;
+    padding: 4px 10px;
+    font-weight: normal;
+}}
+QPushButton#neutralSecondaryBtn:hover {{
+    background-color: {t['secondary_btn_hover']};
+}}
+QPushButton#outlineAccentBtn {{
+    background-color: {t['outline_accent_bg']};
+    color: {t['outline_accent_fg']};
+    border: 2px solid {t['outline_accent_border']};
+    border-radius: 5px;
+    padding: 4px 12px;
+    font-weight: bold;
+    min-height: 18px;
+}}
+QPushButton#outlineAccentBtn:hover {{
+    background-color: {t['outline_accent_hover']};
+}}
+QPushButton#linkBtn {{
+    background: transparent;
+    border: none;
+    color: {t['link_accent']};
+    text-decoration: underline;
+    font-weight: normal;
+    font-size: 11px;
+    padding: 0;
+}}
+QPushButton#linkBtn:hover {{
+    color: {t['link_hover']};
+}}
+QPushButton#stopBtn {{
+    background-color: {t['stop_btn_bg']};
+    color: {t['accent_btn_text']};
+    border: none;
+    border-radius: 5px;
+    padding: 4px 12px;
+    font-weight: bold;
+}}
+QPushButton#stopBtn:hover {{
+    background-color: {t['stop_btn_hover']};
+}}
+QPushButton#stopBtn:pressed {{
+    background-color: {t['stop_btn_pressed']};
+}}
+QPushButton#stopBtn:disabled {{
+    background-color: {t['stop_btn_disabled_bg']};
+    color: {t['stop_btn_disabled_text']};
+}}
+QProgressBar#themedProgressBar {{
+    border: 1px solid {t['input_border']};
+    border-radius: 5px;
+    text-align: center;
+    background-color: {t['surface']};
+    color: {t['text']};
+}}
+QProgressBar#themedProgressBar::chunk {{
+    background-color: {t['selection_bg']};
+    border-radius: 4px;
+}}
+"""
+
+
+def build_app_palette(theme_name: str) -> QPalette:
+    """Build a ``QPalette`` aligned with *theme_name* tokens."""
+    t = get_theme_tokens(theme_name)
+    pal = QPalette()
+    window = QColor(t["window"])
+    text = QColor(t["window_text"])
+    base = QColor(t["input_bg"])
+    alt = QColor(t["surface"])
+    border = QColor(t["border"])
+    highlight = QColor(t["selection_bg"])
+    highlighted_text = QColor(t["selection_text"])
+    disabled = QColor(t["disabled_text"])
+
+    pal.setColor(QPalette.Window, window)
+    pal.setColor(QPalette.WindowText, text)
+    pal.setColor(QPalette.Base, base)
+    pal.setColor(QPalette.AlternateBase, alt)
+    pal.setColor(QPalette.ToolTipBase, base)
+    pal.setColor(QPalette.ToolTipText, text)
+    pal.setColor(QPalette.Text, text)
+    pal.setColor(QPalette.Button, alt)
+    pal.setColor(QPalette.ButtonText, text)
+    pal.setColor(QPalette.BrightText, highlighted_text)
+    pal.setColor(QPalette.Link, QColor(t["link_hover"]))
+    pal.setColor(QPalette.Highlight, highlight)
+    pal.setColor(QPalette.HighlightedText, highlighted_text)
+    pal.setColor(QPalette.Disabled, QPalette.WindowText, disabled)
+    pal.setColor(QPalette.Disabled, QPalette.Text, disabled)
+    pal.setColor(QPalette.Disabled, QPalette.ButtonText, disabled)
+    pal.setColor(QPalette.Mid, border)
+    return pal
+
+
+def apply_ui_theme(app: QApplication, theme_name: str) -> str:
+    """Apply global stylesheet and palette. Returns normalized theme name."""
+    theme = normalize_ui_theme(theme_name)
+    app.setStyleSheet(build_app_stylesheet(theme))
+    app.setPalette(build_app_palette(theme))
+    return theme
+
+
+def promote_muted_labels(root: QWidget) -> None:
+    """Move inline gray label colors to ``themeMuted`` so the global theme controls them."""
+    for lbl in root.findChildren(QLabel):
+        ss = (lbl.styleSheet() or "").strip()
+        if not re.search(r"color:\s*#(333|555|666|777|888|999)\b", ss, re.I):
+            continue
+        lbl.setProperty("themeMuted", True)
+        cleaned = re.sub(r"color:\s*#[0-9a-fA-F]{3,8}\s*;?\s*", "", ss, flags=re.I).strip()
+        lbl.setStyleSheet(cleaned)
+        lbl.style().unpolish(lbl)
+        lbl.style().polish(lbl)
+
+
+# ============================================================================
 # Configuration management
 # ============================================================================
 
@@ -283,6 +835,7 @@ def load_config() -> Dict:
         "whisper_post_proc_fix_casing":            True,
         "whisper_post_proc_balance_lines":         True,
         "whisper_name_dictionary_dir":             "",
+        "ui_theme":                                "light",
         "subtitle_translation_engine": "gst",
         "translation_target_language": "English",
         "argos_from_lang": "en",
@@ -311,6 +864,7 @@ def load_config() -> Dict:
     ):
         default_config["whisper_name_dictionary_dir"] = _legacy_nl_val
     default_config.pop(_legacy_nl_key, None)
+    default_config["ui_theme"] = normalize_ui_theme(default_config.get("ui_theme"))
 
     api_keys = default_config.get("api_keys") or []
     if not api_keys and (default_config.get("api_key") or default_config.get("api_key2")):
@@ -7584,6 +8138,7 @@ class SetupWizard(QDialog):
         layout.addWidget(progress_bar)
         log = QTextEdit()
         log.setReadOnly(True)
+        mark_log_text_edit(log)
         layout.addWidget(log)
         close_btn = QPushButton("Close")
         close_btn.setEnabled(False)
@@ -7637,6 +8192,7 @@ class SetupWizard(QDialog):
         layout.addWidget(progress_bar)
         log = QTextEdit()
         log.setReadOnly(True)
+        mark_log_text_edit(log)
         layout.addWidget(log)
         close_btn = QPushButton("Close")
         close_btn.setEnabled(False)
@@ -7683,6 +8239,7 @@ class SetupWizard(QDialog):
         layout.addWidget(progress_bar)
         log = QTextEdit()
         log.setReadOnly(True)
+        mark_log_text_edit(log)
         layout.addWidget(log)
         install_btn = QPushButton("Install")
         close_btn = QPushButton("Close")
@@ -8108,8 +8665,9 @@ class FAQDialog(QDialog):
 class AboutDialog(QDialog):
     """About dialog."""
     
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, theme: str = "light"):
         super().__init__(parent)
+        self._theme = normalize_ui_theme(theme)
         self.setWindowTitle("About")
         self.setMinimumWidth(700)
         self.setMinimumHeight(400)
@@ -8120,7 +8678,7 @@ class AboutDialog(QDialog):
         about_content = QTextEdit()
         about_content.setReadOnly(True)
         about_content.setFont(QFont("Arial", 13))
-        about_content.setHtml(self.get_about_content())
+        about_content.setHtml(self.get_about_content(self._theme))
         layout.addWidget(about_content)
         
         # Icon and Twitter link at bottom
@@ -8156,17 +8714,18 @@ class AboutDialog(QDialog):
         
         self.setLayout(layout)
     
-    def get_about_content(self) -> str:
+    def get_about_content(self, theme_name: str = "light") -> str:
         """Generate About content as HTML."""
+        t = get_theme_tokens(theme_name)
         version = __version__
         return f"""
         <style>
         body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; font-size: 13pt; line-height: 1.6; }}
-        .app-name {{ font-size: 18pt; font-weight: 600; color: #b42075; margin-bottom: 4px; }}
-        .version {{ font-size: 13pt; color: #666; margin-bottom: 16px; }}
-        .creator {{ font-size: 13pt; color: #333; margin-bottom: 20px; }}
-        .description {{ font-size: 13pt; color: #333; margin-bottom: 24px; line-height: 1.7; }}
-        .footer {{ font-size: 12pt; color: #666; font-style: italic; margin-top: 24px; }}
+        .app-name {{ font-size: 18pt; font-weight: 600; color: {t['about_title']}; margin-bottom: 4px; }}
+        .version {{ font-size: 13pt; color: {t['about_version']}; margin-bottom: 16px; }}
+        .creator {{ font-size: 13pt; color: {t['about_body']}; margin-bottom: 20px; }}
+        .description {{ font-size: 13pt; color: {t['about_body']}; margin-bottom: 24px; line-height: 1.7; }}
+        .footer {{ font-size: 12pt; color: {t['about_version']}; font-style: italic; margin-top: 24px; }}
         </style>
         <div style="padding: 24px;">
         <div class="app-name">Video Processing Studio</div>
@@ -8174,7 +8733,7 @@ class AboutDialog(QDialog):
         <div class="version">Version {version}</div>
 
         <div class="creator">
-        <span style="color: #df4300; font-weight: 600;">Created by:</span> SLAPPEPOLSEN
+        <span style="color: {t['about_creator_accent']}; font-weight: 600;">Created by:</span> SLAPPEPOLSEN
         </div>
         
         <div class="description">
@@ -8192,7 +8751,6 @@ class AboutDialog(QDialog):
         """
 
 
-# Language selection dialog
 class LanguageDialog(QDialog):
     """Dialog for selecting language code for transcription."""
     
@@ -8257,13 +8815,7 @@ class MediaInfoDialog(QDialog):
         info_text = QTextEdit()
         info_text.setReadOnly(True)
         info_text.setFont(QFont("Courier New", 10))
-        info_text.setStyleSheet("""
-            QTextEdit {
-                background-color: #f5f5f5;
-                border: 1px solid #ddd;
-                border-radius: 3px;
-            }
-        """)
+        mark_log_text_edit(info_text)
         
         # Analyze tracks and format info
         if video_path and video_path.exists():
@@ -8413,6 +8965,24 @@ class WhisperModelDialog(QDialog):
     def get_result(self) -> bool:
         """Get whether user has existing model."""
         return self.result if self.result is not None else False
+
+
+class LesbianFlagThemeCheckbox(QCheckBox):
+    """Always checked; shows a joke dialog if the user tries to turn it off."""
+
+    def __init__(self, text: str = "Lesbian flag theme", parent=None):
+        super().__init__(text, parent)
+        self.setChecked(True)
+
+    def nextCheckState(self) -> None:
+        if self.checkState() == Qt.Checked:
+            QMessageBox.warning(
+                self.window() or self,
+                "Wait a minute...",
+                "That kinda homophobic, isn't it?",
+            )
+            return
+        super().nextCheckState()
 
 
 # Settings dialog
@@ -8577,9 +9147,15 @@ class SettingsDialog(QDialog):
         appearance_group = QGroupBox("Appearance")
         appearance_group.setStyleSheet("QGroupBox { font-weight: bold; }")
         app_form = QFormLayout()
-        self.lesbian_flag_checkbox = QCheckBox("Lesbian flag theme")
-        self.lesbian_flag_checkbox.setChecked(True)
-        self.lesbian_flag_checkbox.stateChanged.connect(self.toggle_lesbian_flag_theme)
+        self.ui_theme_combo = QComboBox()
+        self.ui_theme_combo.addItem("Light", "light")
+        self.ui_theme_combo.addItem("Dark", "dark")
+        current_theme = normalize_ui_theme(self.config.get("ui_theme"))
+        theme_idx = self.ui_theme_combo.findData(current_theme)
+        if theme_idx >= 0:
+            self.ui_theme_combo.setCurrentIndex(theme_idx)
+        app_form.addRow("Theme:", self.ui_theme_combo)
+        self.lesbian_flag_checkbox = LesbianFlagThemeCheckbox()
         app_form.addRow("", self.lesbian_flag_checkbox)
         appearance_group.setLayout(app_form)
         appearance_layout.addWidget(appearance_group)
@@ -8599,6 +9175,7 @@ class SettingsDialog(QDialog):
         main_layout.addLayout(button_layout)
         
         self.setLayout(main_layout)
+        promote_muted_labels(self)
 
     def _add_api_key_row(self, value: str = ""):
         """Add an API key row. Called with value when populating, or blank when user clicks +."""
@@ -8641,18 +9218,11 @@ class SettingsDialog(QDialog):
         self.wm720_browse.setEnabled(enabled)
         self.wm1080_browse.setEnabled(enabled)
     
-    def toggle_lesbian_flag_theme(self, state):
-        """Joke feature - shows a message when user tries to turn theme OFF; keeps theme ON."""
-        if state == Qt.Unchecked:  # User tried to uncheck it (turn theme off)
-            QMessageBox.warning(
-                self,
-                "Wait a minute...",
-                "That kinda homophobic, isn't it?"
-            )
-            self.lesbian_flag_checkbox.blockSignals(True)
-            self.lesbian_flag_checkbox.setChecked(True)
-            self.lesbian_flag_checkbox.blockSignals(False)
-    
+    def showEvent(self, event):
+        """Lesbian flag theme is always on when Settings opens."""
+        super().showEvent(event)
+        self.lesbian_flag_checkbox.setChecked(True)
+
     def browse_file(self, line_edit, title):
         """Browse for a file."""
         file_path, _ = QFileDialog.getOpenFileName(
@@ -8672,6 +9242,10 @@ class SettingsDialog(QDialog):
         self.config["watermark_1080p"] = self.watermark_1080p_input.text()
         self.config["use_watermarks"] = self.use_watermarks_checkbox.isChecked()
         self.config["use_iso639_suffixes"] = self.iso639_checkbox.isChecked()
+        theme_data = self.ui_theme_combo.currentData()
+        self.config["ui_theme"] = normalize_ui_theme(
+            theme_data if theme_data is not None else self.ui_theme_combo.currentText()
+        )
         save_config(self.config)
         self.accept()
 
@@ -9033,7 +9607,6 @@ class VideoProcessingApp(QMainWindow):
         self.config = load_config()
         self.worker = None
         self.remux_selected_files = []  # Initialize selected files list
-     
         # Set window icon
         self.setWindowIcon(get_app_icon())
         
@@ -9044,6 +9617,10 @@ class VideoProcessingApp(QMainWindow):
             wizard.exec_()
         
         self.init_ui()
+
+    def closeEvent(self, event) -> None:
+        super().closeEvent(event)
+
     # color functions
     def darken_color(self, hex_color: str, percent: float = 0.15) -> str:
         """Darken a hex color by a percentage."""
@@ -9061,12 +9638,15 @@ class VideoProcessingApp(QMainWindow):
         return f"#{r:02x}{g:02x}{b:02x}"
     # button style functions
     def apply_button_style(self, button: QPushButton, color: str):
-        """Apply solid color style to a button with 15% darker hover."""
-        hover_color = self.darken_color(color, 0.15)
+        """Apply solid color style to a button with slightly darker hover."""
+        theme = normalize_ui_theme(self.config.get("ui_theme"))
+        t = get_theme_tokens(theme)
+        hover_color = self.darken_color(color, 0.12)
+        text_color = t["accent_btn_text"]
         stylesheet = f"""
         QPushButton {{
             background-color: {color};
-            color: white;
+            color: {text_color};
             border: none;
             border-radius: 5px;
             padding: 4px 12px;
@@ -9088,55 +9668,82 @@ class VideoProcessingApp(QMainWindow):
         button.setStyleSheet(stylesheet)
     # lesbian flag style functions (slay)
     def apply_lesbian_flag_styles(self):
-        """Apply lesbian flag color scheme to buttons."""
-        # Flag colors
-        colors = [
-            "#df4300",  # Red
-            "#f48a32",  # Orange
-            "#ffab68",  # Light Orange
-            "#dc7bb3",  # Pink
-            "#c46ea1",  # Purple
-            "#b42075",  # Dark Pink
-        ]
-        
-        role_to_color = {
-            "download": colors[0],
-            "subtitle": colors[1],
-            "process": colors[2],
-            "remux": colors[3],
-            "transcribe": colors[4],
-            "header": colors[5],
-        }
+        """Apply lesbian flag color scheme to accent buttons (muted in dark mode)."""
+        theme = normalize_ui_theme(self.config.get("ui_theme"))
+        role_to_color = ACCENT_ROLE_COLORS[theme]
         for btn in self.findChildren(QPushButton):
             role = btn.property("ui_role")
             if role and role in role_to_color:
                 self.apply_button_style(btn, role_to_color[role])
-    
+
+    def apply_theme(self, theme_name: Optional[str] = None) -> None:
+        """Apply light/dark theme to the whole app (stylesheet, palette, logs, muted labels)."""
+        theme = normalize_ui_theme(
+            theme_name if theme_name is not None else self.config.get("ui_theme")
+        )
+        self.config["ui_theme"] = theme
+        app = QApplication.instance()
+        if app is not None:
+            apply_ui_theme(app, theme)
+        promote_muted_labels(self)
+        self._refresh_themed_widgets()
+        self.apply_lesbian_flag_styles()
+
+    def _refresh_themed_widgets(self) -> None:
+        """Re-polish widgets that use dynamic properties or object names for theming."""
+        for widget in self.findChildren(QWidget):
+            if widget.property("logPanel"):
+                widget.style().unpolish(widget)
+                widget.style().polish(widget)
+            elif widget.objectName() in (
+                "folderBar",
+                "folderLinkBtn",
+                "actionBar",
+                "gearBtn",
+                "emptyStateLabel",
+                "remuxFilesTree",
+                "dangerSecondaryBtn",
+                "neutralSecondaryBtn",
+                "outlineAccentBtn",
+                "linkBtn",
+                "stopBtn",
+                "themedProgressBar",
+            ):
+                widget.style().unpolish(widget)
+                widget.style().polish(widget)
+
+    def _register_folder_link_button(self, button: QPushButton) -> None:
+        button.setObjectName("folderLinkBtn")
+
+    def _register_folder_bar(self, frame: QFrame) -> None:
+        frame.setObjectName("folderBar")
+
+    def _add_folder_shortcuts_bar(self, parent_layout: QVBoxLayout) -> QFrame:
+        """Folder shortcut row shared by Download, Subtitles, and Transcription tabs."""
+        folder_bar = QFrame()
+        self._register_folder_bar(folder_bar)
+        row = QHBoxLayout(folder_bar)
+        row.setContentsMargins(4, 4, 4, 4)
+        for label, folder_getter in (
+            ("Open downloads folder", get_downloads_dir),
+            ("Open subtitles folder", get_subtitles_dir),
+            ("Open output folder", get_output_dir),
+        ):
+            btn = QPushButton(label)
+            self._register_folder_link_button(btn)
+            btn.clicked.connect(lambda _checked=False, g=folder_getter: open_folder_in_explorer(g()))
+            row.addWidget(btn)
+        row.addStretch()
+        parent_layout.addWidget(folder_bar)
+        return folder_bar
+
     def build_transcription_tab(self):
         """Create the dedicated transcription tab."""
         tab = QWidget()
         layout = QVBoxLayout()
         layout.setSpacing(8)
 
-        _folder_strip_style = "QPushButton { background: none; color: #777; border: none; padding: 2px 6px; font-size: 10px; } QPushButton:hover { color: #555; text-decoration: underline; } QPushButton:pressed { color: #333; }"
-        tr_folder_bar = QFrame()
-        tr_folder_bar.setStyleSheet("QFrame { background: #f5f5f5; border-bottom: 1px solid #e0e0e0; }")
-        tr_folder_layout = QHBoxLayout(tr_folder_bar)
-        tr_folder_layout.setContentsMargins(4, 4, 4, 4)
-        tr_open_downloads_top = QPushButton("Open downloads folder")
-        tr_open_downloads_top.setStyleSheet(_folder_strip_style)
-        tr_open_downloads_top.clicked.connect(lambda: open_folder_in_explorer(get_downloads_dir()))
-        tr_open_subtitles_top = QPushButton("Open subtitles folder")
-        tr_open_subtitles_top.setStyleSheet(_folder_strip_style)
-        tr_open_subtitles_top.clicked.connect(lambda: open_folder_in_explorer(get_subtitles_dir()))
-        tr_open_output_top = QPushButton("Open output folder")
-        tr_open_output_top.setStyleSheet(_folder_strip_style)
-        tr_open_output_top.clicked.connect(lambda: open_folder_in_explorer(get_output_dir()))
-        tr_folder_layout.addWidget(tr_open_downloads_top)
-        tr_folder_layout.addWidget(tr_open_subtitles_top)
-        tr_folder_layout.addWidget(tr_open_output_top)
-        tr_folder_layout.addStretch()
-        layout.addWidget(tr_folder_bar)
+        self._add_folder_shortcuts_bar(layout)
 
         # Transcription setup
         file_group = QGroupBox("Setup")
@@ -9263,21 +9870,14 @@ class VideoProcessingApp(QMainWindow):
 
         # Action bar: separated from the form by a top border
         action_bar = QFrame()
-        action_bar.setStyleSheet("QFrame { border-top: 1px solid #e0e0e0; }")
+        action_bar.setObjectName("actionBar")
         action_bar_layout = QHBoxLayout(action_bar)
         action_bar_layout.setContentsMargins(0, 6, 0, 2)
         action_bar_layout.setSpacing(8)
 
-        _btn_style = (
-            "QPushButton { background: #f5f5f5; border: 1px solid #ccc; border-radius: 4px;"
-            "  font-size: 11px; color: #555; padding: 4px 10px; }"
-            "QPushButton:hover { background: #eaeaea; border-color: #aaa; color: #333; }"
-            "QPushButton:pressed { background: #d8d8d8; }"
-        )
-
         gear_btn = QPushButton("⚙  Advanced options")
+        gear_btn.setObjectName("gearBtn")
         gear_btn.setToolTip("Open advanced transcription settings")
-        gear_btn.setStyleSheet(_btn_style)
         gear_btn.clicked.connect(self.open_whisper_options)
 
         # Post-processing toggle + options gear
@@ -9286,9 +9886,9 @@ class VideoProcessingApp(QMainWindow):
         self.transcribe_post_proc_cb.setChecked(self.config.get("whisper_post_processing_enabled", True))
         self.transcribe_post_proc_cb.toggled.connect(self._on_post_proc_toggled)
         post_proc_gear = QPushButton("⚙")
+        post_proc_gear.setObjectName("gearBtn")
         post_proc_gear.setFixedWidth(28)
         post_proc_gear.setToolTip("Configure post-processing options")
-        post_proc_gear.setStyleSheet(_btn_style)
         post_proc_gear.clicked.connect(self.open_post_processing_options)
 
         self.transcribe_main_btn = QPushButton("Transcribe")
@@ -9312,36 +9912,13 @@ class VideoProcessingApp(QMainWindow):
         self.transcribe_progress_bar = QProgressBar()
         self.transcribe_progress_bar.setMinimumHeight(25)
         self.transcribe_progress_bar.setVisible(False)
-        self.transcribe_progress_bar.setStyleSheet("""
-            QProgressBar {
-                border: 1px solid #ccc;
-                border-radius: 5px;
-                text-align: center;
-                background-color: #f0f0f0;
-            }
-            QProgressBar::chunk {
-                background-color: #5dade2;
-                border-radius: 4px;
-            }
-        """)
+        self.transcribe_progress_bar.setObjectName("themedProgressBar")
         
         self.transcribe_stop_btn = QPushButton("Stop")
         self.transcribe_stop_btn.setFixedWidth(80)
+        self.transcribe_stop_btn.setObjectName("stopBtn")
         self.transcribe_stop_btn.setVisible(False)
         self.transcribe_stop_btn.clicked.connect(self.stop_operation)
-        self.transcribe_stop_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #cc0000;
-                color: white;
-                border: none;
-                border-radius: 5px;
-                padding: 4px 12px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #990000;
-            }
-        """)
         
         progress_layout.addWidget(self.transcribe_progress_bar)
         progress_layout.addWidget(self.transcribe_stop_btn)
@@ -9568,6 +10145,7 @@ class VideoProcessingApp(QMainWindow):
                 layout = QVBoxLayout()
                 log = QTextEdit()
                 log.setReadOnly(True)
+                mark_log_text_edit(log)
                 layout.addWidget(log)
                 close_btn = QPushButton("Close")
                 close_btn.setEnabled(False)
@@ -9641,6 +10219,7 @@ class VideoProcessingApp(QMainWindow):
         layout.addWidget(progress_bar)
         log = QTextEdit()
         log.setReadOnly(True)
+        mark_log_text_edit(log)
         layout.addWidget(log)
         close_btn = QPushButton("Close")
         close_btn.setEnabled(False)
@@ -9793,28 +10372,14 @@ class VideoProcessingApp(QMainWindow):
         self.remux_files_tree.setAlternatingRowColors(True)
         self.remux_files_tree.header().setStretchLastSection(False)
         self.remux_files_tree.header().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.remux_files_tree.setStyleSheet("""
-            QTreeWidget {
-                background-color: #f5f5f5;
-                border: 1px solid #ddd;
-                border-radius: 3px;
-                font-size: 11px;
-            }
-            QTreeWidget::item {
-                padding: 3px;
-            }
-            QTreeWidget::item:selected {
-                background-color: #d168a3;
-                color: white;
-            }
-        """)
+        self.remux_files_tree.setObjectName("remuxFilesTree")
         self.remux_files_tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.remux_files_tree.customContextMenuRequested.connect(self.show_track_context_menu)
 
         # Empty state placeholder (shown in tree area when no files)
         self.remux_empty_placeholder = QLabel("No files added yet. Click Add Files to get started.")
+        self.remux_empty_placeholder.setObjectName("emptyStateLabel")
         self.remux_empty_placeholder.setAlignment(Qt.AlignCenter)
-        self.remux_empty_placeholder.setStyleSheet("color: #888; font-size: 12px; padding: 24px; background-color: #f5f5f5; border: 1px solid #ddd; border-radius: 3px;")
         self.remux_empty_placeholder.setMinimumHeight(120)
 
         self.remux_tree_stack = QStackedWidget()
@@ -10550,13 +11115,12 @@ class VideoProcessingApp(QMainWindow):
     def _make_log_panel(self, title: str = "LOG OUTPUT", placeholder: str = None):
         """Returns (group, text_edit). Caller adds to layout."""
         group = QGroupBox(title)
-        group.setStyleSheet("QGroupBox { font-weight: bold; }")
         layout = QVBoxLayout()
         text_edit = QTextEdit()
         text_edit.setReadOnly(True)
         text_edit.setFont(QFont("Monaco", 9))
         text_edit.setMinimumHeight(LOG_MIN_HEIGHT)
-        text_edit.setStyleSheet("QTextEdit { background-color: #f5f5f5; border: 1px solid #ddd; border-radius: 3px; }")
+        mark_log_text_edit(text_edit)
         if placeholder:
             text_edit.setPlaceholderText(placeholder)
         layout.addWidget(text_edit)
@@ -10611,29 +11175,11 @@ class VideoProcessingApp(QMainWindow):
         download_tab_layout.setSpacing(0)
         download_tab.setLayout(download_tab_layout)
 
+        self._add_folder_shortcuts_bar(download_tab_layout)
+
         top = QWidget()
         top_layout = QVBoxLayout(top)
         top_layout.setSpacing(LAYOUT_SPACING)
-
-        _folder_strip_style = "QPushButton { background: none; color: #777; border: none; padding: 2px 6px; font-size: 10px; } QPushButton:hover { color: #555; text-decoration: underline; } QPushButton:pressed { color: #333; }"
-        dl_folder_bar = QFrame()
-        dl_folder_bar.setStyleSheet("QFrame { background: #f5f5f5; border-bottom: 1px solid #e0e0e0; }")
-        dl_folder_layout = QHBoxLayout(dl_folder_bar)
-        dl_folder_layout.setContentsMargins(4, 4, 4, 4)
-        dl_open_downloads_top = QPushButton("Open downloads folder")
-        dl_open_downloads_top.setStyleSheet(_folder_strip_style)
-        dl_open_downloads_top.clicked.connect(lambda: open_folder_in_explorer(get_downloads_dir()))
-        dl_open_subtitles_top = QPushButton("Open subtitles folder")
-        dl_open_subtitles_top.setStyleSheet(_folder_strip_style)
-        dl_open_subtitles_top.clicked.connect(lambda: open_folder_in_explorer(get_subtitles_dir()))
-        dl_open_output_top = QPushButton("Open output folder")
-        dl_open_output_top.setStyleSheet(_folder_strip_style)
-        dl_open_output_top.clicked.connect(lambda: open_folder_in_explorer(get_output_dir()))
-        dl_folder_layout.addWidget(dl_open_downloads_top)
-        dl_folder_layout.addWidget(dl_open_subtitles_top)
-        dl_folder_layout.addWidget(dl_open_output_top)
-        dl_folder_layout.addStretch()
-        top_layout.addWidget(dl_folder_bar)
 
         # Naming/options group
         naming_group = QGroupBox("Naming options")
@@ -10709,7 +11255,7 @@ class VideoProcessingApp(QMainWindow):
         commands_header_row.addSpacing(8)
         commands_how_btn = QPushButton("How to get commands")
         commands_how_btn.setFlat(True)
-        commands_how_btn.setStyleSheet("color: #0066cc; text-decoration: underline; font-weight: normal; font-size: 11px;")
+        commands_how_btn.setObjectName("linkBtn")
         commands_how_btn.setCursor(Qt.PointingHandCursor)
         commands_how_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(DOWNLOAD_INSTRUCTIONS_URL)))
         commands_header_row.addWidget(commands_how_btn)
@@ -10745,21 +11291,11 @@ class VideoProcessingApp(QMainWindow):
         download_btn.setMinimumWidth(160)
         download_btn.clicked.connect(lambda: self.download_episodes(self.download_quality_combo.currentData()))
         clear_btn = QPushButton("Clear")
-        clear_btn.setStyleSheet(
-            "QPushButton { color: #c0392b; border: 1px solid #e8c0bb; background: #fff5f4; "
-            "border-radius: 3px; padding: 4px 10px; } "
-            "QPushButton:hover { background: #fde8e6; } "
-            "QPushButton:pressed { background: #f9d0cc; }"
-        )
+        clear_btn.setObjectName("dangerSecondaryBtn")
         clear_btn.setCursor(Qt.PointingHandCursor)
         clear_btn.clicked.connect(lambda: self.commands_text.clear())
         open_lossless_btn = QPushButton("Open in LosslessCut...")
-        open_lossless_btn.setStyleSheet(
-            "QPushButton { color: #555; border: 1px solid #ccc; background: #f9f9f9; "
-            "border-radius: 3px; padding: 4px 10px; } "
-            "QPushButton:hover { background: #efefef; } "
-            "QPushButton:pressed { background: #e5e5e5; }"
-        )
+        open_lossless_btn.setObjectName("neutralSecondaryBtn")
         open_lossless_btn.setCursor(Qt.PointingHandCursor)
         open_lossless_btn.clicked.connect(self.open_lossless_cut)
         download_buttons.addWidget(self.download_quality_combo)
@@ -10817,27 +11353,7 @@ class VideoProcessingApp(QMainWindow):
         # All buttons share this fixed width (sized to fit "Open subtitles folder")
         BUTTON_WIDTH = 200
 
-        _folder_strip_style = "QPushButton { background: none; color: #777; border: none; padding: 2px 6px; font-size: 10px; } QPushButton:hover { color: #555; text-decoration: underline; } QPushButton:pressed { color: #333; }"
-
-        # Folder shortcuts
-        folder_bar = QFrame()
-        folder_bar.setStyleSheet("QFrame { background: #f5f5f5; border-bottom: 1px solid #e0e0e0; }")
-        folder_bar_layout = QHBoxLayout(folder_bar)
-        folder_bar_layout.setContentsMargins(4, 4, 4, 4)
-        open_downloads_btn = QPushButton("Open downloads folder")
-        open_downloads_btn.setStyleSheet(_folder_strip_style)
-        open_downloads_btn.clicked.connect(lambda: open_folder_in_explorer(get_downloads_dir()))
-        open_subtitles_btn = QPushButton("Open subtitles folder")
-        open_subtitles_btn.setStyleSheet(_folder_strip_style)
-        open_subtitles_btn.clicked.connect(lambda: open_folder_in_explorer(get_subtitles_dir()))
-        open_output_btn = QPushButton("Open output folder")
-        open_output_btn.setStyleSheet(_folder_strip_style)
-        open_output_btn.clicked.connect(lambda: open_folder_in_explorer(get_output_dir()))
-        folder_bar_layout.addWidget(open_downloads_btn)
-        folder_bar_layout.addWidget(open_subtitles_btn)
-        folder_bar_layout.addWidget(open_output_btn)
-        folder_bar_layout.addStretch()
-        layout.addWidget(folder_bar)
+        self._add_folder_shortcuts_bar(layout)
 
         # Process flow: one group box (same pattern as Downloads → Naming options), no nested framed panels
         subtitles_group = QGroupBox("Subtitle options")
@@ -10919,19 +11435,7 @@ class VideoProcessingApp(QMainWindow):
         burn_row = QHBoxLayout()
         burn_btn = QPushButton("Burn-in subtitles")
         burn_btn.setFixedWidth(BUTTON_WIDTH)
-        burn_btn.setStyleSheet("""
-            QPushButton {
-                background-color: white;
-                color: #f48a32;
-                border: 2px solid #f48a32;
-                border-radius: 5px;
-                padding: 4px 12px;
-                font-weight: bold;
-                min-height: 18px;
-            }
-            QPushButton:hover { background-color: #fff4ec; }
-            QPushButton:pressed { background-color: #ffe8d4; }
-        """)
+        burn_btn.setObjectName("outlineAccentBtn")
         burn_btn.clicked.connect(self.open_burn_in_dialog)
         burn_desc = QLabel("Select video file(s), quality and watermark options, then burn.")
         burn_desc.setFont(QFont("Arial", 12))
@@ -10967,20 +11471,7 @@ class VideoProcessingApp(QMainWindow):
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
         self.progress_bar.setFormat("%p%")
-        self.progress_bar.setStyleSheet("""
-            QProgressBar {
-                border: 1px solid #ccc;
-                border-radius: 5px;
-                text-align: center;
-                background-color: #f0f0f0;
-            }
-            QProgressBar::chunk {
-                background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #df4300, stop:0.2 #f48a32, stop:0.4 #ffab68,
-                    stop:0.6 #dc7bb3, stop:0.8 #c46ea1, stop:1 #b42075);
-                border-radius: 4px;
-            }
-        """)
+        self.progress_bar.setObjectName("themedProgressBar")
         self.progress_counter_label = QLabel("")
         self.progress_counter_label.setFont(QFont("Arial", 9))
         self.progress_counter_label.setMinimumWidth(80)
@@ -10990,27 +11481,8 @@ class VideoProcessingApp(QMainWindow):
 
         self.stop_btn = QPushButton("Stop")
         self.stop_btn.setFixedWidth(80)
+        self.stop_btn.setObjectName("stopBtn")
         self.stop_btn.clicked.connect(self.stop_operation)
-        self.stop_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #cc0000;
-                color: white;
-                border: none;
-                border-radius: 5px;
-                padding: 4px 12px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #990000;
-            }
-            QPushButton:pressed {
-                background-color: #660000;
-            }
-            QPushButton:disabled {
-                background-color: #cccccc;
-                color: #666666;
-            }
-        """)
         progress_strip.addWidget(self.stop_btn)
 
         progress_layout.addLayout(progress_strip)
@@ -11053,7 +11525,7 @@ class VideoProcessingApp(QMainWindow):
         main_layout.addWidget(self.build_main_tabs())
 
         self.statusBar().showMessage("Ready")
-        self.apply_lesbian_flag_styles()
+        self.apply_theme()
         self.current_operation = None
     
     
@@ -11097,7 +11569,8 @@ class VideoProcessingApp(QMainWindow):
     
     def open_about(self):
         """Open About dialog."""
-        dialog = AboutDialog(self)
+        theme = normalize_ui_theme(self.config.get("ui_theme"))
+        dialog = AboutDialog(self, theme=theme)
         dialog.exec_()
     
     def open_faq(self):
@@ -11110,6 +11583,7 @@ class VideoProcessingApp(QMainWindow):
         dialog = SettingsDialog(self)
         if dialog.exec_() == QDialog.Accepted:
             self.config = load_config()
+            self.apply_theme()
             self.log("Settings saved.")
             self._refresh_subtitle_translation_panel()
 
@@ -11553,6 +12027,7 @@ class VideoProcessingApp(QMainWindow):
             layout = QVBoxLayout()
             log = QTextEdit()
             log.setReadOnly(True)
+            mark_log_text_edit(log)
             layout.addWidget(log)
             close_btn = QPushButton("Close")
             close_btn.setEnabled(False)
