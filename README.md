@@ -89,8 +89,8 @@ Download the DMG, ZIP, or tarball for your OS from **[Releases](https://github.c
 ## Heads up
 
 - **File size:** the application has a large footprint on disk.
-- **Design:** made by a programmer, not a designer — the goal is function over beauty.
-- **Support:** this is a single-developer personal passion project. Support, responses, updates, enhancements, and bug fixes happen as my free time allows.
+- **Design:** made by a programmer, not a designer, the goal is function over beauty.
+- **Support:** this is a single-developer personal passion project. Support, responses, updates, improvement, and bug fixes happen as my free time allows.
 - **Updates:** I have a full-time job, a life, and a finite attention span, so long stretches may pass with no improvements of any kind.
 
 > [!IMPORTANT]
