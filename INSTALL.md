@@ -57,6 +57,8 @@ Ensure **FFmpeg** and **Python 3.12** are available before running; the app may 
 
 Ready-made builds are easier to try but **may not run on every machine**. If you have trouble, use **Run from source** above.
 
+> Pre-built app releases are not my priority.
+
 ### Get the build
 
 1. Open [GitHub Releases](https://github.com/slappepolsen/sp-workshop/releases).
