@@ -57,7 +57,7 @@ Ensure **FFmpeg** and **Python 3.12** are available before running; the app may 
 
 Ready-made builds are easier to try but **may not run on every machine**. If you have trouble, use **Run from source** above.
 
-> Pre-built app releases are not my priority.
+> Note: Pre-built app releases are not a priority for this project. In many cases, the source code works perfectly while the packaged application introduces a completely different set of problems to troubleshoot and maintain. Because of that additional overhead, most releases are published as source code only. Pre-built packages are provided occasionally when time permits.
 
 ### Get the build
 
