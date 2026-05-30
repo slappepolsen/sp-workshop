@@ -7,8 +7,8 @@ Video Processing GUI Application
 A PyQt5 desktop app that provides a button-based interface for all video processing scripts.
 """
 
-__version__ = "10.4.1-alpha.1"
-VERSION_CODENAME = "Dark mode !!!!!!!"
+__version__ = "10.4.1-alpha.28"
+VERSION_CODENAME = "Lesbians"
 
 import sys
 import os
@@ -39,6 +39,57 @@ try:
     from typing import Protocol, runtime_checkable
 except ImportError:
     from typing_extensions import Protocol, runtime_checkable
+
+
+@dataclass
+class BatchResult:
+    """Counts for batch operations (download, extract, translate, etc.)."""
+    succeeded: int = 0
+    failed: int = 0
+    skipped: int = 0
+    error: Optional[str] = None
+
+    @property
+    def total(self) -> int:
+        return self.succeeded + self.failed + self.skipped
+
+
+def batch_error(message: str) -> BatchResult:
+    return BatchResult(error=message)
+
+
+def summarize_batch_result(result: BatchResult) -> Tuple[str, str]:
+    """Return (log_line, status_bar_message) for a batch job."""
+    if result.error:
+        return f"✗ {result.error}", result.error
+
+    total = result.total
+    if total == 0:
+        return "✗ Nothing to process.", "Error occurred"
+
+    if result.failed == 0 and result.succeeded == 0 and result.skipped > 0:
+        msg = f"Nothing to do — all {result.skipped} file(s) already handled."
+        return msg, "Ready"
+
+    if result.failed == 0 and result.succeeded > 0:
+        if result.skipped > 0:
+            msg = f"Done — {result.succeeded}/{total} finished, {result.skipped} skipped."
+        else:
+            msg = f"Done — {result.succeeded}/{total} finished."
+        return msg, "Ready"
+
+    if result.failed > 0 and result.succeeded > 0:
+        msg = f"Done — {result.succeeded}/{total} finished, {result.failed} had problems. Check the log."
+        return msg, msg
+
+    if result.failed > 0 and result.succeeded == 0:
+        if result.skipped > 0:
+            msg = f"Done — {result.skipped} skipped, {result.failed} failed. Check the log."
+        else:
+            msg = f"Done — 0/{total} finished, {result.failed} had problems. Check the log."
+        return msg, msg
+
+    return "✗ Operation failed. Check log for details.", "Error occurred"
 
 # Enforce Python 3.9–3.12
 if sys.version_info >= (3, 13):
@@ -1435,12 +1486,12 @@ def translate_subtitles_google_v1(
     source_lang: str = "en",
     progress_callback=None,
     log_callback=None,
-) -> bool:
+) -> BatchResult:
     """Translate subtitles via Google Translate V1 (gtx), in-process; preserves SRT structure like Argos."""
     if not selected_srt_files:
         if log_callback:
             log_callback("No SRT files selected.")
-        return False
+        return batch_error("No SRT files selected.")
 
     to_code = translation_target_to_argos_code(target_language)
     if not to_code:
@@ -1449,13 +1500,13 @@ def translate_subtitles_google_v1(
                 f'No language code mapped for target "{target_language}". '
                 "Extend TRANSLATION_TARGET_TO_ARGOS_CODE or pick another target."
             )
-        return False
+        return batch_error(f'No language code for "{target_language}".')
 
     from_code = (source_lang or "").strip()
     if not from_code:
         if log_callback:
             log_callback("Source language code is empty. Set Translate from on the Subtitles tab.")
-        return False
+        return batch_error("Source language code is empty.")
 
     if log_callback:
         log_callback(
@@ -1493,41 +1544,26 @@ def translate_subtitles_google_v1(
     ]
     total = len(srt_files)
     success_count = 0
+    failed_count = 0
 
     for idx, srt_file in enumerate(srt_files, start=1):
         if progress_callback:
             progress_callback(idx, total, srt_file.name)
 
         try:
-            iso_match = re.match(r"(.+)\.([a-z]{3})$", srt_file.stem)
-            if iso_match:
-                base_name = iso_match.group(1)
-                og_file = srt_file.parent / f"{base_name}_OG.srt"
-            else:
-                og_file = srt_file.parent / f"{srt_file.stem}_OG.srt"
-
-            if not og_file.exists():
-                srt_file.rename(og_file)
+            og_file, source_file = _translation_paths(srt_file)
+            temp_output = _translation_temp_path(srt_file)
+            _discard_translation_temp(temp_output)
 
             if log_callback:
                 log_callback(f"Translating (Google V1): {srt_file.name}")
             current_file_name = srt_file.name
 
-            _argos_translate_srt_file(og_file, srt_file, translate_line, "utf-8-sig")
+            _argos_translate_srt_file(source_file, temp_output, translate_line, "utf-8-sig")
 
-            translation_success = False
-            if srt_file.exists():
-                try:
-                    file_size = srt_file.stat().st_size
-                    if file_size > 0:
-                        with open(srt_file, "r", encoding="utf-8") as f:
-                            content_preview = f.read(100)
-                            if content_preview.strip():
-                                translation_success = True
-                except Exception:
-                    pass
-
-            if translation_success:
+            if _verify_and_commit_translation(
+                srt_file, og_file, source_file, temp_output, log_callback
+            ):
                 final_srt_file = srt_file
                 if use_iso639:
                     target_iso = ISO_639_CODES.get(target_language, "eng")
@@ -1546,19 +1582,22 @@ def translate_subtitles_google_v1(
                 if log_callback:
                     log_callback(f"  ✓ Translated: {final_srt_file.name}")
             else:
+                failed_count += 1
                 if log_callback:
                     log_callback(f"  ✗ Failed (Google V1): {srt_file.name}")
         except GoogleTranslateV1Error as e:
+            failed_count += 1
             if log_callback:
                 log_callback(f"Error translating {srt_file.name}: {e}")
         except Exception as e:
+            failed_count += 1
             if log_callback:
                 log_callback(f"Error translating {srt_file.name}: {e}")
 
     if log_callback:
         log_callback(f"\nTranslation complete. Translated {success_count}/{total} files.")
 
-    return success_count > 0
+    return BatchResult(succeeded=success_count, failed=failed_count)
 
 
 def _is_gst_overload_or_unavailable(output_lines: List[str]) -> bool:
@@ -2246,6 +2285,88 @@ def _compact_n_m3u8dl_gui_log_line(raw_line: str, state: Dict[str, object]) -> O
 
 
 # ============================================================================
+# Batch result helpers (translation verify/commit — uses _parse_srt below)
+# ============================================================================
+
+def _srt_boundary_timestamps(path: Path) -> Optional[Tuple[int, int]]:
+    """First cue start and last cue end in milliseconds, or None if empty/unparseable."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            entries = _parse_srt(f.read())
+        if not entries:
+            return None
+        return entries[0]["start_ms"], entries[-1]["end_ms"]
+    except Exception:
+        return None
+
+
+def _translation_output_verified(source_file: Path, output_file: Path) -> bool:
+    """True if output exists, has text, and matches source timing at start/end."""
+    if not output_file.exists() or output_file.stat().st_size == 0:
+        return False
+    try:
+        with open(output_file, "r", encoding="utf-8") as f:
+            if not f.read().strip():
+                return False
+    except Exception:
+        return False
+    source_bounds = _srt_boundary_timestamps(source_file)
+    output_bounds = _srt_boundary_timestamps(output_file)
+    if not source_bounds or not output_bounds:
+        return False
+    return source_bounds == output_bounds
+
+
+def _translation_paths(srt_file: Path) -> Tuple[Path, Path]:
+    """Return (og_backup_path, source_file) for translation."""
+    iso_match = re.match(r"(.+)\.([a-z]{3})$", srt_file.stem)
+    if iso_match:
+        base_name = iso_match.group(1)
+        og_file = srt_file.parent / f"{base_name}_OG.srt"
+    else:
+        og_file = srt_file.parent / f"{srt_file.stem}_OG.srt"
+    source_file = og_file if og_file.exists() else srt_file
+    return og_file, source_file
+
+
+def _translation_temp_path(srt_file: Path) -> Path:
+    return srt_file.parent / f"{srt_file.stem}.translating.srt"
+
+
+def _discard_translation_temp(temp_output: Path) -> None:
+    try:
+        if temp_output.exists():
+            temp_output.unlink()
+    except Exception:
+        pass
+
+
+def _verify_and_commit_translation(
+    srt_file: Path,
+    og_file: Path,
+    source_file: Path,
+    temp_output: Path,
+    log_callback=None,
+) -> bool:
+    """Verify translated temp file, then rename original to _OG and promote temp."""
+    if not _translation_output_verified(source_file, temp_output):
+        _discard_translation_temp(temp_output)
+        return False
+    try:
+        if not og_file.exists() and source_file == srt_file:
+            srt_file.rename(og_file)
+        elif srt_file.exists() and srt_file.resolve() != temp_output.resolve():
+            srt_file.unlink()
+        temp_output.rename(srt_file)
+        return True
+    except Exception as e:
+        _discard_translation_temp(temp_output)
+        if log_callback:
+            log_callback(f"    Could not save translation: {e}")
+        return False
+
+
+# ============================================================================
 # Download & subtitle pipeline
 # ============================================================================
 
@@ -2261,7 +2382,7 @@ def download_episodes(
     progress_callback=None,
     log_callback=None,
     stream_progress_callback=None,
-) -> bool:
+) -> BatchResult:
     """Download episodes or movies using commands from text.
 
     User pastes full N_m3u8DL-RE commands per instructions. App adds save options only.
@@ -2280,12 +2401,12 @@ def download_episodes(
     if not commands_text.strip():
         if log_callback:
             log_callback("Error: No commands provided.")
-        return False
+        return batch_error("No commands provided.")
 
     if not n_m3u8dl_installed():
         if log_callback:
             log_callback("Error: N_m3u8DL-RE not found. Install it via the Setup Wizard or set n_m3u8dl_path in Settings.")
-        return False
+        return batch_error("N_m3u8DL-RE not found.")
 
     # Filter HAR and empty lines
     # Pretty sure I'm no longer using this
@@ -2299,13 +2420,14 @@ def download_episodes(
     if not lines:
         if log_callback:
             log_callback("No commands found.")
-        return False
+        return batch_error("No commands found.")
 
     # Build save names
     # This is once again something the more flexible output file name template could be greatly used
     save_names = build_save_names(mode, name, use_s01e, season, ep_spec, len(lines))
 
     downloaded_files = []
+    failed_count = 0
     total = len(lines)
     if log_callback:
         log_callback(f"Starting batch download for {total} items...")
@@ -2490,6 +2612,7 @@ def download_episodes(
                     else:
                         if log_callback:
                             log_callback(f"  ⚠ Warning: No output file found for {save_name}")
+                        failed_count += 1
                 else:
                     if log_callback:
                         log_callback(f"  ✗ Error downloading {save_name} (exit code: {returncode})")
@@ -2500,26 +2623,28 @@ def download_episodes(
                                 clean = re.sub(r'\033\[[0-9;]*[a-zA-Z]', '', err_line).replace('\033[F', '').replace('\033[K', '').strip()
                                 if clean:
                                     log_callback(f"      {clean}")
+                    failed_count += 1
 
             except Exception as e:
                 if log_callback:
                     log_callback(f"  ✗ Exception while downloading {save_name}: {e}")
                     log_callback(f"    Traceback: {traceback.format_exc()}")
+                failed_count += 1
     finally:
         debug_file.close()
 
     if log_callback:
         log_callback(f"\nBatch download completed. Downloaded {len(downloaded_files)}/{total} files.")
     
-    return len(downloaded_files) > 0
+    return BatchResult(succeeded=len(downloaded_files), failed=failed_count)
 
 
-def extract_subtitles(downloads_dir: Path, subtitles_dir: Path, progress_callback=None, log_callback=None) -> bool:
+def extract_subtitles(downloads_dir: Path, subtitles_dir: Path, progress_callback=None, log_callback=None) -> BatchResult:
     """Extract subtitles from MKV files."""
     if not downloads_dir.exists():
         if log_callback:
             log_callback(f"Error: Downloads directory not found: {downloads_dir}")
-        return False
+        return batch_error(f"Downloads directory not found: {downloads_dir}")
     
     subtitles_dir.mkdir(parents=True, exist_ok=True)
     mkv_files = list(downloads_dir.glob("*.mkv"))
@@ -2527,10 +2652,12 @@ def extract_subtitles(downloads_dir: Path, subtitles_dir: Path, progress_callbac
     if not mkv_files:
         if log_callback:
             log_callback("No MKV files found in downloads directory.")
-        return False
+        return batch_error("No MKV files found in downloads directory.")
     
     total = len(mkv_files)
     success_count = 0
+    skipped_count = 0
+    failed_count = 0
     for idx, mkv_file in enumerate(mkv_files, start=1):
         base = mkv_file.stem
         srt_file = subtitles_dir / f"{base}.srt"
@@ -2541,6 +2668,7 @@ def extract_subtitles(downloads_dir: Path, subtitles_dir: Path, progress_callbac
         if srt_file.exists():
             if log_callback:
                 log_callback(f"Skipping {mkv_file.name} - subtitle already exists")
+            skipped_count += 1
             continue
         
         if log_callback:
@@ -2591,6 +2719,7 @@ def extract_subtitles(downloads_dir: Path, subtitles_dir: Path, progress_callbac
                 if log_callback:
                     log_callback(f"  ✓ Extracted: {srt_file.name}")
             else:
+                failed_count += 1
                 if log_callback:
                     log_callback(f"  ✗ Failed: {mkv_file.name}")
                     if returncode != 0:
@@ -2601,6 +2730,7 @@ def extract_subtitles(downloads_dir: Path, subtitles_dir: Path, progress_callbac
                             log_callback(f"      {err_line}")
         
         except Exception as e:
+            failed_count += 1
             if log_callback:
                 log_callback(f"  ✗ Exception while extracting from {mkv_file.name}: {e}")
                 log_callback(f"    Traceback: {traceback.format_exc()}")
@@ -2608,7 +2738,7 @@ def extract_subtitles(downloads_dir: Path, subtitles_dir: Path, progress_callbac
     if log_callback:
         log_callback(f"\nExtraction complete. Extracted {success_count}/{total} files.")
     
-    return success_count > 0
+    return BatchResult(succeeded=success_count, failed=failed_count, skipped=skipped_count)
 
 
 # ============================================================================
@@ -4211,24 +4341,28 @@ def _apply_fixes_to_content(content: str, enabled_fixes: List[str], config: Dict
 
 
 
-def clean_subtitles(subtitles_dir: Path, enabled_fixes: Optional[List[str]] = None,
-                    progress_callback=None, log_callback=None) -> bool:
-    """Remove color tags (always) and optionally apply fix common errors to subtitle files."""
-    if not subtitles_dir.exists():
+def clean_subtitles(selected_srt_files: List[Path], enabled_fixes: Optional[List[str]] = None,
+                    progress_callback=None, log_callback=None) -> BatchResult:
+    """Remove color tags (always) and optionally apply fix common errors to selected subtitle files."""
+    if not selected_srt_files:
         if log_callback:
-            log_callback(f"Error: Subtitles directory not found: {subtitles_dir}")
-        return False
-    
-    srt_files = list(subtitles_dir.glob("*.srt"))
-    
+            log_callback("No SRT files selected.")
+        return batch_error("No SRT files selected.")
+
+    srt_files = [
+        Path(f) for f in selected_srt_files
+        if Path(f).suffix.lower() == ".srt" and not Path(f).name.endswith("_OG.srt")
+    ]
+
     if not srt_files:
         if log_callback:
-            log_callback("No SRT files found.")
-        return False
+            log_callback("No valid SRT files selected.")
+        return batch_error("No valid SRT files selected.")
     
     total = len(srt_files)
     cleaned_count = 0
     skipped_count = 0
+    failed_count = 0
     fixes_list = enabled_fixes or []
     
     if log_callback:
@@ -4284,13 +4418,14 @@ def clean_subtitles(subtitles_dir: Path, enabled_fixes: Optional[List[str]] = No
                 if log_callback:
                     log_callback(f"  ○ Skipped: {srt_file.name} ({file_size_kb:.1f} KB, no changes)")
         except Exception as e:
+            failed_count += 1
             if log_callback:
                 log_callback(f"  ✗ Error cleaning {srt_file.name}: {e}")
     
     if log_callback:
         log_callback(f"\nCleaning complete. Cleaned {cleaned_count}/{total} files, skipped {skipped_count}.")
     
-    return True
+    return BatchResult(succeeded=cleaned_count, failed=failed_count, skipped=skipped_count)
 
 
 def _get_key_pairs(env_key: Optional[str], api_keys: Optional[List[str]]) -> List[tuple]:
@@ -4317,7 +4452,7 @@ def _get_key_pairs(env_key: Optional[str], api_keys: Optional[List[str]]) -> Lis
 def translate_subtitles(selected_srt_files: List[Path], target_language: str = "English",
                        use_iso639: bool = False, api_keys: Optional[List[str]] = None,
                        api_key: Optional[str] = None, api_key2: Optional[str] = None,
-                       progress_callback=None, log_callback=None) -> bool:
+                       progress_callback=None, log_callback=None) -> BatchResult:
     """Translate selected subtitle files using gemini-srt-translator.
 
     Supports 6+ API keys: on quota-limit error, retries with the next key pair.
@@ -4340,37 +4475,32 @@ def translate_subtitles(selected_srt_files: List[Path], target_language: str = "
         if log_callback:
             log_callback("Error: API key not set.")
             log_callback("Please set GEMINI_API_KEY or GST_API_KEY environment variable, or configure in Settings.")
-        return False
+        return batch_error("API key not set.")
 
     if not selected_srt_files:
         if log_callback:
             log_callback("No SRT files selected.")
-        return False
+        return batch_error("No SRT files selected.")
 
     srt_files = [Path(f) for f in selected_srt_files if Path(f).suffix.lower() == ".srt" and not Path(f).name.endswith("_OG.srt")]
     total = len(srt_files)
     success_count = 0
+    failed_count = 0
 
     gst_cmd = find_gst_command()
     if not gst_cmd:
         if log_callback:
             log_callback("Error: gst command not found. Install gemini-srt-translator (gst) or add it to PATH.")
-        return False
+        return batch_error("gst command not found.")
 
     for idx, srt_file in enumerate(srt_files, start=1):
         if progress_callback:
             progress_callback(idx, total, srt_file.name)
 
         try:
-            iso_match = re.match(r'(.+)\.([a-z]{3})$', srt_file.stem)
-            if iso_match:
-                base_name = iso_match.group(1)
-                og_file = srt_file.parent / f"{base_name}_OG.srt"
-            else:
-                og_file = srt_file.parent / f"{srt_file.stem}_OG.srt"
-
-            if not og_file.exists():
-                srt_file.rename(og_file)
+            og_file, source_file = _translation_paths(srt_file)
+            temp_output = _translation_temp_path(srt_file)
+            _discard_translation_temp(temp_output)
 
             if log_callback:
                 log_callback(f"Translating: {srt_file.name}")
@@ -4378,6 +4508,7 @@ def translate_subtitles(selected_srt_files: List[Path], target_language: str = "
             pair_index = 0
             translation_success = False
             final_srt_file = srt_file
+            output_lines: List[str] = []
             max_progress_pct = 0  # Never decrease bar when switching API pairs (restart from 0)
 
             while pair_index < len(key_pairs):
@@ -4386,7 +4517,7 @@ def translate_subtitles(selected_srt_files: List[Path], target_language: str = "
                     pair_index += 1
                     continue
 
-                base_cmd = ["translate", "-i", str(og_file), "-l", target_language, "-o", str(srt_file), "--skip-upgrade", "--batch-size", "100", "--thinking-budget", "0"]
+                base_cmd = ["translate", "-i", str(source_file), "-l", target_language, "-o", str(temp_output), "--skip-upgrade", "--batch-size", "100", "--thinking-budget", "0"]
                 if secondary_key:
                     base_cmd.extend(["-k2", secondary_key])
 
@@ -4490,11 +4621,11 @@ def translate_subtitles(selected_srt_files: List[Path], target_language: str = "
                         if log_callback:
                             log_callback(f"    Warning: Could not remove {progress_file.name}: {e}")
 
-                if returncode == 0 and srt_file.exists():
+                if returncode == 0 and temp_output.exists():
                     try:
-                        file_size = srt_file.stat().st_size
+                        file_size = temp_output.stat().st_size
                         if file_size > 0:
-                            with open(srt_file, 'r', encoding='utf-8') as f:
+                            with open(temp_output, 'r', encoding='utf-8') as f:
                                 content_preview = f.read(100)
                                 if content_preview.strip():
                                     translation_success = True
@@ -4505,18 +4636,16 @@ def translate_subtitles(selected_srt_files: List[Path], target_language: str = "
                     break
 
                 if _is_quota_limit_error(output_lines) and pair_index + 1 < len(key_pairs):
-                    if srt_file.exists():
-                        try:
-                            srt_file.unlink()
-                        except Exception:
-                            pass
+                    _discard_translation_temp(temp_output)
                     if log_callback:
                         log_callback(f"    Retrying with API key pair {pair_index + 2}/{len(key_pairs)}...")
                     pair_index += 1
                 else:
                     break
 
-            if translation_success:
+            if translation_success and _verify_and_commit_translation(
+                srt_file, og_file, source_file, temp_output, log_callback
+            ):
                 if use_iso639:
                     target_code = ISO_639_CODES.get(target_language, "eng")
                     source_match = re.match(r'(.+)\.([a-z]{3})$', srt_file.stem)
@@ -4532,19 +4661,15 @@ def translate_subtitles(selected_srt_files: List[Path], target_language: str = "
 
                 success_count += 1
                 if log_callback:
-                    output_combined = " ".join(output_lines).lower()
-                    was_interrupted = (
-                        "translation interrupted" in output_combined
-                        or "5 consecutive errors" in output_combined
-                        or "stopping script due to reaching" in output_combined
-                    )
-                    if was_interrupted:
-                        log_callback(f"  ✓ Partially translated (interrupted): {final_srt_file.name}")
-                    else:
-                        log_callback(f"  ✓ Translated: {final_srt_file.name}")
+                    log_callback(f"  ✓ Translated: {final_srt_file.name}")
             else:
+                _discard_translation_temp(temp_output)
+                failed_count += 1
                 if log_callback:
-                    log_callback(f"  ✗ Failed: {srt_file.name}")
+                    if translation_success:
+                        log_callback(f"  ✗ Failed (incomplete or invalid output): {srt_file.name}")
+                    else:
+                        log_callback(f"  ✗ Failed: {srt_file.name}")
                     if output_lines:
                         log_callback(f"    Last output lines:")
                         for err_line in output_lines[-5:]:
@@ -4557,13 +4682,14 @@ def translate_subtitles(selected_srt_files: List[Path], target_language: str = "
                             'Translation Engine to "Argos (local fallback)" and run again.'
                         )
         except Exception as e:
+            failed_count += 1
             if log_callback:
                 log_callback(f"Error translating {srt_file.name}: {e}")
 
     if log_callback:
         log_callback(f"\nTranslation complete. Translated {success_count}/{total} files.")
 
-    return success_count > 0
+    return BatchResult(succeeded=success_count, failed=failed_count)
 
 
 def translate_subtitles_argos(
@@ -4573,12 +4699,12 @@ def translate_subtitles_argos(
     argos_from_lang: str = "en",
     progress_callback=None,
     log_callback=None,
-) -> bool:
+) -> BatchResult:
     """Translate subtitles with Argos Translate in-process (same Python as the app)."""
     if not selected_srt_files:
         if log_callback:
             log_callback("No SRT files selected.")
-        return False
+        return batch_error("No SRT files selected.")
 
     to_code = translation_target_to_argos_code(target_language)
     if not to_code:
@@ -4587,17 +4713,17 @@ def translate_subtitles_argos(
                 f'No Argos language code mapped for target "{target_language}". '
                 "Add it to TRANSLATION_TARGET_TO_ARGOS_CODE or pick another target in Settings."
             )
-        return False
+        return batch_error(f'No Argos language code for "{target_language}".')
 
     from_code = (argos_from_lang or "").strip()
     if not from_code:
         if log_callback:
             log_callback("Argos source language code is empty. Set it on the Subtitles tab or in Settings.")
-        return False
+        return batch_error("Argos source language code is empty.")
 
     translation = ensure_argos_language_pair(from_code, to_code, log_callback)
     if translation is None:
-        return False
+        return batch_error("Argos language pair not available.")
 
     translate_line = translation.translate
 
@@ -4611,40 +4737,25 @@ def translate_subtitles_argos(
     ]
     total = len(srt_files)
     success_count = 0
+    failed_count = 0
 
     for idx, srt_file in enumerate(srt_files, start=1):
         if progress_callback:
             progress_callback(idx, total, srt_file.name)
 
         try:
-            iso_match = re.match(r"(.+)\.([a-z]{3})$", srt_file.stem)
-            if iso_match:
-                base_name = iso_match.group(1)
-                og_file = srt_file.parent / f"{base_name}_OG.srt"
-            else:
-                og_file = srt_file.parent / f"{srt_file.stem}_OG.srt"
-
-            if not og_file.exists():
-                srt_file.rename(og_file)
+            og_file, source_file = _translation_paths(srt_file)
+            temp_output = _translation_temp_path(srt_file)
+            _discard_translation_temp(temp_output)
 
             if log_callback:
                 log_callback(f"Translating (Argos): {srt_file.name}")
 
-            _argos_translate_srt_file(og_file, srt_file, translate_line, "utf-8-sig")
+            _argos_translate_srt_file(source_file, temp_output, translate_line, "utf-8-sig")
 
-            translation_success = False
-            if srt_file.exists():
-                try:
-                    file_size = srt_file.stat().st_size
-                    if file_size > 0:
-                        with open(srt_file, "r", encoding="utf-8") as f:
-                            content_preview = f.read(100)
-                            if content_preview.strip():
-                                translation_success = True
-                except Exception:
-                    pass
-
-            if translation_success:
+            if _verify_and_commit_translation(
+                srt_file, og_file, source_file, temp_output, log_callback
+            ):
                 final_srt_file = srt_file
                 if use_iso639:
                     target_code = ISO_639_CODES.get(target_language, "eng")
@@ -4663,16 +4774,18 @@ def translate_subtitles_argos(
                 if log_callback:
                     log_callback(f"  ✓ Translated: {final_srt_file.name}")
             else:
+                failed_count += 1
                 if log_callback:
                     log_callback(f"  ✗ Failed (Argos): {srt_file.name}")
         except Exception as e:
+            failed_count += 1
             if log_callback:
                 log_callback(f"Error translating {srt_file.name}: {e}")
 
     if log_callback:
         log_callback(f"\nTranslation complete. Translated {success_count}/{total} files.")
 
-    return success_count > 0
+    return BatchResult(succeeded=success_count, failed=failed_count)
 
 
 def run_subtitle_translation(
@@ -4686,7 +4799,7 @@ def run_subtitle_translation(
     argos_from_lang: str = "en",
     progress_callback=None,
     log_callback=None,
-) -> bool:
+) -> BatchResult:
     """Dispatch subtitle translation to GST, Argos, or Google Translate V1 (explicit user choice)."""
     eng = (engine or "gst").strip().lower()
     if eng == "argos":
@@ -4726,7 +4839,7 @@ def run_subtitle_translation(
 def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_dir: Path,
                  watermark_path: str, resolution: str, use_watermarks: bool = True,
                  config: Optional[Dict] = None, use_iso639: bool = False, target_language: str = "English",
-                 downloads_dir: Path = None, progress_callback=None, log_callback=None) -> bool:
+                 downloads_dir: Path = None, progress_callback=None, log_callback=None) -> BatchResult:
     """Process selected video files: burn subtitles, add watermark (if enabled), resize.
     
     Args:
@@ -4736,12 +4849,12 @@ def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_
     if not selected_video_files:
         if log_callback:
             log_callback("No video files selected.")
-        return False
+        return batch_error("No video files selected.")
     
     if use_watermarks and not Path(watermark_path).exists():
         if log_callback:
             log_callback(f"Error: Watermark file not found: {watermark_path}")
-        return False
+        return batch_error(f"Watermark file not found: {watermark_path}")
     
     output_dir.mkdir(parents=True, exist_ok=True)
     video_files = [Path(f) for f in selected_video_files if Path(f).suffix.lower() in [".mkv", ".mp4", ".mov"]]
@@ -4749,9 +4862,11 @@ def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_
     if not video_files:
         if log_callback:
             log_callback("No valid video files selected.")
-        return False
+        return batch_error("No valid video files selected.")
     
     success_count = 0
+    skipped_count = 0
+    failed_count = 0
     height = "720" if resolution == "720" else "1080"
     preset = "medium" if resolution == "720" else "slow"
     total = len(video_files)
@@ -4803,6 +4918,7 @@ def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_
         if out_file.exists():
             if log_callback:
                 log_callback(f"Skipping {video_file.name} - output file already exists: {out_file.name}")
+            skipped_count += 1
             continue
         
         if not srt_file:
@@ -4814,6 +4930,7 @@ def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_
                     checked_files.extend([f"  Checked: {downloads_dir / fn}" for fn in filenames_to_try])
                 for checked in checked_files:
                     log_callback(checked)
+            failed_count += 1
             continue
         
         if log_callback:
@@ -5011,6 +5128,7 @@ def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_
                 if log_callback:
                     log_callback(f"  ✓ Successfully created: {out_file.name}")
             else:
+                failed_count += 1
                 if log_callback:
                     log_callback(f"  ✗ Failed to process: {video_file.name}")
                     log_callback(f"    Return code: {returncode}")
@@ -5028,6 +5146,7 @@ def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_
                             log_callback("    The app will use it automatically. Or set path in Settings > Tools.")
         
         except Exception as e:
+            failed_count += 1
             if log_callback:
                 log_callback(f"  ✗ Exception while processing {video_file.name}: {e}")
                 log_callback(f"    Traceback: {traceback.format_exc()}")
@@ -5035,7 +5154,7 @@ def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_
     if log_callback:
         log_callback(f"\nProcessing complete. Created {success_count}/{total} files.")
     
-    return success_count > 0
+    return BatchResult(succeeded=success_count, failed=failed_count, skipped=skipped_count)
 
 
 def analyze_tracks(video_path: Path, log_callback=None) -> Dict:
@@ -5246,7 +5365,7 @@ def convert_audio_format(video_path: Path, output_path: Path,
 
 
 def remux_mkv_with_srt_batch(folder_path: Path, output_format: str = "mkv", 
-                             progress_callback=None, log_callback=None) -> bool:
+                             progress_callback=None, log_callback=None) -> BatchResult:
     """Batch remux video files (MKV/MP4) with matching subtitle files (SRT/VTT).
     
     Args:
@@ -5258,7 +5377,7 @@ def remux_mkv_with_srt_batch(folder_path: Path, output_format: str = "mkv",
     if not folder_path.exists():
         if log_callback:
             log_callback(f"Error: Folder not found: {folder_path}")
-        return False
+        return batch_error(f"Folder not found: {folder_path}")
     
     # Find video files (MKV and MP4)
     video_files = sorted(list(folder_path.glob("*.mkv")) + list(folder_path.glob("*.mp4")))
@@ -5266,9 +5385,11 @@ def remux_mkv_with_srt_batch(folder_path: Path, output_format: str = "mkv",
     if not video_files:
         if log_callback:
             log_callback("Error: No MKV or MP4 files found in folder.")
-        return False
+        return batch_error("No MKV or MP4 files found in folder.")
     
     success_count = 0
+    skipped_count = 0
+    failed_count = 0
     total = len(video_files)
     errors = []
     
@@ -5304,6 +5425,7 @@ def remux_mkv_with_srt_batch(folder_path: Path, output_format: str = "mkv",
         
         if not subtitle_file or not subtitle_file.exists():
             errors.append(f"{video_file.name}: no matching SRT/VTT file")
+            failed_count += 1
             continue
         
         # Determine output filename
@@ -5311,7 +5433,9 @@ def remux_mkv_with_srt_batch(folder_path: Path, output_format: str = "mkv",
         output_file = folder_path / f"{base}_remuxed.{output_ext}"
         
         if output_file.exists():
-            # Skip silently - no log needed
+            if log_callback:
+                log_callback(f"  ○ Skipped: {video_file.name} — remuxed file already exists")
+            skipped_count += 1
             continue
         
         # Build FFmpeg command
@@ -5340,13 +5464,16 @@ def remux_mkv_with_srt_batch(folder_path: Path, output_format: str = "mkv",
             if result.returncode == 0 and output_file.exists():
                 success_count += 1
             else:
+                failed_count += 1
                 # Only log errors
                 error_msg = result.stderr.split('\n')[-10:] if result.stderr else ["Unknown error"]
                 errors.append(f"{video_file.name}: {'; '.join(error_msg)}")
         
         except subprocess.TimeoutExpired:
+            failed_count += 1
             errors.append(f"{video_file.name}: timeout")
         except Exception as e:
+            failed_count += 1
             errors.append(f"{video_file.name}: {str(e)}")
     
     # Minimal logging - only show errors if any
@@ -5359,7 +5486,7 @@ def remux_mkv_with_srt_batch(folder_path: Path, output_format: str = "mkv",
     if log_callback and success_count > 0:
         log_callback(f"✓ Remuxed {success_count}/{total} files")
     
-    return success_count > 0
+    return BatchResult(succeeded=success_count, failed=failed_count, skipped=skipped_count)
 
 
 def _openai_whisper_cli_ok() -> bool:
@@ -6464,7 +6591,7 @@ TRANSCRIBE_BACKENDS: List[TranscribeBackend] = [
 
 class ScriptWorker(QThread):
     """Worker thread for running scripts without blocking UI."""
-    finished = pyqtSignal(bool)
+    finished = pyqtSignal(object)
     log_message = pyqtSignal(str)
     progress_update = pyqtSignal(int, int, str)  # current, total, filename
     stream_progress = pyqtSignal(str)  # live per-stream download progress
@@ -11801,7 +11928,7 @@ class VideoProcessingApp(QMainWindow):
             return
         self.download_stream_progress_label.setText(message)
 
-    def on_script_finished(self, success: bool):
+    def on_script_finished(self, result):
         """Handle script completion."""
         self.progress_group.setVisible(False)
         self.progress_bar.setRange(0, 100)  # Reset to determinate mode
@@ -11810,16 +11937,21 @@ class VideoProcessingApp(QMainWindow):
         self.progress_file_label.setText("")
         self.progress_counter_label.setText("")
         self.current_operation = None
-        self.statusBar().showMessage("Ready" if success else "Error occurred")
         # Reset both stop buttons
         self.stop_btn.setEnabled(False)
         self.stop_btn.setText("Stop")
         self.transcribe_stop_btn.setEnabled(False)
         self.transcribe_stop_btn.setText("Stop")
         self.download_stream_progress_label.setText("—")
-        if success:
-            self.log("✓ Operation completed successfully.")
+        if isinstance(result, BatchResult):
+            log_line, status_msg = summarize_batch_result(result)
+            self.statusBar().showMessage(status_msg)
+            self.log(log_line)
+        elif result:
+            self.statusBar().showMessage("Ready")
+            self.log("Done.")
         else:
+            self.statusBar().showMessage("Error occurred")
             self.log("✗ Operation failed. Check log for details.")
         self.worker = None
     
@@ -11909,17 +12041,32 @@ class VideoProcessingApp(QMainWindow):
         self.run_script(extract_subtitles, downloads_dir, subtitles_dir)
     
     def clean_subtitles(self):
-        """Clean subtitles. Opens dialog to select fixes, then runs."""
+        """Clean subtitles. Opens dialog to select fixes, then file picker."""
         dlg = CleanSubtitlesDialog(self, self.config)
         if dlg.exec_() != QDialog.Accepted:
             return
         enabled_fixes = dlg.get_enabled_fixes()
         dlg.save_selection_to_config()
         self.config = load_config()
-        
-        subtitles_dir = get_subtitles_dir()
+
+        file_paths, _ = QFileDialog.getOpenFileNames(
+            self, "Select SRT Files to Clean",
+            str(get_subtitles_dir()),
+            "Subtitle Files (*.srt);;All Files (*)"
+        )
+        if not file_paths:
+            return
+
+        srt_files = [
+            Path(f) for f in file_paths
+            if Path(f).suffix.lower() == ".srt" and not Path(f).name.endswith("_OG.srt")
+        ]
+        if not srt_files:
+            QMessageBox.warning(self, "Error", "No valid SRT files selected.")
+            return
+
         self.log("Starting subtitle cleaning...")
-        self.run_script(clean_subtitles, subtitles_dir, enabled_fixes)
+        self.run_script(clean_subtitles, srt_files, enabled_fixes)
 
     def translate_subtitles(self):
         """Translate subtitles (GST, Argos, or Google Translate V1 — engine from Subtitles tab / config)."""

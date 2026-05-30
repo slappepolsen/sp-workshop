@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [10.4.1-alpha.28] - 2026-05-30
+
+### Changed
+
+- **Batch jobs:** download, extract, clean, translate, burn-in, and remux now report honest one-line summaries in the log and status bar (e.g. partial success, all skipped, or all finished) instead of a blanket “Operation completed successfully.”
+- **Clean subtitles:** file picker for selected `.srt` files (same pattern as Translate); no longer cleans every subtitle in the folder.
+
+### Fixed
+
+- **Subtitle translation (GST, Argos, Google V1):** writes to a temp file first, verifies first/last cue timestamps against the source, and only then renames the original to `_OG` — failed or partial runs leave the working filename untouched.
+- **Extract / remux:** “already done” skips (existing subtitles or remuxed output) count as skipped, not failure.
+
 ## [10.4.1-alpha.1] - 2026-05-16
 
 ### Added
