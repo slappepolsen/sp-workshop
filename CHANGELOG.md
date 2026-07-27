@@ -7,7 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [10.4.1-alpha.28] - 2026-05-30
+## [10.4.1-alpha.4] - 2026-07-27
+
+### Added
+
+- **Custom stream selection for downloads:** Click "Fetch Streams..." to preview and select specific video, audio, and subtitle streams. Selected streams are passed to N_m3u8DL-RE.
+
+## [10.4.1-alpha.3] - 2026-05-31
+
+### Changed
+
+- **Stop button:** long-running jobs now terminate the actual background process (downloads, translation, transcription, burn-in, extract) when you click Stop. And not just the UI thread.
+- **App naming:** setup wizard, About dialog, and window title now use **SP Workshop** everywhere (was previously mixed with “Video Processing Studio”).
+
+### Fixed
+
+- **Force stop:** if graceful cancel doesn’t finish in time, the fallback also kills the active subprocess before terminating the worker thread.
+
+## [10.4.1-alpha.2] - 2026-05-30
 
 ### Changed
 
@@ -16,7 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Subtitle translation (GST, Argos, Google V1):** writes to a temp file first, verifies first/last cue timestamps against the source, and only then renames the original to `_OG` — failed or partial runs leave the working filename untouched.
+- **Subtitle translation (GST, Argos, Google V1):** writes to a temp file first, verifies first/last cue timestamps against the source, and only then renames the original to `_OG`. Failed or partial runs leave the working filename untouched.
 - **Extract / remux:** “already done” skips (existing subtitles or remuxed output) count as skipped, not failure.
 
 ## [10.4.1-alpha.1] - 2026-05-16

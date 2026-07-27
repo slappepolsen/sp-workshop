@@ -7,8 +7,9 @@ Video Processing GUI Application
 A PyQt5 desktop app that provides a button-based interface for all video processing scripts.
 """
 
-__version__ = "10.4.1-alpha.28"
-VERSION_CODENAME = "Lesbians"
+__version__ = "10.4.1-alpha.4"
+VERSION_CODENAME = "The choice is yours"
+APP_NAME = "SP Workshop"
 
 import sys
 import os
@@ -149,6 +150,13 @@ except ImportError as e:
 
 # Download instructions URL
 DOWNLOAD_INSTRUCTIONS_URL = "https://rentry.co/sp-workshop"
+GITHUB_RELEASES_URL = "https://github.com/slappepolsen/sp-workshop/releases"
+_GITHUB_RELEASES_API = "https://api.github.com/repos/slappepolsen/sp-workshop/releases/latest"
+_VERSION_TAG_RE = re.compile(
+    r"^(?:v)?(\d+(?:\.\d+)*)"
+    r"(?:-(alpha|beta|rc)\.(\d+))?$",
+    re.I,
+)
 DEFAULT_WHISPER_VOLUME_BOOST = 1.75
 
 # Layout spacing (used across tabs for consistency)
@@ -890,6 +898,7 @@ def load_config() -> Dict:
         "subtitle_translation_engine": "gst",
         "translation_target_language": "English",
         "argos_from_lang": "en",
+        "dismissed_update_version": "",
     }
     
     if config_path.exists():
@@ -933,6 +942,50 @@ def save_config(config: Dict):
             json.dump(config, f, indent=2)
     except Exception as e:
         print(f"Error saving config: {e}")
+
+
+def _version_sort_key(version: str) -> Optional[tuple]:
+    """Sort key for semver-ish tags like 10.4.1-alpha.27."""
+    s = (version or "").strip().lstrip("vV")
+    m = _VERSION_TAG_RE.match(s)
+    if not m:
+        return None
+    nums = tuple(int(p) for p in m.group(1).split("."))
+    pre_tag = (m.group(2) or "").lower()
+    pre_num = int(m.group(3) or 0)
+    pre_rank = {"alpha": 0, "beta": 1, "rc": 2}.get(pre_tag, 3)
+    return nums + (pre_rank, pre_num)
+
+
+def _version_is_newer(candidate: str, current: str) -> bool:
+    a, b = _version_sort_key(candidate), _version_sort_key(current)
+    if a is None or b is None:
+        return False
+    return a > b
+
+
+def _fetch_latest_github_release() -> Optional[Dict[str, str]]:
+    """Return latest GitHub release metadata, or None if unavailable."""
+    req = Request(
+        _GITHUB_RELEASES_API,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": f"{APP_NAME}/{__version__}",
+        },
+    )
+    try:
+        with urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode())
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError, OSError):
+        return None
+    tag = (data.get("tag_name") or "").strip()
+    if not tag:
+        return None
+    return {
+        "version": tag.lstrip("vV"),
+        "tag": tag,
+        "url": data.get("html_url") or GITHUB_RELEASES_URL,
+    }
 
 
 def _has_existing_setup() -> bool:
@@ -1486,6 +1539,8 @@ def translate_subtitles_google_v1(
     source_lang: str = "en",
     progress_callback=None,
     log_callback=None,
+    check_stop=None,
+    register_process=None,
 ) -> BatchResult:
     """Translate subtitles via Google Translate V1 (gtx), in-process; preserves SRT structure like Argos."""
     if not selected_srt_files:
@@ -1547,6 +1602,9 @@ def translate_subtitles_google_v1(
     failed_count = 0
 
     for idx, srt_file in enumerate(srt_files, start=1):
+        if check_stop and check_stop():
+            break
+
         if progress_callback:
             progress_callback(idx, total, srt_file.name)
 
@@ -1560,6 +1618,10 @@ def translate_subtitles_google_v1(
             current_file_name = srt_file.name
 
             _argos_translate_srt_file(source_file, temp_output, translate_line, "utf-8-sig")
+
+            if check_stop and check_stop():
+                _discard_translation_temp(temp_output)
+                break
 
             if _verify_and_commit_translation(
                 srt_file, og_file, source_file, temp_output, log_callback
@@ -2366,9 +2428,246 @@ def _verify_and_commit_translation(
         return False
 
 
+def _terminate_process(process: Optional[subprocess.Popen]) -> None:
+    """Terminate a subprocess gracefully, then kill if needed."""
+    if process is None or process.poll() is not None:
+        return
+    try:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+    except Exception:
+        pass
+
+
+def _wait_process_with_stop(
+    process: subprocess.Popen,
+    check_stop=None,
+    timeout: Optional[float] = None,
+) -> Optional[int]:
+    """Poll until process exits, or stop is requested. Returns returncode, or None if cancelled."""
+    deadline = time.time() + timeout if timeout else None
+    while process.poll() is None:
+        if check_stop and check_stop():
+            _terminate_process(process)
+            return None
+        if deadline is not None and time.time() >= deadline:
+            _terminate_process(process)
+            return -1
+        time.sleep(0.15)
+    return process.returncode
+
+
 # ============================================================================
 # Download & subtitle pipeline
 # ============================================================================
+
+@dataclass
+class StreamInfo:
+    """Information about a single stream from N_m3u8DL-RE."""
+    stream_type: str  # "Vid", "Aud", "Sub"
+    stream_id: str  # e.g., "video=4276245", "audio_fra=128000"
+    description: str  # Full description line
+    resolution: Optional[str] = None  # e.g., "1920x1080" for video
+    bitrate: Optional[str] = None  # e.g., "4276 Kbps"
+    language: Optional[str] = None  # e.g., "fr"
+    codec: Optional[str] = None  # e.g., "avc1.640028"
+
+
+def fetch_available_streams(command: str, log_callback=None) -> Optional[List[StreamInfo]]:
+    """Fetch available streams from a video URL using N_m3u8DL-RE.
+    
+    Args:
+        command: The N_m3u8DL-RE command (can be bare URL or full command)
+        log_callback: Optional callback for logging
+        
+    Returns:
+        List of StreamInfo objects, or None if fetching failed
+    """
+    if not n_m3u8dl_installed():
+        if log_callback:
+            log_callback("Error: N_m3u8DL-RE not found.")
+        return None
+    
+    # Strip N_m3u8DL-RE prefix if present
+    base_command = command.strip()
+    if base_command.lower().startswith('n_m3u8dl-re '):
+        base_command = base_command[12:].strip()
+    
+    # Add CDN headers for bare URLs
+    if ' -H ' not in base_command and ' --key ' not in base_command and base_command.lstrip('"').startswith('http'):
+        base_command = _add_headers_for_bare_url(base_command)
+    
+    try:
+        user_args = shlex.split(base_command)
+    except ValueError as e:
+        if log_callback:
+            log_callback(f"Error: Invalid quoting in command: {e}")
+        return None
+    
+    # Drop user output options and ensure URL is first
+    user_args = _drop_n_m3u8_output_options(user_args)
+    user_args = _url_first_args(user_args)
+    
+    # Add options to skip download and just parse
+    app_args = [
+        "--skip-download",
+        "--no-log",
+    ]
+    
+    ffmpeg_exe = get_ffmpeg_command()
+    if Path(ffmpeg_exe).is_file():
+        app_args = ["--ffmpeg-binary-path", str(Path(ffmpeg_exe).resolve())] + app_args
+    
+    n_m3u8_cmd = get_n_m3u8dl_command()
+    cmd = [n_m3u8_cmd] + user_args + app_args
+    
+    if log_callback:
+        log_callback("Fetching available streams...")
+    
+    try:
+        process = subprocess.Popen(
+            cmd,
+            shell=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            universal_newlines=True,
+            env=_environ_with_cli_path(),
+        )
+        
+        output_lines = []
+        while True:
+            line = process.stdout.readline()
+            if not line:
+                break
+            output_lines.append(line)
+        
+        returncode = process.wait()
+        
+        if returncode != 0:
+            if log_callback:
+                log_callback("Error: Failed to fetch streams.")
+            return None
+        
+        # Parse the output to extract stream information
+        streams = _parse_stream_list(output_lines)
+        
+        if log_callback:
+            log_callback(f"Found {len(streams)} streams ({sum(1 for s in streams if s.stream_type == 'Vid')} video, "
+                        f"{sum(1 for s in streams if s.stream_type == 'Aud')} audio, "
+                        f"{sum(1 for s in streams if s.stream_type == 'Sub')} subtitle)")
+        
+        return streams
+        
+    except Exception as e:
+        if log_callback:
+            log_callback(f"Error fetching streams: {e}")
+        return None
+
+
+def _parse_stream_list(output_lines: List[str]) -> List[StreamInfo]:
+    """Parse N_m3u8DL-RE output to extract stream information."""
+    streams = []
+    
+    for line in output_lines:
+        clean = _strip_ansi(line).replace("\r", "").strip()
+        if not clean:
+            continue
+        
+        # Look for stream info lines: "INFO : Vid|Aud|Sub ..."
+        match = re.search(r"INFO\s*:\s*(Vid|Aud|Sub)\s+(.+)$", clean, re.IGNORECASE)
+        if not match:
+            continue
+        
+        stream_type = match.group(1)
+        description = match.group(2).strip()
+        
+        # Extract stream ID
+        stream_id = None
+        resolution = None
+        bitrate = None
+        language = None
+        codec = None
+        
+        if stream_type == "Vid":
+            # Extract video ID: "video=4276245" or similar
+            id_match = re.search(r"video=(\d+)", description)
+            if id_match:
+                stream_id = f"video={id_match.group(1)}"
+            
+            # Extract resolution: "1920x1080"
+            res_match = re.search(r"(\d+x\d+)", description)
+            if res_match:
+                resolution = res_match.group(1)
+            
+            # Extract bitrate: "4276 Kbps"
+            bitrate_match = re.search(r"(\d+)\s*Kbps", description)
+            if bitrate_match:
+                bitrate = f"{bitrate_match.group(1)} Kbps"
+            
+            # Extract codec: "avc1.640028"
+            codec_match = re.search(r"(avc1\.[0-9a-f]+|hvc1\.[0-9a-f]+|vp9|av1)", description, re.IGNORECASE)
+            if codec_match:
+                codec = codec_match.group(1)
+        
+        elif stream_type == "Aud":
+            # Extract audio ID: "audio_fra=128000" or similar
+            id_match = re.search(r"(audio_[a-z]{2,3}=\d+)", description)
+            if id_match:
+                stream_id = id_match.group(1)
+            
+            # Extract bitrate
+            bitrate_match = re.search(r"(\d+)\s*Kbps", description)
+            if bitrate_match:
+                bitrate = f"{bitrate_match.group(1)} Kbps"
+            
+            # Extract language
+            lang_match = re.search(r"\|\s*([a-z]{2,3})\s*\|", description, re.IGNORECASE)
+            if lang_match:
+                language = lang_match.group(1)
+            
+            # Extract codec
+            codec_match = re.search(r"(mp4a\.[0-9.]+|aac|ac-3|ec-3|opus)", description, re.IGNORECASE)
+            if codec_match:
+                codec = codec_match.group(1)
+        
+        elif stream_type == "Sub":
+            # Extract subtitle ID: "textstream_fra=1000" or numeric ID
+            id_match = re.search(r"(textstream_[a-z]{2,3}=\d+)", description)
+            if not id_match:
+                id_match = re.search(r"\b(\d{6,})\b", description)
+            if id_match:
+                stream_id = id_match.group(1)
+            
+            # Extract language
+            lang_match = re.search(r"\|\s*([a-z]{2,3})\s*\|", description, re.IGNORECASE)
+            if lang_match:
+                language = lang_match.group(1)
+            
+            # Extract codec/format
+            codec_match = re.search(r"(wvtt|ttml|stpp)", description, re.IGNORECASE)
+            if codec_match:
+                codec = codec_match.group(1)
+        
+        # Only add streams that have an ID (otherwise we can't select them)
+        if stream_id:
+            streams.append(StreamInfo(
+                stream_type=stream_type,
+                stream_id=stream_id,
+                description=description,
+                resolution=resolution,
+                bitrate=bitrate,
+                language=language,
+                codec=codec
+            ))
+    
+    return streams
+
 
 def download_episodes(
     commands_text: str,
@@ -2379,9 +2678,12 @@ def download_episodes(
     season: int = 1,
     ep_spec: str = "1",
     select_video: str = "best",
+    custom_streams: Optional[Dict[str, List[str]]] = None,
     progress_callback=None,
     log_callback=None,
     stream_progress_callback=None,
+    check_stop=None,
+    register_process=None,
 ) -> BatchResult:
     """Download episodes or movies using commands from text.
 
@@ -2395,6 +2697,8 @@ def download_episodes(
         use_s01e: For episodes, use S01E02 format
         season: Season number when use_s01e
         ep_spec: Episode range (1, 1-5, 1,3,5-7) for episodes
+        select_video: Video quality selector
+        custom_streams: Optional dict with "video", "audio", "subtitle" keys containing stream IDs
         progress_callback: Callback for progress updates
         log_callback: Callback for log messages
     """
@@ -2441,6 +2745,9 @@ def download_episodes(
 
     try:
         for i, base_command in enumerate(lines):
+            if check_stop and check_stop():
+                break
+
             save_name = save_names[i] if i < len(save_names) else str(i + 1)
 
             if not base_command or base_command.startswith('#'):
@@ -2472,15 +2779,27 @@ def download_episodes(
             # URL must be first
             user_args = _url_first_args(user_args)
 
+            # Build stream selection arguments
+            if custom_streams:
+                # Use custom stream selection
+                video_select = "all" if not custom_streams.get("video") else f'id="{"|".join(custom_streams["video"])}":for=all'
+                audio_select = "all" if not custom_streams.get("audio") else f'id="{"|".join(custom_streams["audio"])}":for=all'
+                subtitle_select = "all" if not custom_streams.get("subtitle") else f'id="{"|".join(custom_streams["subtitle"])}":for=all'
+            else:
+                # Use default selection
+                video_select = select_video
+                audio_select = "all"
+                subtitle_select = "all"
+
             app_args = [
                 "--tmp-dir", get_temp_dir(),
                 "--del-after-done",
                 "--check-segments-count", "False",
                 "--save-name", save_name,
                 "--save-dir", str(output_dir),
-                "--select-video", select_video,
-                "--select-audio", "all",
-                "--select-subtitle", "all",
+                "--select-video", video_select,
+                "--select-audio", audio_select,
+                "--select-subtitle", subtitle_select,
                 "-M", "mkv",
             ]
            # This is bascially me praying your system and this app will figure out where your ffmpeg(-full) and N_m3u8DL-RE live
@@ -2508,6 +2827,8 @@ def download_episodes(
                     universal_newlines=True,
                     env=_environ_with_cli_path(),
                 )
+                if register_process:
+                    register_process(process)
 
                 output_lines = []
                 selected_stream_labels: List[str] = []
@@ -2521,6 +2842,9 @@ def download_episodes(
                 }
 
                 while True:
+                    if check_stop and check_stop():
+                        _terminate_process(process)
+                        break
                     line_output = process.stdout.readline()
                     if not line_output:
                         break
@@ -2599,7 +2923,17 @@ def download_episodes(
                             if compact is not None:
                                 log_callback(f"  {compact}")
 
+                if check_stop and check_stop():
+                    if register_process:
+                        register_process(None)
+                    break
+
                 returncode = process.wait()
+                if register_process:
+                    register_process(None)
+
+                if check_stop and check_stop():
+                    break
 
                 if returncode == 0:
                     # Escape glob glob glob metacharsssssss
@@ -2639,7 +2973,8 @@ def download_episodes(
     return BatchResult(succeeded=len(downloaded_files), failed=failed_count)
 
 
-def extract_subtitles(downloads_dir: Path, subtitles_dir: Path, progress_callback=None, log_callback=None) -> BatchResult:
+def extract_subtitles(downloads_dir: Path, subtitles_dir: Path, progress_callback=None, log_callback=None,
+                      check_stop=None, register_process=None) -> BatchResult:
     """Extract subtitles from MKV files."""
     if not downloads_dir.exists():
         if log_callback:
@@ -2659,6 +2994,9 @@ def extract_subtitles(downloads_dir: Path, subtitles_dir: Path, progress_callbac
     skipped_count = 0
     failed_count = 0
     for idx, mkv_file in enumerate(mkv_files, start=1):
+        if check_stop and check_stop():
+            break
+
         base = mkv_file.stem
         srt_file = subtitles_dir / f"{base}.srt"
         
@@ -2690,10 +3028,15 @@ def extract_subtitles(downloads_dir: Path, subtitles_dir: Path, progress_callbac
                 bufsize=1,
                 universal_newlines=True
             )
+            if register_process:
+                register_process(process)
             
             # Read stderr (because stderrr actually has it figured out)
             error_lines = []
             while True:
+                if check_stop and check_stop():
+                    _terminate_process(process)
+                    break
                 line = process.stderr.readline()
                 if not line:
                     break
@@ -2712,7 +3055,17 @@ def extract_subtitles(downloads_dir: Path, subtitles_dir: Path, progress_callbac
                     if log_callback:
                         log_callback(f"    ⚠ {line}")
             
+            if check_stop and check_stop():
+                if register_process:
+                    register_process(None)
+                break
+
             returncode = process.wait()
+            if register_process:
+                register_process(None)
+
+            if check_stop and check_stop():
+                break
             
             if returncode == 0 and srt_file.exists():
                 success_count += 1
@@ -4452,7 +4805,8 @@ def _get_key_pairs(env_key: Optional[str], api_keys: Optional[List[str]]) -> Lis
 def translate_subtitles(selected_srt_files: List[Path], target_language: str = "English",
                        use_iso639: bool = False, api_keys: Optional[List[str]] = None,
                        api_key: Optional[str] = None, api_key2: Optional[str] = None,
-                       progress_callback=None, log_callback=None) -> BatchResult:
+                       progress_callback=None, log_callback=None,
+                       check_stop=None, register_process=None) -> BatchResult:
     """Translate selected subtitle files using gemini-srt-translator.
 
     Supports 6+ API keys: on quota-limit error, retries with the next key pair.
@@ -4494,6 +4848,9 @@ def translate_subtitles(selected_srt_files: List[Path], target_language: str = "
         return batch_error("gst command not found.")
 
     for idx, srt_file in enumerate(srt_files, start=1):
+        if check_stop and check_stop():
+            break
+
         if progress_callback:
             progress_callback(idx, total, srt_file.name)
 
@@ -4544,12 +4901,17 @@ def translate_subtitles(selected_srt_files: List[Path], target_language: str = "
                     universal_newlines=True,
                     env=env,
                 )
+                if register_process:
+                    register_process(process)
 
                 output_lines = []
                 last_progress_line = None
                 last_progress_tuple = None  # (percent, current, total) - only log when this changes
                 logged_once = set()  # Dedupe noisy repeated messages
                 while True:
+                    if check_stop and check_stop():
+                        _terminate_process(process)
+                        break
                     line_output = process.stdout.readline()
                     if not line_output:
                         break
@@ -4609,7 +4971,19 @@ def translate_subtitles(selected_srt_files: List[Path], target_language: str = "
                             log_callback(cleaned_line)
                         last_progress_line = cleaned_line
 
+                if check_stop and check_stop():
+                    if register_process:
+                        register_process(None)
+                    _discard_translation_temp(temp_output)
+                    break
+
                 returncode = process.wait()
+                if register_process:
+                    register_process(None)
+
+                if check_stop and check_stop():
+                    _discard_translation_temp(temp_output)
+                    break
 
                 progress_files = list(srt_file.parent.glob("*.progress"))
                 for progress_file in progress_files:
@@ -4699,6 +5073,8 @@ def translate_subtitles_argos(
     argos_from_lang: str = "en",
     progress_callback=None,
     log_callback=None,
+    check_stop=None,
+    register_process=None,
 ) -> BatchResult:
     """Translate subtitles with Argos Translate in-process (same Python as the app)."""
     if not selected_srt_files:
@@ -4740,6 +5116,9 @@ def translate_subtitles_argos(
     failed_count = 0
 
     for idx, srt_file in enumerate(srt_files, start=1):
+        if check_stop and check_stop():
+            break
+
         if progress_callback:
             progress_callback(idx, total, srt_file.name)
 
@@ -4752,6 +5131,10 @@ def translate_subtitles_argos(
                 log_callback(f"Translating (Argos): {srt_file.name}")
 
             _argos_translate_srt_file(source_file, temp_output, translate_line, "utf-8-sig")
+
+            if check_stop and check_stop():
+                _discard_translation_temp(temp_output)
+                break
 
             if _verify_and_commit_translation(
                 srt_file, og_file, source_file, temp_output, log_callback
@@ -4839,7 +5222,8 @@ def run_subtitle_translation(
 def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_dir: Path,
                  watermark_path: str, resolution: str, use_watermarks: bool = True,
                  config: Optional[Dict] = None, use_iso639: bool = False, target_language: str = "English",
-                 downloads_dir: Path = None, progress_callback=None, log_callback=None) -> BatchResult:
+                 downloads_dir: Path = None, progress_callback=None, log_callback=None,
+                 check_stop=None, register_process=None) -> BatchResult:
     """Process selected video files: burn subtitles, add watermark (if enabled), resize.
     
     Args:
@@ -4872,6 +5256,9 @@ def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_
     total = len(video_files)
     
     for idx, video_file in enumerate(video_files, start=1):
+        if check_stop and check_stop():
+            break
+
         base = video_file.stem
         
         # Find subtitle
@@ -5031,6 +5418,8 @@ def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_
                 bufsize=1,
                 universal_newlines=True
             )
+            if register_process:
+                register_process(process)
             
             # Read stderr
             error_lines = []
@@ -5039,6 +5428,9 @@ def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_
             speed_multiplier = None
             
             while True:
+                if check_stop and check_stop():
+                    _terminate_process(process)
+                    break
                 line = process.stderr.readline()
                 if not line:
                     break
@@ -5120,8 +5512,18 @@ def process_video(selected_video_files: List[Path], subtitles_dir: Path, output_
                     if log_callback:
                         log_callback(f"    ⚠ {line}")
             
+            if check_stop and check_stop():
+                if register_process:
+                    register_process(None)
+                break
+
             # Wait for process
             returncode = process.wait()
+            if register_process:
+                register_process(None)
+
+            if check_stop and check_stop():
+                break
             
             if returncode == 0 and out_file.exists():
                 success_count += 1
@@ -5821,6 +6223,8 @@ def transcribe_video_whisper_cpp(
     model_name: str,
     progress_callback=None,
     log_callback=None,
+    check_stop=None,
+    register_process=None,
 ) -> bool:
     """Transcribe video using Whisper CPP. Uses built-in VAD. Faster than Python Whisper."""
     if not video_path.exists():
@@ -6028,15 +6432,21 @@ def transcribe_video_whisper_cpp(
                 bufsize=1,
                 env=env,
             )
+            if register_process:
+                register_process(proc)
             stderr_lines = []
 
             def read_out(stream):
                 for line in iter(stream.readline, ""):
+                    if check_stop and check_stop():
+                        break
                     if log_callback:
                         log_callback(line.rstrip())
 
             def read_err(stream):
                 for line in iter(stream.readline, ""):
+                    if check_stop and check_stop():
+                        break
                     stderr_lines.append(line)
                     if log_callback:
                         log_callback(line.rstrip())
@@ -6047,17 +6457,20 @@ def transcribe_video_whisper_cpp(
             t_err.daemon = True
             t_out.start()
             t_err.start()
-            try:
-                proc.wait(timeout=3600)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait()
+            returncode = _wait_process_with_stop(proc, check_stop, timeout=3600)
+            if register_process:
+                register_process(None)
+            if returncode is None:
+                if log_callback:
+                    log_callback("Transcription cancelled.")
+                return -1, "".join(stderr_lines)
+            if returncode == -1:
                 if log_callback:
                     log_callback("Transcription timed out.")
                 return -1, "".join(stderr_lines)
             t_out.join(timeout=1)
             t_err.join(timeout=1)
-            return proc.returncode, "".join(stderr_lines)
+            return proc.returncode if proc.returncode is not None else returncode, "".join(stderr_lines)
 
         extra_env = None
         if metal_dir:
@@ -6068,6 +6481,9 @@ def transcribe_video_whisper_cpp(
         if log_callback:
             log_callback("Transcribing with Whisper CPP...")
         returncode, stderr_text = _run_whisper_streaming(cmd, cwd, extra_env)
+
+        if returncode == -1 and check_stop and check_stop():
+            return False
 
         # CPU fallback: if GPU/Metal init failed, retry with --no-gpu (important for CPU-only laptops)
         if returncode != 0 and "-ng" not in cmd and "--no-gpu" not in cmd:
@@ -6121,7 +6537,7 @@ def transcribe_video_whisper_cpp(
         return False
 
 
-def transcribe_video(video_path: Path, language_code: str, model: str, whisper_options: Dict = None, output_format: str = "srt", progress_callback=None, log_callback=None) -> bool:
+def transcribe_video(video_path: Path, language_code: str, model: str, whisper_options: Dict = None, output_format: str = "srt", progress_callback=None, log_callback=None, check_stop=None, register_process=None) -> bool:
     """Transcribe video using Python + whisper (cross-platform, no bash required)."""
     if not video_path.exists():
         if log_callback:
@@ -6188,19 +6604,44 @@ def transcribe_video(video_path: Path, language_code: str, model: str, whisper_o
             if extra_args:
                 whisper_cmd.extend(extra_args.split())
 
-        result = subprocess.run(
+        process = subprocess.Popen(
             whisper_cmd,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=3600,
             env=_env_for_subprocess_python(),
         )
+        if register_process:
+            register_process(process)
 
-        if log_callback:
-            if result.stdout:
-                log_callback(result.stdout)
-            if result.stderr:
-                log_callback(result.stderr)
+        stdout_lines: List[str] = []
+        stderr_lines: List[str] = []
+
+        def _read_stream(stream, bucket: List[str]) -> None:
+            for line in iter(stream.readline, ""):
+                if check_stop and check_stop():
+                    break
+                bucket.append(line)
+                if log_callback:
+                    log_callback(line.rstrip())
+
+        t_out = threading.Thread(target=_read_stream, args=(process.stdout, stdout_lines))
+        t_err = threading.Thread(target=_read_stream, args=(process.stderr, stderr_lines))
+        t_out.daemon = True
+        t_err.daemon = True
+        t_out.start()
+        t_err.start()
+
+        returncode = _wait_process_with_stop(process, check_stop, timeout=3600)
+        if register_process:
+            register_process(None)
+        t_out.join(timeout=1)
+        t_err.join(timeout=1)
+
+        if returncode is None:
+            if log_callback:
+                log_callback("Transcription cancelled.")
+            return False
 
         whisper_srt = video_dir / f"{audio_stem}.srt"
         final_srt   = srt_out_dir / f"{base_name}.srt"
@@ -6213,13 +6654,13 @@ def transcribe_video(video_path: Path, language_code: str, model: str, whisper_o
             except OSError:
                 pass
 
-        if result.returncode == 0 and final_srt.exists():
+        if returncode == 0 and final_srt.exists():
             if log_callback:
                 log_callback(f"✓ Transcription complete: {final_srt}")
             return True
 
         if log_callback:
-            log_callback(f"Transcription failed with exit code {result.returncode}")
+            log_callback(f"Transcription failed with exit code {returncode}")
         return False
 
     except subprocess.TimeoutExpired:
@@ -6238,6 +6679,8 @@ def transcribe_video_vad(
     model: str,
     progress_callback=None,
     log_callback=None,
+    check_stop=None,
+    register_process=None,
 ) -> bool:
     """Transcribe a long video using Silero VAD + Whisper per segment to reduce hallucination.
     Best for files over ~5 minutes. Writes SRT next to the input file.
@@ -6322,6 +6765,10 @@ def transcribe_video_vad(
         all_subs = pysrt.SubRipFile()
 
         for i, (start, end) in enumerate(segments):
+            if check_stop and check_stop():
+                if log_callback:
+                    log_callback("Transcription cancelled.")
+                return False
             if progress_callback:
                 progress_callback(i + 1, total, f"seg_{i + 1}")
             if log_callback:
@@ -6331,7 +6778,7 @@ def transcribe_video_vad(
             seg_srt = workdir / f"seg_{i:04d}.srt"
             duration = end - start
 
-            subprocess.run(
+            ffmpeg_proc = subprocess.Popen(
                 [
                     ffmpeg_exe, "-y",
                     "-ss", str(start),
@@ -6342,8 +6789,17 @@ def transcribe_video_vad(
                 ],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                check=True,
             )
+            if register_process:
+                register_process(ffmpeg_proc)
+            if _wait_process_with_stop(ffmpeg_proc, check_stop) is None:
+                if register_process:
+                    register_process(None)
+                if log_callback:
+                    log_callback("Transcription cancelled.")
+                return False
+            if ffmpeg_proc.returncode != 0:
+                continue
 
             whisper_cmd = [
                 sys.executable, "-m", "whisper",
@@ -6359,15 +6815,26 @@ def transcribe_video_vad(
             if language_code != "auto":
                 whisper_cmd += ["--language", language_code]
 
-            result = subprocess.run(
+            whisper_proc = subprocess.Popen(
                 whisper_cmd,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
                 env=_env_for_subprocess_python(),
             )
-            if result.returncode != 0:
+            if register_process:
+                register_process(whisper_proc)
+            whisper_rc = _wait_process_with_stop(whisper_proc, check_stop)
+            if register_process:
+                register_process(None)
+            if whisper_rc is None:
                 if log_callback:
-                    log_callback(f"Whisper error for segment {i + 1}: {result.stderr or result.stdout}")
+                    log_callback("Transcription cancelled.")
+                return False
+            if whisper_rc != 0:
+                err = (whisper_proc.stderr.read() if whisper_proc.stderr else "") or ""
+                if log_callback:
+                    log_callback(f"Whisper error for segment {i + 1}: {err}")
                 continue
 
             if not seg_srt.exists():
@@ -6472,18 +6939,18 @@ def run_batch_transcribe(transcribe_func, video_paths, *args, **kwargs) -> bool:
     """Run transcribe_func on each path. Logs [i/N] filename, respects check_stop. Returns True only if all succeed."""
     paths = [Path(p) for p in video_paths]
     total = len(paths)
-    # Filter kwargs to only what transcribe_func accepts (avoids leaking ScriptWorker-injected
-    # extras like check_stop, stream_progress_callback, etc. into funcs that don't declare them)
     sig = inspect.signature(transcribe_func)
     params = sig.parameters
     accepts_var_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+    _always_explicit = {"check_stop", "register_process"}
     if accepts_var_kwargs:
-        call_kwargs = {k: v for k, v in kwargs.items() if k != "check_stop"}
+        call_kwargs = {k: v for k, v in kwargs.items() if k not in _always_explicit}
     else:
-        allowed = set(params.keys())
+        allowed = set(params.keys()) - _always_explicit
         call_kwargs = {k: v for k, v in kwargs.items() if k in allowed}
     for i, path in enumerate(paths):
         check_stop = kwargs.get("check_stop")
+        register_process = kwargs.get("register_process")
         if check_stop and check_stop():
             return False
         log_cb = kwargs.get("log_callback")
@@ -6492,7 +6959,12 @@ def run_batch_transcribe(transcribe_func, video_paths, *args, **kwargs) -> bool:
         prog_cb = kwargs.get("progress_callback")
         if prog_cb:
             prog_cb(i + 1, total, path.name)
-        ok = transcribe_func(path, *args, **call_kwargs)
+        ok = transcribe_func(
+            path, *args,
+            check_stop=check_stop,
+            register_process=register_process,
+            **call_kwargs,
+        )
         if not ok:
             return False
     return True
@@ -6536,10 +7008,12 @@ class WhisperCppBackend:
         return binary is not None and Path(binary).exists()
 
     def transcribe(self, video_path: Path, language_code: str, model: str,
-                   config: Dict, progress_callback=None, log_callback=None) -> bool:
+                   config: Dict, progress_callback=None, log_callback=None,
+                   check_stop=None, register_process=None, **kwargs) -> bool:
         return transcribe_video_whisper_cpp(
             video_path, language_code, model,
             progress_callback=progress_callback, log_callback=log_callback,
+            check_stop=check_stop, register_process=register_process,
         )
 
 
@@ -6551,13 +7025,15 @@ class OpenAIWhisperBackend:
         return _openai_whisper_cli_ok()
 
     def transcribe(self, video_path: Path, language_code: str, model: str,
-                   config: Dict, progress_callback=None, log_callback=None) -> bool:
+                   config: Dict, progress_callback=None, log_callback=None,
+                   check_stop=None, register_process=None, **kwargs) -> bool:
         output_format   = config.get("whisper_output_format", "srt")
         whisper_options = config.get("whisper_options", {})
         return transcribe_video(
             video_path, language_code, model, whisper_options,
             output_format=output_format,
             progress_callback=progress_callback, log_callback=log_callback,
+            check_stop=check_stop, register_process=register_process,
         )
 
 
@@ -6574,10 +7050,12 @@ class VadWhisperBackend:
         return _openai_whisper_cli_ok()
 
     def transcribe(self, video_path: Path, language_code: str, model: str,
-                   config: Dict, progress_callback=None, log_callback=None) -> bool:
+                   config: Dict, progress_callback=None, log_callback=None,
+                   check_stop=None, register_process=None, **kwargs) -> bool:
         return transcribe_video_vad(
             video_path, language_code, model,
             progress_callback=progress_callback, log_callback=log_callback,
+            check_stop=check_stop, register_process=register_process,
         )
 
 
@@ -6587,6 +7065,14 @@ TRANSCRIBE_BACKENDS: List[TranscribeBackend] = [
     OpenAIWhisperBackend(),
     VadWhisperBackend(),
 ]
+
+
+class ReleaseCheckWorker(QThread):
+    """Background fetch of latest GitHub release (non-blocking startup check)."""
+    result = pyqtSignal(object)
+
+    def run(self) -> None:
+        self.result.emit(_fetch_latest_github_release())
 
 
 class ScriptWorker(QThread):
@@ -6602,11 +7088,13 @@ class ScriptWorker(QThread):
         self.args = args
         self.kwargs = kwargs
         self._stop_requested = False
+        self._active_process: Optional[subprocess.Popen] = None
     
     def stop(self):
-        """Request the worker to stop."""
+        """Request the worker to stop and terminate any running subprocess."""
         self._stop_requested = True
         self.log_message.emit("⚠ Stop requested - cancelling operation...")
+        _terminate_process(self._active_process)
     
     def is_stop_requested(self):
         """Check if stop was requested."""
@@ -6626,10 +7114,14 @@ class ScriptWorker(QThread):
             if not self._stop_requested:
                 self.stream_progress.emit(msg)
 
+        def register_process(proc):
+            self._active_process = proc
+
         self.kwargs["log_callback"] = log_callback
         self.kwargs["progress_callback"] = progress_callback
         self.kwargs["stream_progress_callback"] = stream_progress_callback
         self.kwargs["check_stop"] = lambda: self._stop_requested
+        self.kwargs["register_process"] = register_process
         # Filter kwargs to only what script_func accepts (avoids passing check_stop to functions that don't support it)
         sig = inspect.signature(self.script_func)
         params = sig.parameters
@@ -7029,7 +7521,7 @@ class BinaryInstallWorker(QThread):
                 shell_rc = Path.home() / ".bash_profile"
             try:
                 with open(shell_rc, "a") as f:
-                    f.write(f"\n# Added by Video Processing Studio\n{export}\n")
+                    f.write(f"\n# Added by {APP_NAME}\n{export}\n")
                 self.log_message.emit(f"Added to {shell_rc}. Restart terminal or run: source {shell_rc}")
             except Exception as e:
                 self.log_message.emit(f"Could not add to PATH: {e}")
@@ -7931,7 +8423,7 @@ class SetupWizard(QDialog):
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Welcome to Video Processing Studio - Setup")
+        self.setWindowTitle(f"Welcome to {APP_NAME} - Setup")
         self.setMinimumWidth(700)
         self.setMinimumHeight(550)
         self.config = load_config()
@@ -7962,7 +8454,7 @@ class SetupWizard(QDialog):
         # Title bar
         title_bar = QWidget()
         title_layout = QVBoxLayout()
-        title = QLabel("Welcome to Video Processing Studio")
+        title = QLabel(f"Welcome to {APP_NAME}")
         title.setFont(QFont("Arial", 16, QFont.Bold))
         subtitle = QLabel("Let's check your setup")
         subtitle.setFont(QFont("Arial", 11))
@@ -8855,7 +9347,7 @@ class AboutDialog(QDialog):
         .footer {{ font-size: 12pt; color: {t['about_version']}; font-style: italic; margin-top: 24px; }}
         </style>
         <div style="padding: 24px;">
-        <div class="app-name">Video Processing Studio</div>
+        <div class="app-name">{APP_NAME}</div>
 
         <div class="version">Version {version}</div>
 
@@ -9038,6 +9530,190 @@ class MediaInfoDialog(QDialog):
         layout.addLayout(button_layout)
         
         self.setLayout(layout)
+
+
+class StreamSelectionDialog(QDialog):
+    """Dialog for selecting which streams to download."""
+    
+    def __init__(self, streams: List[StreamInfo], parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Select Streams to Download")
+        self.setMinimumWidth(700)
+        self.setMinimumHeight(500)
+        
+        self.streams = streams
+        self.checkboxes = {}  # stream_id -> QCheckBox
+        self.selected_streams = []
+        
+        layout = QVBoxLayout()
+        
+        # Info label
+        info_label = QLabel(
+            "Select which streams you want to download. By default, the best quality video "
+            "and all audio/subtitle streams are selected."
+        )
+        info_label.setWordWrap(True)
+        info_label.setStyleSheet("color: #555; padding: 8px;")
+        layout.addWidget(info_label)
+        
+        # Create scrollable area for streams
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setMinimumHeight(350)
+        
+        stream_widget = QWidget()
+        stream_layout = QVBoxLayout()
+        stream_layout.setSpacing(4)
+        
+        # Group streams by type
+        video_streams = [s for s in streams if s.stream_type == "Vid"]
+        audio_streams = [s for s in streams if s.stream_type == "Aud"]
+        subtitle_streams = [s for s in streams if s.stream_type == "Sub"]
+        
+        # Video streams section
+        if video_streams:
+            video_label = QLabel("Video Streams")
+            video_label.setStyleSheet("font-weight: bold; font-size: 13px; margin-top: 8px;")
+            stream_layout.addWidget(video_label)
+            
+            # Auto-select best quality (first video stream)
+            for i, stream in enumerate(video_streams):
+                cb = QCheckBox(self._format_stream_label(stream))
+                cb.setChecked(i == 0)  # Check the first (best quality) by default
+                cb.setFont(QFont("Menlo" if platform.system() == "Darwin" else "Consolas", 10))
+                self.checkboxes[stream.stream_id] = cb
+                stream_layout.addWidget(cb)
+        
+        # Audio streams section
+        if audio_streams:
+            audio_label = QLabel("Audio Streams")
+            audio_label.setStyleSheet("font-weight: bold; font-size: 13px; margin-top: 12px;")
+            stream_layout.addWidget(audio_label)
+            
+            # Auto-select all audio streams
+            for stream in audio_streams:
+                cb = QCheckBox(self._format_stream_label(stream))
+                cb.setChecked(True)
+                cb.setFont(QFont("Menlo" if platform.system() == "Darwin" else "Consolas", 10))
+                self.checkboxes[stream.stream_id] = cb
+                stream_layout.addWidget(cb)
+        
+        # Subtitle streams section
+        if subtitle_streams:
+            subtitle_label = QLabel("Subtitle Streams")
+            subtitle_label.setStyleSheet("font-weight: bold; font-size: 13px; margin-top: 12px;")
+            stream_layout.addWidget(subtitle_label)
+            
+            # Auto-select all subtitle streams
+            for stream in subtitle_streams:
+                cb = QCheckBox(self._format_stream_label(stream))
+                cb.setChecked(True)
+                cb.setFont(QFont("Menlo" if platform.system() == "Darwin" else "Consolas", 10))
+                self.checkboxes[stream.stream_id] = cb
+                stream_layout.addWidget(cb)
+        
+        stream_layout.addStretch()
+        stream_widget.setLayout(stream_layout)
+        scroll.setWidget(stream_widget)
+        layout.addWidget(scroll)
+        
+        # Quick select buttons
+        quick_select_layout = QHBoxLayout()
+        select_all_btn = QPushButton("Select All")
+        select_all_btn.clicked.connect(self._select_all)
+        deselect_all_btn = QPushButton("Deselect All")
+        deselect_all_btn.clicked.connect(self._deselect_all)
+        reset_btn = QPushButton("Reset to Default")
+        reset_btn.clicked.connect(self._reset_default)
+        quick_select_layout.addWidget(select_all_btn)
+        quick_select_layout.addWidget(deselect_all_btn)
+        quick_select_layout.addWidget(reset_btn)
+        quick_select_layout.addStretch()
+        layout.addLayout(quick_select_layout)
+        
+        # Dialog buttons
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        download_btn = QPushButton("Download Selected")
+        download_btn.setProperty("ui_role", "download")
+        download_btn.clicked.connect(self._accept_selection)
+        button_layout.addWidget(cancel_btn)
+        button_layout.addWidget(download_btn)
+        layout.addLayout(button_layout)
+        
+        self.setLayout(layout)
+    
+    def _format_stream_label(self, stream: StreamInfo) -> str:
+        """Format a stream for display in the checkbox."""
+        parts = []
+        
+        if stream.resolution:
+            parts.append(stream.resolution)
+        if stream.bitrate:
+            parts.append(stream.bitrate)
+        if stream.language:
+            parts.append(stream.language.upper())
+        if stream.codec:
+            parts.append(stream.codec)
+        
+        if parts:
+            details = " | ".join(parts)
+            return f"{details}"
+        else:
+            return stream.description[:80]
+    
+    def _select_all(self):
+        """Select all checkboxes."""
+        for cb in self.checkboxes.values():
+            cb.setChecked(True)
+    
+    def _deselect_all(self):
+        """Deselect all checkboxes."""
+        for cb in self.checkboxes.values():
+            cb.setChecked(False)
+    
+    def _reset_default(self):
+        """Reset to default selection (best video, all audio/subtitle)."""
+        video_streams = [s for s in self.streams if s.stream_type == "Vid"]
+        audio_streams = [s for s in self.streams if s.stream_type == "Aud"]
+        subtitle_streams = [s for s in self.streams if s.stream_type == "Sub"]
+        
+        for stream_id, cb in self.checkboxes.items():
+            stream = next((s for s in self.streams if s.stream_id == stream_id), None)
+            if not stream:
+                continue
+            
+            if stream.stream_type == "Vid":
+                # Check only the first (best) video
+                cb.setChecked(stream == video_streams[0])
+            elif stream.stream_type in ("Aud", "Sub"):
+                # Check all audio and subtitle
+                cb.setChecked(True)
+    
+    def _accept_selection(self):
+        """Accept the dialog and store selected streams."""
+        self.selected_streams = []
+        for stream_id, cb in self.checkboxes.items():
+            if cb.isChecked():
+                stream = next((s for s in self.streams if s.stream_id == stream_id), None)
+                if stream:
+                    self.selected_streams.append(stream)
+        
+        if not self.selected_streams:
+            QMessageBox.warning(
+                self,
+                "No Streams Selected",
+                "Please select at least one stream to download."
+            )
+            return
+        
+        self.accept()
+    
+    def get_selected_streams(self) -> List[StreamInfo]:
+        """Get the list of selected streams."""
+        return self.selected_streams
 
 
 class WhisperModelDialog(QDialog):
@@ -9734,6 +10410,7 @@ class VideoProcessingApp(QMainWindow):
         self.config = load_config()
         self.worker = None
         self.remux_selected_files = []  # Initialize selected files list
+        self.custom_selected_streams = None  # Store custom stream selection
         # Set window icon
         self.setWindowIcon(get_app_icon())
         
@@ -9744,6 +10421,52 @@ class VideoProcessingApp(QMainWindow):
             wizard.exec_()
         
         self.init_ui()
+        self._update_check_worker = None
+        QTimer.singleShot(2500, self._maybe_check_for_updates)
+
+    def _maybe_check_for_updates(self) -> None:
+        if os.environ.get("SP_WORKSHOP_SKIP_UPDATE_CHECK"):
+            return
+        worker = getattr(self, "_update_check_worker", None)
+        if worker is not None and worker.isRunning():
+            return
+        self._update_check_worker = ReleaseCheckWorker()
+        self._update_check_worker.result.connect(self._on_update_check_result)
+        self._update_check_worker.start()
+
+    def _on_update_check_result(self, info: Optional[Dict[str, str]]) -> None:
+        if not info:
+            return
+        latest = info.get("version", "")
+        if not latest or not _version_is_newer(latest, __version__):
+            return
+        if latest == self.config.get("dismissed_update_version", ""):
+            return
+        self._show_update_available_dialog(latest, info.get("url") or GITHUB_RELEASES_URL)
+
+    def _show_update_available_dialog(self, latest_version: str, release_url: str) -> None:
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Update available")
+        msg.setIcon(QMessageBox.Information)
+        msg.setText(f"A new version of {APP_NAME} is available.")
+        msg.setInformativeText(
+            f"You are running v{__version__}.\n"
+            f"The latest release is v{latest_version}.\n\n"
+            "To update:\n"
+            f"1. Open {GITHUB_RELEASES_URL}\n"
+            "2. Download Source code (zip) or the build for your OS.\n"
+            "3. Extract the archive and open the new folder.\n"
+            "4. Start the app with Start_SP_Workshop (macOS / Windows / Linux).\n\n"
+            "Your settings in ~/VideoProcessing/config are kept separately."
+        )
+        open_btn = msg.addButton("Open Releases", QMessageBox.AcceptRole)
+        later_btn = msg.addButton("Not now", QMessageBox.RejectRole)
+        msg.exec_()
+        if msg.clickedButton() == open_btn:
+            QDesktopServices.openUrl(QUrl(release_url))
+        else:
+            self.config["dismissed_update_version"] = latest_version
+            save_config(self.config)
 
     def closeEvent(self, event) -> None:
         super().closeEvent(event)
@@ -10034,23 +10757,36 @@ class VideoProcessingApp(QMainWindow):
         )
         layout.addWidget(transcribe_log_group)
         
-        # Progress bar for transcription
-        progress_layout = QHBoxLayout()
+        # Progress group (harmonized with the other tabs' "PROGRESS" panel)
+        transcribe_progress_group = QGroupBox("PROGRESS")
+        transcribe_progress_group.setStyleSheet("QGroupBox { font-weight: bold; font-size: 11px; }")
+        tp_layout = QVBoxLayout()
+        tp_layout.setSpacing(4)
+        tp_layout.setContentsMargins(8, 12, 8, 8)
+
+        tp_strip = QHBoxLayout()
+        self.transcribe_progress_label = QLabel("Transcribing...")
+        self.transcribe_progress_label.setFont(QFont("Arial", 10, QFont.Bold))
+        self.transcribe_progress_label.setMinimumWidth(100)
+        tp_strip.addWidget(self.transcribe_progress_label)
+
         self.transcribe_progress_bar = QProgressBar()
-        self.transcribe_progress_bar.setMinimumHeight(25)
-        self.transcribe_progress_bar.setVisible(False)
+        self.transcribe_progress_bar.setMinimumHeight(20)
         self.transcribe_progress_bar.setObjectName("themedProgressBar")
-        
+        tp_strip.addWidget(self.transcribe_progress_bar, 2)
+
         self.transcribe_stop_btn = QPushButton("Stop")
         self.transcribe_stop_btn.setFixedWidth(80)
         self.transcribe_stop_btn.setObjectName("stopBtn")
-        self.transcribe_stop_btn.setVisible(False)
         self.transcribe_stop_btn.clicked.connect(self.stop_operation)
-        
-        progress_layout.addWidget(self.transcribe_progress_bar)
-        progress_layout.addWidget(self.transcribe_stop_btn)
-        layout.addLayout(progress_layout)
-        
+        tp_strip.addWidget(self.transcribe_stop_btn)
+
+        tp_layout.addLayout(tp_strip)
+        transcribe_progress_group.setLayout(tp_layout)
+        transcribe_progress_group.setVisible(False)
+        layout.addWidget(transcribe_progress_group)
+        self.transcribe_progress_group = transcribe_progress_group
+
         tab.setLayout(layout)
         return tab
     
@@ -10083,8 +10819,8 @@ class VideoProcessingApp(QMainWindow):
                 model         = self.transcribe_model_combo.currentData()
                 config        = load_config()
                 self.transcribe_log(f"Starting transcription ({backend.name})...")
-                self.transcribe_progress_bar.setVisible(True)
-                self.transcribe_stop_btn.setVisible(True)
+                self.transcribe_progress_label.setText("Transcribing...")
+                self.transcribe_progress_group.setVisible(True)
                 self.transcribe_stop_btn.setEnabled(True)
                 self.transcribe_progress_bar.setRange(0, 0)
 
@@ -10134,6 +10870,8 @@ class VideoProcessingApp(QMainWindow):
     
     def transcribe_from_tab(self):
         """Transcribe video from the dedicated tab."""
+        if self.worker and self.worker.isRunning():
+            return
         video_paths = self._get_transcribe_paths()
         if not video_paths:
             QMessageBox.warning(self, "No File", "Please select a video or audio file to transcribe.")
@@ -10194,14 +10932,14 @@ class VideoProcessingApp(QMainWindow):
         self.transcribe_log(f"Starting transcription of {n} file(s)")
         self.transcribe_log(f"Language: {language_code}, Model: {model}, Format: {output_format}")
         
-        # Show progress bar and stop button
-        self.transcribe_progress_bar.setVisible(True)
-        self.transcribe_stop_btn.setVisible(True)
+        # Show progress group and stop button
+        self.transcribe_progress_label.setText("Transcribing...")
+        self.transcribe_progress_group.setVisible(True)
         self.transcribe_stop_btn.setEnabled(True)
         self.transcribe_progress_bar.setRange(0, n) if n > 1 else self.transcribe_progress_bar.setRange(0, 0)
         
-        def transcribe_with_params(video_path, language_code, model, whisper_options, output_format, progress_callback=None, log_callback=None):
-            return transcribe_video(video_path, language_code, model, whisper_options, output_format, progress_callback, log_callback)
+        def transcribe_with_params(video_path, language_code, model, whisper_options, output_format, progress_callback=None, log_callback=None, check_stop=None, register_process=None):
+            return transcribe_video(video_path, language_code, model, whisper_options, output_format, progress_callback, log_callback, check_stop, register_process)
         
         def tab_log_callback(msg):
             self.transcribe_log(msg)
@@ -10232,8 +10970,9 @@ class VideoProcessingApp(QMainWindow):
     
     def on_transcribe_finished(self, success: bool):
         """Handle transcription completion."""
-        self.transcribe_progress_bar.setVisible(False)
-        self.transcribe_stop_btn.setVisible(False)
+        self.transcribe_progress_group.setVisible(False)
+        self.transcribe_progress_bar.setRange(0, 100)
+        self.transcribe_progress_bar.setValue(0)
         # Reset both stop buttons
         self.stop_btn.setEnabled(False)
         self.stop_btn.setText("Stop")
@@ -10247,6 +10986,8 @@ class VideoProcessingApp(QMainWindow):
 
     def transcribe_long_from_tab(self):
         """Transcribe long video using VAD + Whisper (for files over ~5 min)."""
+        if self.worker and self.worker.isRunning():
+            return
         video_paths = self._get_transcribe_paths()
         if not video_paths:
             QMessageBox.warning(self, "No File", "Please select a video or audio file to transcribe.")
@@ -10317,9 +11058,9 @@ class VideoProcessingApp(QMainWindow):
         n = len(video_paths)
         self.transcribe_log(f"Starting VAD-assisted transcription of {n} file(s)")
         self.transcribe_log(f"Language: {language_code}, Model: {model}")
-        self.transcribe_progress_bar.setVisible(True) 
-        self.transcribe_stop_btn.setVisible(True) 
-        self.transcribe_stop_btn.setEnabled(True) 
+        self.transcribe_progress_label.setText("Transcribing (long)...")
+        self.transcribe_progress_group.setVisible(True)
+        self.transcribe_stop_btn.setEnabled(True)
         self.transcribe_progress_bar.setRange(0, 0)
         def tab_log_callback(msg): 
             self.transcribe_log(msg)
@@ -10376,8 +11117,10 @@ class VideoProcessingApp(QMainWindow):
         dlg.exec_()
 
     def transcribe_whisper_cpp_from_tab(self):
-        """Transcribe using Whisper CPP. Faster, built-in VAD.""" 
-        video_paths = self._get_transcribe_paths() 
+        """Transcribe using Whisper CPP. Faster, built-in VAD."""
+        if self.worker and self.worker.isRunning():
+            return
+        video_paths = self._get_transcribe_paths()
         if not video_paths:
             QMessageBox.warning(self, "No File", "Please select a video or audio file to transcribe.") 
             return
@@ -11400,7 +12143,7 @@ class VideoProcessingApp(QMainWindow):
         top_layout.addWidget(commands_group)
         top_layout.addSpacing(-4)
 
-        # Action row: Quality → Download (primary) → stretch → Clear → Open in LosslessCut
+        # Action row: Quality → Fetch Streams → Download (primary) → stretch → Clear → Open in LosslessCut
         download_buttons = QHBoxLayout()
         self.download_quality_combo = QComboBox()
         for name, code in [
@@ -11409,10 +12152,19 @@ class VideoProcessingApp(QMainWindow):
             ("1080p", 'res="1080|720|480":for=best'),
             ("4K", 'res="2160|1080|720|480":for=best'),
             ("Best quality", "best"),
+            ("Custom selection...", "custom"),
         ]:
             self.download_quality_combo.addItem(name, code)
         self.download_quality_combo.setCurrentIndex(self.download_quality_combo.findData("best"))
-        self.download_quality_combo.setMaximumWidth(120)
+        self.download_quality_combo.setMaximumWidth(140)
+        
+        # Fetch streams button
+        fetch_streams_btn = QPushButton("Fetch Streams...")
+        fetch_streams_btn.setObjectName("neutralSecondaryBtn")
+        fetch_streams_btn.setCursor(Qt.PointingHandCursor)
+        fetch_streams_btn.setMinimumWidth(120)
+        fetch_streams_btn.clicked.connect(self.fetch_and_select_streams)
+        
         download_btn = QPushButton("(Batch) Download")
         download_btn.setProperty("ui_role", "download")
         download_btn.setMinimumWidth(160)
@@ -11426,6 +12178,7 @@ class VideoProcessingApp(QMainWindow):
         open_lossless_btn.setCursor(Qt.PointingHandCursor)
         open_lossless_btn.clicked.connect(self.open_lossless_cut)
         download_buttons.addWidget(self.download_quality_combo)
+        download_buttons.addWidget(fetch_streams_btn)
         download_buttons.addWidget(download_btn)
         download_buttons.addStretch()
         download_buttons.addWidget(clear_btn)
@@ -11636,7 +12389,7 @@ class VideoProcessingApp(QMainWindow):
 
     def init_ui(self):
         """Initialize the UI."""
-        self.setWindowTitle(f"SP Workshop (WLW video processing, translation & subtitling hub) v{__version__}")
+        self.setWindowTitle(f"{APP_NAME} (WLW video processing, translation & subtitling hub) v{__version__}")
         self.setMinimumSize(900, 700)
 
         screen = QApplication.primaryScreen().availableGeometry()
@@ -11834,7 +12587,6 @@ class VideoProcessingApp(QMainWindow):
             self.progress_file_label.setText("")
             self.progress_counter_label.setText("")
             self.update_progress_bar_color()
-            # enable stop button even tho it doesn't work half of the time
             self.stop_btn.setEnabled(True)
         
         self.statusBar().showMessage("Running...")
@@ -11975,6 +12727,7 @@ class VideoProcessingApp(QMainWindow):
     def force_terminate_worker(self):
         """Force terminate the worker if it hasn't stopped gracefully."""
         if self.worker and self.worker.isRunning():
+            _terminate_process(getattr(self.worker, "_active_process", None))
             self.log("⚠ Force terminating operation...")
             self.worker.terminate()
             self.worker.wait()
@@ -11988,12 +12741,97 @@ class VideoProcessingApp(QMainWindow):
         self.transcribe_stop_btn.setEnabled(False)
         self.transcribe_stop_btn.setText("Stop")
     
+    def fetch_and_select_streams(self):
+        """Fetch available streams and show selection dialog."""
+        commands_text = self.commands_text.toPlainText()
+        if not commands_text.strip():
+            QMessageBox.warning(self, "Error", "Please paste at least one command to fetch streams from.")
+            return
+        
+        # Get the first command to fetch streams
+        lines = [line.strip() for line in commands_text.strip().split('\n') if line.strip() and not line.strip().startswith('#')]
+        if not lines:
+            QMessageBox.warning(self, "Error", "No valid commands found.")
+            return
+        
+        first_command = lines[0]
+        
+        # Show status message
+        self.download_stream_progress_label.setText("Fetching available streams...")
+        QApplication.processEvents()
+        
+        # Create a simple log callback that updates the label
+        def fetch_log_callback(msg):
+            self.download_stream_progress_label.setText(msg)
+            QApplication.processEvents()
+        
+        # Fetch streams
+        streams = fetch_available_streams(first_command, log_callback=fetch_log_callback)
+        
+        if not streams:
+            self.download_stream_progress_label.setText("—")
+            QMessageBox.critical(
+                self,
+                "Error",
+                "Failed to fetch streams. Make sure:\n"
+                "• N_m3u8DL-RE is installed\n"
+                "• The command/URL is valid\n"
+                "• You have internet connection\n\n"
+                "Check the download log for details."
+            )
+            return
+        
+        # Reset the label
+        self.download_stream_progress_label.setText("—")
+        
+        # Show the selection dialog
+        dialog = StreamSelectionDialog(streams, self)
+        if dialog.exec_() == QDialog.Accepted:
+            selected = dialog.get_selected_streams()
+            if selected:
+                self.custom_selected_streams = selected
+                # Update the quality combo to show custom selection
+                self.download_quality_combo.setCurrentIndex(
+                    self.download_quality_combo.findData("custom")
+                )
+                
+                # Show a confirmation message
+                video_count = sum(1 for s in selected if s.stream_type == "Vid")
+                audio_count = sum(1 for s in selected if s.stream_type == "Aud")
+                sub_count = sum(1 for s in selected if s.stream_type == "Sub")
+                
+                self.log_download(
+                    f"Custom stream selection: {video_count} video, {audio_count} audio, {sub_count} subtitle stream(s)"
+                )
+    
     def download_episodes(self, select_video: str = "best"):
         """Download episodes or movies."""
         commands_text = self.commands_text.toPlainText()
         if not commands_text.strip():
             QMessageBox.warning(self, "Error", "Please paste commands in the text area.")
             return
+
+        # Handle custom stream selection
+        custom_streams_dict = None
+        if select_video == "custom":
+            if not self.custom_selected_streams:
+                QMessageBox.warning(
+                    self,
+                    "No Custom Selection",
+                    "Please use 'Fetch Streams...' to select custom streams first, or choose a different quality option."
+                )
+                return
+            
+            # Convert StreamInfo list to selection strings
+            video_ids = [s.stream_id for s in self.custom_selected_streams if s.stream_type == "Vid"]
+            audio_ids = [s.stream_id for s in self.custom_selected_streams if s.stream_type == "Aud"]
+            subtitle_ids = [s.stream_id for s in self.custom_selected_streams if s.stream_type == "Sub"]
+            
+            custom_streams_dict = {
+                "video": video_ids,
+                "audio": audio_ids,
+                "subtitle": subtitle_ids
+            }
 
         mode = "episodes" if self.download_mode_combo.currentText() == "Episode(s)" else "movie"
         name = self.download_name_input.text().strip()
@@ -12003,19 +12841,27 @@ class VideoProcessingApp(QMainWindow):
 
         output_dir = get_downloads_dir()
         self.log(f"Starting download to: {output_dir}")
-        self.log(f"Mode: {mode}, Name: {name or '(none)'}, S01E02: {use_s01e}, Items: {ep_spec}, Video: {select_video}")
+        if select_video == "custom" and custom_streams_dict:
+            self.log(f"Mode: {mode}, Name: {name or '(none)'}, S01E02: {use_s01e}, Items: {ep_spec}, Video: Custom selection")
+        else:
+            self.log(f"Mode: {mode}, Name: {name or '(none)'}, S01E02: {use_s01e}, Items: {ep_spec}, Video: {select_video}")
 
         def download_with_detection(
             commands_text, output_dir, mode, name, use_s01e, season, ep_spec, select_video,
+            custom_streams=None,
             progress_callback=None, log_callback=None, stream_progress_callback=None,
+            check_stop=None, register_process=None,
         ):
             result = download_episodes(
                 commands_text, output_dir,
                 mode=mode, name=name, use_s01e=use_s01e, season=season, ep_spec=ep_spec,
                 select_video=select_video,
+                custom_streams=custom_streams,
                 progress_callback=progress_callback,
                 log_callback=log_callback,
                 stream_progress_callback=stream_progress_callback,
+                check_stop=check_stop,
+                register_process=register_process,
             )
             if result:
                 mkv_files = list(output_dir.glob("*.mkv"))
@@ -12030,6 +12876,7 @@ class VideoProcessingApp(QMainWindow):
         self.run_script(
             download_with_detection,
             commands_text, output_dir, mode, name, use_s01e, season, ep_spec, select_video,
+            custom_streams_dict,
         )
     
     def extract_subtitles(self):

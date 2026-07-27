@@ -41,6 +41,12 @@ RELEASE_CHECKLIST.md
 BENCHMARKS.md
 run.sh
 
+# Better DST — private project
+better-dst/
+better-dst-*.zip
+deepl-srt-translate/
+deepl-srt-translate-*.zip
+
 # Local / draft release notes (tracked copy may live elsewhere)
 docs/release-notes.md
 
